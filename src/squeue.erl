@@ -114,7 +114,7 @@
 %%
 %% In addition to the queue API, squeue provides a function with an extra first
 %% argument for every function. This extra first argument is Time, of type
-%% non_negative_integer(), which represents the current time of the queue with
+%% non_neg_integer(), which represents the current time of the queue with
 %% no specific unit and defaults to 0. An squeue queue can not go backwards in
 %% time so once a time has been set all subsequent calls must have the same or a
 %% later time. If time decreases a function fails with badtime. If subsequent
@@ -185,15 +185,12 @@
 %% * A target of 0 is not allowed for the same reasons as a timeout of 0 is not
 %% allowed for squeue_timeout.
 %%
-%% * An interval of 0 is allowed but is equivalent to using squeue_timeout with
-%% a Timeout of Target but is less efficient.
+%% * An interval of 0 is not allowed but is equivalent to using squeue_timeout
+%% with a Timeout of Target.
 %%
 %% * A Target or Interval of infinity is not allowed, the behaviour of either is
 %% equivalent to squeue_naive.
 %%
-%% * The exact behaviour of the CoDel draft implementation can be obtained by
-%% enqueuing without the Time argument (e.g. in/2) and dequeuing with the Time
-%% argument (i.e. out/2).
 %%
 %% In the case of get/2, get_r/2, drop/2 and drop_r/2 the queue management
 %% algorithm is carried out before trying to get/drop the item, and this item is
