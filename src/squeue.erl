@@ -309,7 +309,7 @@ in_r(Item, #squeue{time=Time, queue=Q} = S) ->
 %%
 %% This function raises the error `badtime' if `Time' is not a valid time
 %% greater than or equal to the current time of the queue, `S'.
--spec in_r(Item, Time, S) -> {Drops, NS} when
+-spec in_r(Time, Item, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
@@ -851,8 +851,9 @@ get_r(Time, #squeue{} = S) ->
 %%
 %% This function is slightly different from `queue:peek/1', as the sojourn time
 %% is included in the result in the place of the atom `value'.
--spec peek(S) -> Item when
-      S :: squeue(Item).
+-spec peek(S) -> empty | {SojournTime, Item} when
+      S :: squeue(Item),
+      SojournTime :: non_neg_integer().
 peek(#squeue{time=Time, queue=Q}) ->
     case queue:peek(Q) of
         empty ->
@@ -870,9 +871,10 @@ peek(#squeue{time=Time, queue=Q}) ->
 %%
 %% This function raises the error `badtime' if `Time' is not a valid time
 %% greater than or equal to the current time of the queue, `S'.
--spec peek(Time, S) -> Item when
+-spec peek(Time, S) -> empty | {SojournTime, Item} when
       Time :: non_neg_integer(),
-      S :: squeue(Item).
+      S :: squeue(Item),
+      SojournTime :: non_neg_integer().
 peek(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State})
   when is_integer(Time) andalso Time > PrevTime ->
     {_Drops, NQ, _NState} = Module:handle_time(Time, Q, State),
@@ -892,8 +894,9 @@ peek(Time, #squeue{} = S) ->
 %%
 %% This function is slightly different from `queue:peek_r/1', as the sojourn
 %% time is included in the result in the place of the atom `value'.
--spec peek_r(S) -> Item when
-      S :: squeue(Item).
+-spec peek_r(S) -> empty | {SojournTime, Item} when
+      S :: squeue(Item),
+      SojournTime :: non_neg_integer().
 peek_r(#squeue{time=Time, queue=Q}) ->
     case queue:peek_r(Q) of
         empty ->
@@ -911,9 +914,10 @@ peek_r(#squeue{time=Time, queue=Q}) ->
 %%
 %% This function raises the error `badtime' if `Time' is not a valid time
 %% greater than or equal to the current time of the queue, `S'.
--spec peek_r(Time, S) -> Item when
+-spec peek_r(Time, S) -> empty | {SojournTime, Item} when
       Time :: non_neg_integer(),
-      S :: squeue(Item).
+      S :: squeue(Item),
+      SojournTime :: non_neg_integer().
 peek_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State})
   when is_integer(Time) andalso Time > PrevTime ->
     {_Drops, NQ, _NState} = Module:handle_time(Time, Q, State),
@@ -1051,7 +1055,7 @@ snoc(Item, S) ->
     in_r(Item, S).
 
 %% @equiv in_r(Time, Item, S)
--spec snoc(Item, Time, S) -> {Drops, NS} when
+-spec snoc(Time, Item, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
