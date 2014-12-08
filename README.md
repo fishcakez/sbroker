@@ -6,7 +6,7 @@ Introduction
 ------------
 A subset of the `squeue` API is the `queue` module's API with one exception:
 when `{value, Item}` is returned by `queue`, `squeue` returns
-{SojournTime, Item}`, where `SojournTime` (`non_neg_integer()`) is the
+`{SojournTime, Item}`, where `SojournTime` (`non_neg_integer()`) is the
 sojourn time of the item (or length of time an item waited in the queue).
 
 `squeue` also provides an optional first argument to all `queue`
