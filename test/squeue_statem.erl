@@ -450,7 +450,7 @@ out_r_next(#state{list=L} = State, Value, [_S]) ->
         [] ->
             State#state{squeue=VS};
         _ ->
-            State#state{list=lists:droplast(L), squeue=VS}
+            State#state{list=droplast(L), squeue=VS}
     end;
 out_r_next(State, Value, [Time, _S]) ->
     VS = {call, erlang, element, [3, Value]},
@@ -458,7 +458,7 @@ out_r_next(State, Value, [Time, _S]) ->
         #state{list=[]} = NState ->
             NState#state{squeue=VS};
         #state{list=L} = NState ->
-            NState#state{list=lists:droplast(L), squeue=VS}
+            NState#state{list=droplast(L), squeue=VS}
     end.
 
 out_r_post(#state{list=L}, [_S], {Result, NS}) ->
@@ -865,11 +865,11 @@ drop_r_pre(State, Args) ->
     drop_pre(State, Args).
 
 drop_r_next(#state{list=L} = State, VS, [_S]) ->
-    State#state{list=lists:droplast(L), squeue=VS};
+    State#state{list=droplast(L), squeue=VS};
 drop_r_next(State, Value, [Time, _S]) ->
     VS = {call, erlang, element, [2, Value]},
     #state{list=L} = NState = advance_time_state(State, Time),
-    NState#state{list=lists:droplast(L), squeue=VS}.
+    NState#state{list=droplast(L), squeue=VS}.
 
 drop_r_post(_State, [_S], NS) ->
     squeue:is_queue(NS);
@@ -1022,3 +1022,7 @@ advance_time(#state{mod=Mod, mod_state=ModState, time=Time, list=L} = State,
     {DropCount, NModState} = Mod:handle_time(NTime, SojournTimes, ModState),
     {Drops, NL2} = lists:split(DropCount, NL),
     {Drops, State#state{time=NTime, list=NL2, mod_state=NModState}}.
+
+droplast(List) ->
+    [_ | Rest] = lists:reverse(List),
+    lists:reverse(Rest).
