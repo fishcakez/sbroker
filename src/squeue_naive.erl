@@ -18,9 +18,15 @@ init(_Args) ->
     undefined.
 
 %% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_time(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue().
+-else.
 -spec handle_time(Time, Q, undefined) -> {[], Q, undefined} when
       Time :: non_neg_integer(),
       Q :: queue:queue().
+-endif.
 handle_time(_Time, Q, undefined) ->
     {[], Q, undefined}.
 

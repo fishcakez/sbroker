@@ -110,11 +110,28 @@
 
 -export([from_start_list/4]).
 
+-ifdef(LEGACY_TYPES).
+-record(squeue, {module :: module(),
+                 state :: any(),
+                 time = 0 :: non_neg_integer(),
+                 queue = queue:new() :: queue()}).
+-type squeue() :: squeue(any()).
+-opaque squeue(_Item) :: #squeue{queue :: queue()}.
+
+-export_type([squeue/0]).
+-export_type([squeue/1]).
+
+-callback init(Args :: any()) -> State :: any().
+-callback handle_time(Time :: non_neg_integer(), Q :: queue(),
+                      State :: any()) ->
+    {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
+     NQ :: queue(), NState :: any()}.
+-callback handle_join(State :: any()) -> NState :: any().
+-else.
 -record(squeue, {module :: module(),
                  state :: any(),
                  time = 0 :: non_neg_integer(),
                  queue = queue:new() :: queue:queue()}).
-
 -type squeue() :: squeue(any()).
 -opaque squeue(Item) ::
     #squeue{queue :: queue:queue({non_neg_integer(), Item})}.
@@ -128,6 +145,7 @@
     {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
      NQ :: queue:queue(), NState :: any()}.
 -callback handle_join(State :: any()) -> NState :: any().
+-endif.
 
 %% Original API
 

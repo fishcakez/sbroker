@@ -61,6 +61,15 @@ init({Target, Interval})
     #state{config=#config{target=Target, interval=Interval}}.
 
 %% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_time(Time, Q, State) -> {Drops, NQ, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
+      State :: #state{},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
+      NQ :: queue(),
+      NState :: #state{}.
+-else.
 -spec handle_time(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(),
@@ -68,6 +77,7 @@ init({Target, Interval})
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
       NQ :: queue:queue(),
       NState :: #state{}.
+-endif.
 handle_time(Time, Q, #state{timeout_next=TimeoutNext} = State)
   when Time < TimeoutNext ->
     {[], Q, State};
