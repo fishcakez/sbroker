@@ -1,3 +1,26 @@
+%% @doc
+%% This module provides sojourn-time based active queue management with a
+%% similar API to OTP's `queue' module.
+%%
+%%
+%% A subset of the `squeue' API is the `queue' module's API with one exception:
+%% when `{value, Item}' is returned by `queue', `squeue' returns
+%% `{SojournTime, Item}', where `SojournTime' (`non_neg_integer()') is the
+%% sojourn time of the item (or length of time an item waited in the queue).
+%%
+%% `squeue' also provides an optional first argument to all functions in common
+%% with `queue': `Time'. This argument is of type `non_neg_integer()' and sets
+%% the current time of the queue, if `Time' is greater than (or equal) to
+%% the queue's previous time. When the `Time' argument is included items
+%% may be dropped by the queue's management algorithm. The dropped items
+%% will be included in the return value when the queue itself is also
+%% returned. The dropped items are a list of the form: `[{SojournTime, Item}]',
+%% which is ordered with the item with the greatest `SojournTime' (i.e. the
+%% oldest) at the head. If the `Time' argument is equal to the current time
+%% of the queue no items are dropped but an empty list is still returned.
+%%
+%% `squeue' includes 3 queue management algorithms: `squeue_naive',
+%% `squeue_timeout', `squeue_codel'.
 -module(squeue).
 
 -compile({no_auto_import, [get/1]}).
@@ -106,111 +129,18 @@
      NQ :: queue:queue(), NState :: any()}.
 -callback handle_join(State :: any()) -> NState :: any().
 
-%% This module provides an API very similar to OTP's queue module. When the
-%% function/arity is consistent between modules the behaviour is the same with
-%% ONE exception: When a queue function's return contains {value, Item}, squeue
-%% replaces the atom value with SojournTime, i.e. {SojournTime, Item}, where
-%% SojournTime is the sojourn time of Item.
-%%
-%% In addition to the queue API, squeue provides a function with an extra first
-%% argument for every function. This extra first argument is Time, of type
-%% non_neg_integer(), which represents the current time of the queue with
-%% no specific unit and defaults to 0. An squeue queue can not go backwards in
-%% time so once a time has been set all subsequent calls must have the same or a
-%% later time. If time decreases a function fails with badtime. If subsequent
-%% calls are made without the Time argument, it is assumed that time has not
-%% changed. The Time argument is used to calculate the sojourn time
-%% (SojournTime) for each item in the queue.
-%%
-%% The following additional badtime errors may occur:
-%%
-%% reverse/2,3 will fail with badtime if all items in the queue were not added
-%% at the same time.
-%%
-%% in_r/2,3 will fail with badtime if the head of the queue was not added at
-%% the same time.
-%%
-%% join/2 will fail with badtime if both queues do not have the same time but
-%% join/3 will not unless either queue has a time greater than Time (first
-%% argument).
-%%
-%% Note that if Time is never advanced then a badtime error can not occur.
-%%
-%% Functions which take a Time argument and return a queue will also return a
-%% list of dropped items and their sojourn time, i.e: [{SojournTime, Item}]. The
-%% head of the list will be the item from the head of the queue (i.e. the oldest
-%% item in the queue) and so has the longest sojourn time in the list. If a
-%% function without the Time argument just returns a queue, the verion with a
-%% Time argument will return: {DroppedList, Queue}. Similarly when a function
-%% without the Time argument returns empty or an Item with a queue:
-%% {{SojournTime, Item}, DroppedList, Queue} or two queues:
-%% {DroppedList, Queue1, Queue2}.
-%%
-%% In the case of is_queue/is_empty/member/peek/get functions a DroppedList
-%% isn't returned, but the returned values is based on any items having been
-%% dropped.
-%%
-%% Note that items can only be dropped when time advances, if the Time argument
-%% is included but time has not advanced no items are dropped. This occurs
-%% because the sojourn time of the item at the head of the queue has not
-%% increased.
-%%
-%% By default no items are dropped. An active queue management algorithm can be
-%% used with new/2,3 or from_list/3,4. Two such algorithms are included:
-%% squeue_timeout and squeue_codel, along with squeue_naive which does not drop
-%% any items (the default algorithm) which takes any term for argument.
-%%
-%% squeue_timeout is a simple alogrithm that drops all items that have a sojourn
-%% time greater than or equal to a timeout. The timeout is configured
-%% with argument Timeout. Note:
-%%
-%% * An infinity timeout is not supported, this behaviour is equivalent to
-%% squeue_naive
-%%
-%% * A timeout of 0 is not allowed because items are not dropped until time
-%% advances. A timeout of 0 would imply the item should be dropped on the next
-%% call on the queue. If a timeout of 0 was allowed it would not be obeyed and
-%% produce the same behaviour as a timeout of 1. This restriction allows squeue
-%% to mirror the queue API (with the value/SojournTime expection). It also makes
-%% the API easier to use as dropped items only need to be handled once per
-%% unique Time.
-%%
-%% squeue_codel implements the CoDel alogrithm with some changes made so that
-%% the queue's status changing/dropping can occur on any function - not just on
-%% dequeuing. The CoDel alorithm detects when items are spending longer than a
-%% target sojourn time in the queue and drops an item with decreasing intervals
-%% until the target sojourn time is met. The initial interval and target sojourn
-%% time are configurable with argument {Target, Interval}. Note:
-%%
-%% * A target of 0 is not allowed for the same reasons as a timeout of 0 is not
-%% allowed for squeue_timeout.
-%%
-%% * An interval of 0 is not allowed but is equivalent to using squeue_timeout
-%% with a Timeout of Target.
-%%
-%% * A Target or Interval of infinity is not allowed, the behaviour of either is
-%% equivalent to squeue_naive.
-%%
-%%
-%% In the case of get/2, get_r/2, drop/2 and drop_r/2 the queue management
-%% algorithm is carried out before trying to get/drop the item, and this item is
-%% not included in the drop list in case of drop/2,drop_r/2. Note therefore that
-%% these functions will fail with reason empty if is_empty/2 returns true, even
-%% if is_empty/1 returns false.
-%%
-%% Additional API:
-%%
-%% time/1 returns the queues current time
-%% timeout/2 applies the queue manegement alogrithm to the queue if Time (first
-%% argument) advances.
-
 %% Original API
 
+%% @doc Returns an empty queue, `S', with the `squeue_naive' management
+%% algorithm, and time of `0'.
 -spec new() -> S when
       S :: squeue().
 new() ->
     new(squeue_naive, undefined).
 
+%% @doc Returns a tuple containing an empty list of dropped items, `Drops', and
+%% an empty queue, `S', with the `squeue_naive' management algorithm, and time
+%% of `Time'.
 -spec new(Time) -> {Drops, S} when
       Time :: non_neg_integer(),
       Drops :: [],
@@ -218,6 +148,8 @@ new() ->
 new(Time) ->
     new(Time, squeue_naive, undefined).
 
+%% @doc Returns an empty queue, `S', with the `Module' management algorithm
+%% started with arguments `Args' and time of `0'.
 -spec new(Module, Args) -> S when
       Module :: module(),
       Args :: any(),
@@ -225,6 +157,9 @@ new(Time) ->
 new(Module, Args) ->
     #squeue{module=Module, state=Module:init(Args)}.
 
+%% @doc Returns a tuple containing an empty list of dropped items, `Drops', and
+%% an empty queue, `S', with the `Module' management algorithm started with
+%% arguments `Args' and time of `Time'.
 -spec new(Time, Module, Args) -> {Drops, S} when
       Time :: non_neg_integer(),
       Module :: module(),
@@ -235,6 +170,8 @@ new(Time, Module, Args) when is_integer(Time) andalso Time >= 0 ->
     State = Module:init(Args),
     {[], #squeue{module=Module, time=Time, state=State}}.
 
+%% @doc Tests if a term, `Term', is an `squeue' queue, returns `true' if is,
+%% otherwise `false'.
 -spec is_queue(Term) -> Bool when
       Term :: any(),
       Bool :: boolean().
@@ -243,7 +180,14 @@ is_queue(#squeue{}) ->
 is_queue(_Other) ->
     false.
 
-%% Just for completeness.
+%% @doc Tests if a term, `Term', is an `squeue' queue, returns `true' if is,
+%% otherwise `false'.
+%%
+%% This function is included for completeness and {@link is_queue/1} should be
+%% used.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec is_queue(Time, Term) -> Bool when
       Time :: non_neg_integer(),
       Term :: any(),
@@ -256,12 +200,19 @@ is_queue(Time, #squeue{} = S) ->
 is_queue(_Time, _Other) ->
     false.
 
+%% @doc Tests if a queue, `S', is empty, returns `true' if is, otherwise
+%% `false'.
 -spec is_empty(S) -> Bool when
       S :: squeue(),
       Bool :: boolean().
 is_empty(#squeue{queue=Q}) ->
     queue:is_empty(Q).
 
+%% @doc Tests if a queue, `S', will be empty at time `Time', returns `true' if
+%% it will be, otherwise `false'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec is_empty(Time, S) -> Bool when
       Time :: non_neg_integer(),
       S :: squeue(),
@@ -275,12 +226,17 @@ is_empty(Time, #squeue{time=Time} = S) ->
 is_empty(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Returns the length of the queue, `S'.
 -spec len(S) -> Len when
       S :: squeue(),
       Len :: non_neg_integer().
 len(#squeue{queue=Q}) ->
     queue:len(Q).
 
+%% @doc Returns the length of the queue, `S', at time `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec len(Time, S) -> Len when
       Time :: non_neg_integer(),
       S :: squeue(),
@@ -294,12 +250,20 @@ len(Time, #squeue{time=Time} = S) ->
 len(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Inserts the item, `Item', at the tail of queue, `S'. Returns the
+%% resulting queue, `NS'.
 -spec in(Item, S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 in(Item, #squeue{time=Time, queue=Q} = S) ->
     S#squeue{queue=queue:in({Time, Item}, Q)}.
 
+%% @doc Advances the queue, `S', to time `Time' and drops item, then inserts
+%% the item, `Item', at the tail of queue, `S'. Returns a tuple containing the
+%% dropped items and their sojourn times, `Drops', and resulting queue, `NS'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec in(Time, Item, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -315,6 +279,11 @@ in(Time, Item, #squeue{time=Time} = S) ->
 in(Time, Item, #squeue{} = S) ->
     error(badtime, [Time, Item, S]).
 
+%% @doc Inserts the item, `Item', at the head of queue, `S'. Returns the
+%% resulting queue, `NS'.
+%%
+%% This function raises the error `badtime' if current head of queue `S' was
+%% added before the current time.
 -spec in_r(Item, S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
@@ -331,6 +300,15 @@ in_r(Item, #squeue{time=Time, queue=Q} = S) ->
             error(badtime, [Item, S])
     end.
 
+%% @doc Advances the queue, `S', to time `Time' and drops items, then inserts
+%% the item, `Item', at the head of queue, `S'. Returns a tuple containing the
+%% dropped items and their sojourn times, `Drops', and resulting queue, `NS'.
+%%
+%% This function raises the error `badtime' if current head of queue `S' was
+%% added before the current time.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec in_r(Item, Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -347,6 +325,13 @@ in_r(Time, Item, #squeue{time=Time} = S) ->
 in_r(Time, Item, #squeue{} = S) ->
     error(badtime, [Time, Item, S]).
 
+%% @doc Removes the item, `Item', from the head of queue, `S'. Returns
+%% `{{SojournTime, Item}, NS}', where `SojournTime' is the time length of time
+%% `Item' spent in the queue and `NS' is the resulting queue without `Item'. If
+%% `S' is empty `{empty, S}' is returned.
+%%
+%% This function is slightly different from `queue:out/1', as the sojourn time
+%% is included in the result in the place of the atom `value'.
 -spec out(S) -> {Result, NS} when
       S :: squeue(Item),
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
@@ -359,6 +344,20 @@ out(#squeue{time=Time, queue=Q} = S) ->
             {sojourn_time(Time, Result), S#squeue{queue=NQ}}
     end.
 
+%% @doc Advances the queue, `S', to time `Time' and drops items, then removes
+%% the item, `Item', from the head of queue, `S'. Returns
+%% `{{SojournTime, Item}, Drops, NS}', where `SojournTime' is the time length of
+%% time `Item' spent in the queue, `Drops' is the list of dropped items and
+%% their sojourn times, and `NS' is the resulting queue without the removed and
+%% dropped items, If the queue is empty after dropping items
+%% `{empty, Drops, NS}' is returned.
+%%
+%% This function is slightly different from `queue:out/1', as the sojourn time
+%% is included in the result in the place of the atom `value' and items can be
+%% dropped.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec out(Time, S) -> {Result, Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -382,6 +381,13 @@ out(Time, #squeue{time=Time} = S) ->
 out(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Removes the item, `Item', from the tail of queue, `S'. Returns
+%% `{{SojournTime, Item}, NS}', where `SojournTime' is the time length of time
+%% `Item' spent in the queue and `NS' is the resulting queue without `Item'. If
+%% `S' is empty `{empty, S}' is returned.
+%%
+%% This function is slightly different from `queue:out_r/1', as the sojourn time
+%% is included in the result in the place of the atom `value'.
 -spec out_r(S) -> {Result, NS} when
       S :: squeue(Item),
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
@@ -394,6 +400,20 @@ out_r(#squeue{time=Time, queue=Q} = S) ->
             {sojourn_time(Time, Result), S#squeue{queue=NQ}}
     end.
 
+%% @doc Advances the queue, `S', to time `Time' and drops items, then removes
+%% the item, `Item', from the tail of queue, `S'. Returns
+%% `{{SojournTime, Item}, Drops, NS}', where `SojournTime' is the time length of
+%% time `Item' spent in the queue, `Drops' is the list of dropped items and
+%% their sojourn times, and `NS' is the resulting queue without the removed and
+%% dropped items, If the queue is empty after dropping items
+%% `{empty, Drops, NS}' is returned.
+%%
+%% This function is slightly different from `queue:out_r/1', as the sojourn time
+%% is included in the result in the place of the atom `value' and items can be
+%% dropped.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec out_r(Time, S) -> {Result, Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -417,12 +437,17 @@ out_r(Time, #squeue{time=Time} = S) ->
 out_r(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Returns a queue, `S', containing the list of items in `List'. The queue,
+%% `S', will use `squeue_naive' to manage the queue and be at time `0'.
 -spec from_list(List) -> S when
       List :: [Item],
       S :: squeue(Item).
 from_list(List) ->
     from_list(List, squeue_naive, undefined).
 
+%% @doc Returns a tuple containing an empty list of dropped items and a queue,
+%% `S', containing the list of items in `List'. The queue, `S', will use
+%% `squeue_naive' to manage the queue and be atime `Time'.
 -spec from_list(Time, List) -> {Drop, S} when
       Time :: non_neg_integer(),
       List :: [Item],
@@ -431,6 +456,9 @@ from_list(List) ->
 from_list(Time, List) ->
     from_list(Time, List, squeue_naive, undefined).
 
+%% @doc Returns a queue, `S', containing the list of items in `List'. The queue,
+%% `S', will use `Module' with arguments `Args' to manage the queue and be at
+%% time `0'.
 -spec from_list(List, Module, Args) -> S when
       List :: [Item],
       Module :: module(),
@@ -440,6 +468,9 @@ from_list(List, Module, Args) ->
     {[], S} = from_list(0, List, Module, Args),
     S.
 
+%% @doc Returns a tuple containing an empty list of droped items and a queue,
+%% `S', containing the list of items in `List'. The queue, `S', will use `Module'
+%% with arguments `Args' to manage the queue and be at time `Time'.
 -spec from_list(Time, List, Module, Args) -> {Drops, S} when
       Time :: non_neg_integer(),
       List :: [Item],
@@ -452,12 +483,24 @@ from_list(Time, List, Module, Args) when is_integer(Time) andalso Time >= 0 ->
     State = Module:init(Args),
     {[], #squeue{module=Module, time=Time, queue=Q, state=State}}.
 
+%% @doc Returns a list of items, `List', in the queue, `S'.
+%%
+%% The order of items in `List' matches their order in the queue, `S', so that
+%% the item at the head of the queue is at the head of the list.
 -spec to_list(S) -> List when
       S :: squeue(Item),
       List :: [Item].
 to_list(#squeue{queue=Q}) ->
     [Item || {_Start, Item} <- queue:to_list(Q)].
 
+%% @doc Advances the queue, `S', to time `Time' and returns a list `List' of the
+%% items remaining in the queue.
+%%
+%% The order of items in `List' matches their order in the queue, `S', so that
+%% the item at the head of the queue is at the head of the list.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec to_list(Time, S) -> List when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -471,6 +514,11 @@ to_list(Time, #squeue{time=Time} = S) ->
 to_list(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Returns a new queue, `NS', that contains the items of queue `S' in
+%% reverse order.
+%%
+%% This function raises the error `badtime' if all items in queue `S' were not
+%% added at the same time.
 -spec reverse(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
@@ -485,6 +533,16 @@ reverse(#squeue{queue=Q} = S) ->
             S#squeue{queue=NQ}
     end.
 
+%% @doc Advances the queue, `S' to time `Time' and drops items, then reverses
+%% the order of the remaining items in the queue. Returns a tuple containing the
+%% dropped items and their sojourn times, `Drops', and the reversed queue, `NS'.
+%%
+%% This function raises the error `badtime' if all items in queue `S' at time
+%% `Time' were not added at the same time.
+%%
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec reverse(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -500,6 +558,11 @@ reverse(Time, #squeue{time=Time} = S) ->
 reverse(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Splits the queue `S' in two, with the `N' items at head of `S' in one
+%% queue, `S1', and the rest of the items in `S2'.
+%%
+%% Both returned queues, `S1' and `S2', will maintain the queue management state
+%% of queue `S'.
 -spec split(N, S) -> {S1, S2} when
       N :: non_neg_integer(),
       S :: squeue(Item),
@@ -509,6 +572,16 @@ split(N, #squeue{queue=Q} = S) ->
     {Q1, Q2} = queue:split(N, Q),
     {S#squeue{queue=Q1}, S#squeue{queue=Q2}}.
 
+%% @doc Advances the queue, `S', to time `Time' and drops items, then splits the
+%% remaing queue in two, with the `N' items at head in one queue, `S1', and the
+%% rest of the items in `S2'. Returns a tuple containing the dropped items and
+%% their sojourn times, `Drops', and the two new queues, `S1' and `S2'.
+%%
+%% Both returned queues, `S1' and `S2', will maintain the queue management state
+%% of queue `S' at time `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec split(Time, N, S) -> {Drops, S1, S2} when
       Time :: non_neg_integer(),
       N :: non_neg_integer(),
@@ -527,6 +600,14 @@ split(Time, N, #squeue{time=Time} = S) ->
 split(Time, N, #squeue{} = S) ->
     error(badtime, [Time, N, S]).
 
+%% @doc Joins two queues, `S1' and `S2', into one queue, `NS', with the items in
+%% `S1' at the head and the items in `S2' at the tail.
+%%
+%% This function raises the error `badtime' if any item in queue `S1' was added
+%% after any item in queue `S2'.
+%%
+%% This function raises the error `badtime' if the current time of the queues,
+%% `S1' and `S2', are not the same.
 -spec join(S1, S2) -> NS when
       S1 :: squeue(Item),
       S2 :: squeue(Item),
@@ -549,6 +630,19 @@ join(#squeue{module=Module1, time=Time, queue=Q1, state=State1} = S1,
 join(#squeue{} = S1, #squeue{} = S2) ->
     error(badtime, [S1, S2]).
 
+
+%%% @doc Advances the queues, `S1' and `S2', to time `Time' and drops items,
+%%% then joins the remaining items in the two queues into one queue, `NS', with
+%%% the remaining items from `S1' at the head and the remaining items from `S2'
+%%% at the tail. Returns a tuple containing the dropped items and their sojourn
+%%% times, `Drops', and the new queue `NS'.
+%%
+%% This function raises the error `badtime' if any remaining item in queue `S1'
+%% at time `Time' was added after any remaining item in queue `S2' at time
+%% `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of either queue, `S1' or `S2'.
 -spec join(Time, S1, S2) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S1 :: squeue(Item),
@@ -584,6 +678,16 @@ join(Time2, #squeue{module=Module1, time=Time1, queue=Q1, state=State1} = S1,
 join(Time, #squeue{} = S1, #squeue{} = S2) ->
     error(badtime, [Time, S1, S2]).
 
+%% @doc Applys a fun, `Filter', to all items in the queue, `S', and returns the
+%% resulting queue, `NS'.
+%%
+%% If `Filter(Item)' returns `true', the item appears in the new queue.
+%%
+%% If `Filter(Item)' returns `false', the item does not appear in the new
+%% queue.
+%%
+%% If `Filter(Item)' returns a list of items, these items appear in the new
+%% queue with all items having the start time of the origin item, `Item'.
 -spec filter(Filter, S) -> NS when
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
       S :: squeue(Item),
@@ -592,6 +696,21 @@ filter(Filter, #squeue{queue=Q} = S) ->
     NQ = queue:filter(make_filter(Filter), Q),
     S#squeue{queue=NQ}.
 
+%% @doc Advances the queue, `S', to time `Time'  and drops items, then applys a
+%% fun, `Filter', to all remaining items in the queue. Returns a tuple
+%% containing the dropped items and their sojourn times, `Drops', and the new
+%% queue, `NS'.
+%%
+%% If `Filter(Item)' returns `true', the item appears in the new queue.
+%%
+%% If `Filter(Item)' returns `false', the item does not appear in the new
+%% queue.
+%%
+%% If `Filter(Item)' returns a list of items, these items appear in the new
+%% queue with all items having the start time of the origin item, `Item'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec filter(Time, Filter, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
@@ -609,6 +728,8 @@ filter(Time, Filter, #squeue{time=Time} = S) ->
 filter(Time, Filter, #squeue{} = S) ->
     error(badtime, [Time, Filter, S]).
 
+%% @doc Tests if an item, `Item', is in the queue, `S', returns `true' if it is,
+%% otherwise `false'.
 -spec member(Item, S) -> Bool when
       S :: squeue(Item),
       Bool :: boolean().
@@ -616,6 +737,11 @@ member(Item, #squeue{queue=Q}) ->
     NQ = queue:filter(fun({_InTime, Item2}) -> Item2 =:= Item end, Q),
     not queue:is_empty(NQ).
 
+%% @doc Tests if an item, `Item', is in the queue, `S', at time `Time', returns
+%% `true' if it will be, otherwise `false'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec member(Time, Item, S) -> Bool when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -633,14 +759,19 @@ member(Time, Item, #squeue{} = S) ->
 
 %% Additional API
 
-%% Returns the time of the queue.
+%% @doc Returns the current time , `Time', of the queue, `S'.
 -spec time(S) -> Time when
       S :: squeue(),
       Time :: non_neg_integer().
 time(#squeue{time=Time}) ->
     Time.
 
-%% Sets the time of the queue.
+%% @doc Advances the queue, `S', to time `Time' and drops item. Returns a tuple
+%% containing the dropped items and their sojourn times, `Drops', and resulting
+%% queue, `NS'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec timeout(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -657,12 +788,22 @@ timeout(Time, #squeue{} = S) ->
 
 %% Extended API
 
+%% @doc Returns the item, `Item', at the head of the queue, `S'.
+%%
+%% This functions raise the error `empty' if the queue, `S', is empty.
 -spec get(S) -> Item when
       S :: squeue(Item).
 get(#squeue{queue=Q}) ->
     {_InTime, Item} = queue:get(Q),
     Item.
 
+%% @doc Returns the item, `Item', at the head of the queue, `S', at time `Time'.
+%%
+%% This functions raise the error `empty' if the queue, `S', is empty at time
+%% `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec get(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
@@ -676,12 +817,22 @@ get(Time, #squeue{time=Time} = S) ->
 get(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Returns the item, `Item', at the tail of the queue, `S'.
+%%
+%% This functions raise the error `empty' if the queue, `S', is empty.
 -spec get_r(S) -> Item when
       S :: squeue(Item).
 get_r(#squeue{queue=Q}) ->
     {_InTime, Item} = queue:get_r(Q),
     Item.
 
+%% @doc Returns the item, `Item', at the tail of the queue, `S', at time `S'.
+%%
+%% This functions raise the error `empty' if the queue, `S', is empty at time
+%% `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec get_r(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
@@ -695,6 +846,11 @@ get_r(Time, #squeue{time=Time} = S) ->
 get_r(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Returns the item, `Item' and its sojourn time, `SojournTime', from the
+%% head of the queue, `S'. If the queue, `S', is empty, returns `empty'.
+%%
+%% This function is slightly different from `queue:peek/1', as the sojourn time
+%% is included in the result in the place of the atom `value'.
 -spec peek(S) -> Item when
       S :: squeue(Item).
 peek(#squeue{time=Time, queue=Q}) ->
@@ -705,6 +861,15 @@ peek(#squeue{time=Time, queue=Q}) ->
             sojourn_time(Time, Result)
     end.
 
+%% @doc Returns the item, `Item' and its sojourn time, `SojournTime', from the
+%% head of the queue, `S', at time `Time'. If the queue, `S', is empty at time
+%% `Time', returns `empty'.
+%%
+%% This function is slightly different from `queue:peek/1', as the sojourn time
+%% is included in the result in the place of the atom `value'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec peek(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
@@ -722,6 +887,11 @@ peek(Time, #squeue{time=Time} = S) ->
 peek(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Returns the item, `Item' and its sojourn time, `SojournTime', from the
+%% tail of the queue, `S'. If the queue, `S', is empty, returns `empty'.
+%%
+%% This function is slightly different from `queue:peek_r/1', as the sojourn
+%% time is included in the result in the place of the atom `value'.
 -spec peek_r(S) -> Item when
       S :: squeue(Item).
 peek_r(#squeue{time=Time, queue=Q}) ->
@@ -732,6 +902,15 @@ peek_r(#squeue{time=Time, queue=Q}) ->
             sojourn_time(Time, Result)
     end.
 
+%% @doc Returns the item, `Item' and its sojourn time, `SojournTime', from the
+%% head of the queue, `S', at time `Time'. If the queue, `S', is empty at time
+%% `Time', returns `empty'.
+%%
+%% This function is slightly different from `queue:peek_r/1', as the sojourn
+%% time is included in the result in the place of the atom `value'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec peek_r(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
@@ -749,12 +928,25 @@ peek_r(Time, #squeue{time=Time} = S) ->
 peek_r(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Removes the item from the head of the queue, `S' and returns the
+%% resulting queue, `NS'.
+%%
+%% This function raises the error `empty' if the queue, `S', is empty.
 -spec drop(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 drop(#squeue{queue=Q} = S) ->
     S#squeue{queue=queue:drop(Q)}.
 
+%% @doc Advances the queue, `S', to time `Time' and drops item, then removes the
+%% item from the head of the new queue. Returns a tuple containing the dropped
+%% items and their sojourn times, `Drops', and resulting queue, `NS'.
+%%
+%% This functions raise the error `empty' if the queue, `S', is empty at time
+%% `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec drop(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -770,12 +962,25 @@ drop(Time, #squeue{time=Time} = S) ->
 drop(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
+%% @doc Removes the item from the head of the queue, `S' and returns the
+%% resulting queue, `NS'.
+%%
+%% This function raises the error `empty' if the queue, `S', is empty.
 -spec drop_r(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 drop_r(#squeue{queue=Q} = S) ->
     S#squeue{queue=queue:drop_r(Q)}.
 
+%% @doc Advances the queue, `S', to time `Time' and drops item, then removes the
+%% item from the tail of the new queue. Returns a tuple containing the dropped
+%% items and their sojourn times, `Drops', and resulting queue, `NS'.
+%%
+%% This functions raise the error `empty' if the queue, `S', is empty at time
+%% `Time'.
+%%
+%% This function raises the error `badtime' if `Time' is not a valid time
+%% greater than or equal to the current time of the queue, `S'.
 -spec drop_r(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -793,12 +998,14 @@ drop_r(Time, #squeue{} = S) ->
 
 %% Okasaki API
 
+%% @equiv in(Item, S)
 -spec cons(Item, S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 cons(Item, S) ->
     in(Item, S).
 
+%% @equiv in(Time, Item, S)
 -spec cons(Time, Item, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -807,23 +1014,27 @@ cons(Item, S) ->
 cons(Time, Item, S) ->
     in(Time, Item, S).
 
+%% @equiv get(S)
 -spec head(S) -> Item when
       S :: squeue(Item).
 head(S) ->
     get(S).
 
+%% @equiv get(Time, S)
 -spec head(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
 head(Time, S) ->
     get(Time, S).
 
+%% @equiv drop(S)
 -spec tail(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 tail(S) ->
     drop(S).
 
+%% @equiv drop(Time, S)
 -spec tail(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -832,12 +1043,14 @@ tail(S) ->
 tail(Time, S) ->
     drop(Time, S).
 
+%% @equiv in_r(Item, S)
 -spec snoc(Item, S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 snoc(Item, S) ->
     in_r(Item, S).
 
+%% @equiv in_r(Time, Item, S)
 -spec snoc(Item, Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -846,34 +1059,40 @@ snoc(Item, S) ->
 snoc(Time, Item, S) ->
     in_r(Time, Item, S).
 
+%% @equiv get_r(S)
 -spec daeh(S) -> Item when
       S :: squeue(Item).
 daeh(S) ->
     get_r(S).
 
+%% @equiv get_r(Time, S)
 -spec daeh(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
 daeh(Time, S) ->
     get_r(Time, S).
 
+%% @equiv get_r(S)
 -spec last(S) -> Item when
       S :: squeue(Item).
 last(S) ->
     get_r(S).
 
+%% @equiv get_r(Time, S)
 -spec last(Time, S) -> Item when
       Time :: non_neg_integer(),
       S :: squeue(Item).
 last(Time, S) ->
     get_r(Time, S).
 
+%% @equiv drop_r(S)
 -spec liat(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 liat(S) ->
     drop_r(S).
 
+%% @equiv drop_r(Time, S)
 -spec liat(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -882,12 +1101,14 @@ liat(S) ->
 liat(Time, S) ->
     drop_r(Time, S).
 
+%% @equiv drop_r(S)
 -spec init(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 init(S) ->
     drop_r(S).
 
+%% @equiv drop_r(Time, S)
 -spec init(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -898,12 +1119,14 @@ init(Time, S) ->
 
 %% Misspelt Okasaki API
 
+%% @equiv drop_r(S)
 -spec lait(S) -> NS when
       S :: squeue(Item),
       NS :: squeue(Item).
 lait(S) ->
     drop_r(S).
 
+%% @equiv drop_r(Time, S)
 -spec lait(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -914,6 +1137,7 @@ lait(Time, S) ->
 
 %% Test API
 
+%% @hidden
 from_start_list(Time, List, Module, Args) ->
     {[], S} = new(Time, Module, Args),
     S#squeue{queue=queue:from_list(List)}.

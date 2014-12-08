@@ -1,0 +1,11 @@
+@title Sojourn-time based active queue management library
+@doc `squeue' provides sojourn-time based active queue management with a
+similar API to OTP's `queue'.
+
+Three queue management modules are provided for use with `squeue':
+`squeue_naive', `squeue_timeout' and `squeue_codel'.
+
+@see squeue
+@see squeue_naive
+@see squeue_timeout
+@see squeue_codel

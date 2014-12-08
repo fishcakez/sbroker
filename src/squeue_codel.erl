@@ -1,29 +1,38 @@
-%% Implements CoDel based on:
+%% @doc Implements CoDel based roughly on Controlling Queue Delay, see
+%% reference, with some changes.
 %%
-%% http://queue.acm.org/detail.cfm?searchterm=piece+pipe&id=2209336
+%% `squeue_codel' can be used as the active queue management module in a
+%% `squeue' queue. It's arguments are of the form `{Target, Interval}', with
+%% `Target', `pos_integer()', the target sojourn time of an item in the queue
+%% and `Interval', `pos_integer()', the initial interval between drops once the
+%% queue becomes slow.
 %%
-%% The follow differences apply compared to the above article.
+%% The follow differences apply compared to the classis CoDel algorithm:
 %%
-%% * Interval commencing, dropping and changing to a non-dropping state can
-%% occur on any function (not just dequeue) by inspecting the sojourn time of
-%% the head (i.e. the oldest item) of the queue. This has the advantage that
-%% dropping can occur as soon as possible rather than waiting for a dequeue.
-%% More investigation needs to be done to ensure there are no ill effects.
+%% Interval commencing, dropping and changing to a non-dropping state can
+%% occur on any function (not just when dequeuing) by inspecting the sojourn
+%% time of the head (i.e. the oldest item) of the queue. This has the advantage
+%% that dropping can occur as soon as possible rather than waiting for a
+%% dequeue. More investigation needs to be done to ensure there are no ill
+%% effects.
 %%
-%% * The first change only occurs ONCE per time change. This allows a
-%% queue-like API. Note that this change is not as drastic as it appears because
+%% The first change only occurs once per time change. This allows a queue-like
+%% API. Note that this change is not as drastic as it appears because
 %% the sojourn time of the head item can only decrease if the time has not
 %% changed.
 %%
-%% * The first change allows a LIFO queue as well as FIFO as the max sojourn
+%% The first change allows a LIFO queue as well as FIFO as the max sojourn
 %% time of the queue is used to judge it's state, rather than the dequeued items
 %% sojourn time.
 %%
-%% * The time the queue became slow (i.e. time slow item entered queue + target
+%% The time the queue became slow (i.e. time slow item entered queue + target
 %% sojourn time + interval length) rather than the time the queue realised it
 %% was slow and waited an interval (i.e. the current time + interval length) is
 %% used for the time of first drop. This means that more than one drop can occur
 %% when realising the queue has been slow for an interval.
+%%
+%% @reference Kathleen Nichols and Van Jacobson, Controlling Queue Delay,
+%% ACM Queue, 6th May 2012.
 -module(squeue_codel).
 
 -behaviour(squeue).
@@ -41,6 +50,7 @@
                 drop_first=infinity :: non_neg_integer() | infinity | dropping,
                 timeout_next=0 :: non_neg_integer()}).
 
+%% @private
 -spec init({Target, Interval}) -> State when
       Target :: pos_integer(),
       Interval :: pos_integer(),
@@ -50,6 +60,7 @@ init({Target, Interval})
        is_integer(Interval) andalso Interval > 0 ->
     #state{config=#config{target=Target, interval=Interval}}.
 
+%% @private
 -spec handle_time(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(),
@@ -63,6 +74,7 @@ handle_time(Time, Q, #state{timeout_next=TimeoutNext} = State)
 handle_time(Time, Q, #state{config=#config{target=Target}} = State) ->
     timeout(queue:peek(Q), Time - Target, Time, Q, State).
 
+%% @private
 -spec handle_join(State) -> NState when
       State :: #state{},
       NState :: #state{}.

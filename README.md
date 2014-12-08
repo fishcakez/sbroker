@@ -71,7 +71,6 @@ Custom Management
 It is planned to finalise and document the `squeue` behaviour to allow custom
 queue management modules.
 
-
 Additional API
 --------------
 Retrieve the current time of a queue (with `Queue` as the queue):
@@ -94,6 +93,14 @@ Rebar builds:
 ```
 rebar compile
 ```
+
+Documentation
+-------------
+Rebar builds documentation:
+```
+rebar doc
+```
+Then visit `doc/index.html`.
 
 Test
 ----
