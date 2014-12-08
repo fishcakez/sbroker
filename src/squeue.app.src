@@ -1,0 +1,9 @@
+{application, squeue,
+ [{description, "Sojourn-time based active queue management library"}
+ ,{vsn, "0.1.0"}
+ ,{registered, []}
+ ,{applications,
+    [kernel,stdlib]}
+ ,{env,[]}
+ ,{modules, []}
+ ]}.
