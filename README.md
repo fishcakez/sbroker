@@ -61,7 +61,7 @@ is slow, is used when deciding when to a drop the first item after a period of
 not dropping. Create an empty `squeue` managed by `squeue_codel` (where `Target`
 is the target sojourn time, of type `pos_integer()`; `Interval`, the initial
 interval between drops, of type `pos_integer()`; `Time`, the initial time, of
-type `non_neg_integer()):
+type `non_neg_integer()`):
 ```erlang
 squeue:new(squeue_codel, {Target, Interval}).
 squeue:new(Time, squeue_codel, {Target, Interval}).
