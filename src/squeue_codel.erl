@@ -16,7 +16,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
--export([handle_join/1]).
+-export([handle_join/3]).
 
 -record(config, {target :: pos_integer(),
                  interval :: pos_integer(),
@@ -77,11 +77,26 @@ handle_out(Time, Q, #state{config=#config{target=Target}} = State) ->
     out(queue:peek(Q), Time - Target, Time, Q, State).
 
 %% @private
--spec handle_join(State) -> NState when
+-ifdef(LEGACY_TYPES).
+-spec handle_join(Time, Q, State) -> {[], Q, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
       State :: #state{},
       NState :: #state{}.
-handle_join(State) ->
-    State#state{out_next=0}.
+-else.
+-spec handle_join(Time, Q, State) -> {[], Q, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue(),
+      State :: #state{},
+      NState :: #state{}.
+-endif.
+handle_join(_Time, Q, State) ->
+    case queue:is_empty(Q) of
+        true ->
+            {[], Q, State#state{out_next=0}};
+        false ->
+            {[], Q, State}
+    end.
 
 %% Empty queue so reset drop_first
 out(empty, _MinStart, Time, Q, #state{config=#config{target=Target}} = State) ->

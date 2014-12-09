@@ -129,7 +129,9 @@
                       State :: any()) ->
     {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
      NQ :: queue(), NState :: any()}.
--callback handle_join(State :: any()) -> NState :: any().
+-callback handle_join(Time :: non_neg_integer(), Q :: queue(),
+                      State :: any()) ->
+    {Drops :: [], NQ :: queue(), NState :: any()}.
 -else.
 -record(squeue, {module :: module(),
                  state :: any(),
@@ -151,7 +153,9 @@
                       State :: any()) ->
     {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
      NQ :: queue:queue(Item), NState :: any()}.
--callback handle_join(State :: any()) -> NState :: any().
+-callback handle_join(Time :: non_neg_integer(), Q :: queue:queue(Item),
+                      State :: any()) ->
+    {Drops :: [], NQ :: queue:queue(Item), NState :: any()}.
 -endif.
 
 %% Original API
@@ -666,11 +670,12 @@ join(#squeue{module=Module1, time=Time, queue=Q1, state=State1} = S1,
             %% queues contain overlapping start times.
             error(badtime, [S1, S2]);
         _ ->
-            NQ = queue:join(Q1, Q2),
+            {[], NQ1, NState1} = Module1:handle_join(Time, Q1, State1),
+            NQ = queue:join(NQ1, Q2),
             %% handle_join/1 is required to notify the queue manager that the
             %% max sojourn time of the queue may have increased (though only if
             %% the head queue was empty).
-            S1#squeue{queue=NQ, state=Module1:handle_join(State1)}
+            S1#squeue{queue=NQ, state=NState1}
     end;
 join(#squeue{} = S1, #squeue{} = S2) ->
     error(badtime, [S1, S2]).

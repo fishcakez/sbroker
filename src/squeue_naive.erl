@@ -10,7 +10,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
--export([handle_join/1]).
+-export([handle_join/3]).
 
 %% @private
 -spec init(Args) -> undefined when
@@ -45,6 +45,14 @@ handle_out(_Time, Q, undefined) ->
     {[], Q, undefined}.
 
 %% @private
--spec handle_join(undefined) -> undefined.
-handle_join(undefined) ->
-    undefined.
+-ifdef(LEGACY_TYPES).
+-spec handle_join(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue().
+-else.
+-spec handle_join(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue().
+-endif.
+handle_join(_Time, Q, undefined) ->
+    {[], Q, undefined}.

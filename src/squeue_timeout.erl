@@ -12,7 +12,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
--export([handle_join/1]).
+-export([handle_join/3]).
 
 -record(state, {timeout :: pos_integer(),
                 timeout_next = 0 :: non_neg_integer()}).
@@ -64,11 +64,26 @@ handle_out(_Time, Q, State) ->
     {[], Q, State}.
 
 %% @private
--spec handle_join(State) -> NState when
+-ifdef(LEGACY_TYPES).
+-spec handle_join(Time, Q, State) -> {[], Q, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
       State :: #state{},
       NState :: #state{}.
-handle_join(State) ->
-    State#state{timeout_next=0}.
+-else.
+-spec handle_join(Time, Q, State) -> {[], Q, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue(),
+      State :: #state{},
+      NState :: #state{}.
+-endif.
+handle_join(_Time, Q, State) ->
+    case queue:is_empty(Q) of
+        true ->
+            {[], Q, State#state{timeout_next=0}};
+        false ->
+            {[], Q, State}
+    end.
 
 timeout(empty, _MinStart, Time, Q, #state{timeout=Timeout} = State, Drops) ->
     %% If an item is added immediately the first time it (or any item) could be
