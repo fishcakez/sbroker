@@ -43,7 +43,8 @@
 all() ->
     [{group, naive},
      {group, timeout},
-     {group, codel}].
+     {group, codel},
+     {group, codel_timeout}].
 
 suite() ->
     [{timetrap, {seconds, 30}}].
@@ -52,6 +53,7 @@ groups() ->
     [{naive, [{group, property}]},
      {timeout, [{group, property}]},
      {codel, [{group, property}]},
+     {codel_timeout, [{group, property}]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -72,6 +74,9 @@ init_per_group(timeout, Config) ->
                          Config]);
 init_per_group(codel, Config) ->
     init_per_group(all, [{quickcheck_module, squeue_codel_statem} |
+                         Config]);
+init_per_group(codel_timeout, Config) ->
+    init_per_group(all, [{quickcheck_module, squeue_codel_timeout_statem} |
                          Config]);
 init_per_group(property, Config) ->
     case code:is_loaded(proper) of

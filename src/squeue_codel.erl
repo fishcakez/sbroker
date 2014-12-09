@@ -27,11 +27,15 @@
                 drop_first=infinity :: non_neg_integer() | infinity | dropping,
                 out_next=0 :: non_neg_integer()}).
 
+-opaque state() :: #state{}.
+
+-export_type([state/0]).
+
 %% @private
 -spec init({Target, Interval}) -> State when
       Target :: pos_integer(),
       Interval :: pos_integer(),
-      State :: #state{}.
+      State :: state().
 init({Target, Interval})
   when is_integer(Target) andalso Target > 0 andalso
        is_integer(Interval) andalso Interval > 0 ->
@@ -42,12 +46,12 @@ init({Target, Interval})
 -spec handle_timeout(Time, Q, State) -> {[], Q, State} when
       Time :: non_neg_integer(),
       Q :: queue(),
-      State :: #state{}.
+      State :: state().
 -else.
 -spec handle_timeout(Time, Q, State) -> {[], Q, State} when
       Time :: non_neg_integer(),
       Q :: queue:queue(),
-      State :: #state{}.
+      State :: state().
 -endif.
 handle_timeout(_Time, Q, State) ->
     {[], Q, State}.
@@ -57,18 +61,18 @@ handle_timeout(_Time, Q, State) ->
 -spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
-      State :: #state{},
+      State :: state(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
       NQ :: queue(),
-      NState :: #state{}.
+      NState :: state().
 -else.
 -spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
-      Q :: queue:queue(),
-      State :: #state{},
+      Q :: queue:queue(Item),
+      State :: state(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(),
-      NState :: #state{}.
+      NQ :: queue:queue(Item),
+      NState :: state().
 -endif.
 handle_out(Time, Q, #state{out_next=OutNext} = State)
   when Time < OutNext ->
@@ -81,14 +85,14 @@ handle_out(Time, Q, #state{config=#config{target=Target}} = State) ->
 -spec handle_join(Time, Q, State) -> {[], Q, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
-      State :: #state{},
-      NState :: #state{}.
+      State :: state(),
+      NState :: state().
 -else.
 -spec handle_join(Time, Q, State) -> {[], Q, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(),
-      State :: #state{},
-      NState :: #state{}.
+      State :: state(),
+      NState :: state().
 -endif.
 handle_join(_Time, Q, State) ->
     case queue:is_empty(Q) of

@@ -36,10 +36,10 @@ init(Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
 -else.
 -spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
-      Q :: queue:queue(),
+      Q :: queue:queue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(),
+      NQ :: queue:queue(Item),
       NState :: #state{}.
 -endif.
 handle_timeout(Time, Q, #state{timeout_next=TimeoutNext} = State)

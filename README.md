@@ -24,10 +24,11 @@ which is ordered with them item with the greatest `SojournTime` (i.e. the
 oldest) at the head.
 
 
-`squeue` includes 3 queue management algorithms (in order of complexity):
+`squeue` includes 4 queue management algorithms (in order of complexity):
 * `squeue_naive`
 * `squeue_timeout`
 * `squeue_codel`
+* `squeue_codel_timeout`
 
 squeue_naive
 ------------
@@ -66,6 +67,23 @@ time, of type `non_neg_integer()`):
 squeue:new(squeue_codel, {Target, Interval}).
 squeue:new(Time, squeue_codel, {Target, Interval}).
 ```
+
+squeue_codel_timeout
+--------------------
+`squeue_codel_timeout` combines `squeue_codel` and `squeue_timeout` so
+that the CoDel algorithm is used with the addition that any items with a
+sojourn time over the timeout are dequeued. The dequeuing of timed out
+items will trigger the CoDel algorithm and so item with sojourn time
+below the timeout may also be dropped if the backlog is significant. Create an
+empty `squeue` managed by `squeue_codel_timeout` (where `Target` is the target
+sojourn time, of type `pos_integer()`; `Interval`, the initial interval between
+drops, of type `pos_integer()`; `Timeout` is the timeout length, of type
+`pos_integer()`; `Time`, the initial time, of type `non_neg_integer()`):
+```erlang
+squeue:new(squeue_codel_timeout, {Target, Interval, Timeout}).
+squeue:new(Time, squeue_codel_timeout, {Target, Interval, Timeout}).
+```
+
 Custom Management
 -----------------
 It is planned to finalise and document the `squeue` behaviour to allow custom
