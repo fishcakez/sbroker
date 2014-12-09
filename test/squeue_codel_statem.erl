@@ -1,9 +1,6 @@
 %% This modules impliments the CoDel algorithm by directly translating the CoDel
 %% draft implementation at:
 %% https://tools.ietf.org/html/draft-nichols-tsvwg-codel-02
-%% However some changes have been made to the algorithm to match the variations
-%% from CoDel in squeue_codel. Due to the direct translation the copyright and
-%% license of the original is maintained.
 %%
 %% Copyright (C) 2011-2014 Kathleen Nichols <nichols@pollere.com>
 %% Copyright (C) 2014 James Fish <james@fishcakez.com>
@@ -54,7 +51,8 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/1]).
--export([handle_time/3]).
+-export([handle_timeout/3]).
+-export([handle_out/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -99,7 +97,10 @@ args() ->
 init({Target, Interval}) ->
     #state{target=Target, interval=Interval}.
 
-handle_time(Time, L, State) ->
+handle_timeout(_Time, _L, State) ->
+    {0, State}.
+
+handle_out(Time, L, State) ->
     {Item, NL, NState} = do_dequeue(L, State#state{now=Time}),
     case NState#state.dropping of
         true ->
@@ -128,31 +129,18 @@ dequeue_dropping(_Item, _L, State, Drops) ->
     {Drops, State}.
 
 dequeue_not_dropping({drop, _Item}, L,
-                     #state{interval=Interval, first_above_time=FirstAbove,
-                            drop_next=DropNext, count=Count} = State) ->
-    %% Instead of Now use the time the queue became slow (i.e. the time that
-    %% the item had a sojourn time of target + interval).
+                     #state{interval=Interval, drop_next=DropNext,
+                            count=Count, now=Now} = State) ->
     Drops = 1,
-    NState = State#state{dropping=true},
+    {_, _, NState} = do_dequeue(L, State),
+    NState2 = NState#state{dropping=true},
     NCount = if
-                 Count > 2 andalso FirstAbove - DropNext < Interval ->
+                 Count > 2 andalso Now - DropNext < Interval ->
                      Count - 2;
                  true ->
                      1
              end,
-    %SlowAt = (Now - SojournTime) + Target + Interval,
-    NState2 = control_law(FirstAbove, NState#state{count=NCount}),
-    %% As DropNext could be less than Now must do_dequeue and enter dropping
-    %% loop if ok to drop next item. This is only possible because of
-    %% first_above_time uses the time (possibly) in past the queue became slow,
-    %% rather than the time it was noticed that queue became slow.
-    case do_dequeue(L, NState2) of
-        {{nodrop, _}, _NL, NState3} ->
-            {Drops, NState3#state{dropping=false}};
-        {NItem, NL, #state{drop_next=NDropNext} = NState3} ->
-            NState4 = control_law(NDropNext, NState3#state{count=NCount+1}),
-            dequeue_dropping(NItem, NL, NState4, Drops)
-    end;
+    {Drops, control_law(Now, NState2#state{count=NCount})};
 dequeue_not_dropping({nodrop, _}, _L, State) ->
     {0, State}.
 
@@ -165,16 +153,10 @@ do_dequeue([], State) ->
 do_dequeue([SojournTime | L], #state{target=Target} = State)
   when SojournTime < Target ->
     {{nodrop, SojournTime}, L, State#state{first_above_time=0}};
-do_dequeue([SojournTime | L], #state{target=Target, interval=Interval,
-                                     first_above_time=0, now=Now} = State) ->
-    FirstAbove = (Now - SojournTime) + Target + Interval,
-    NState = State#state{first_above_time=FirstAbove},
-    if
-       FirstAbove > Now ->
-            {{nodrop, SojournTime}, L, NState};
-       true ->
-            {{drop, SojournTime}, L, NState}
-    end;
+do_dequeue([SojournTime | L], #state{interval=Interval, first_above_time=0,
+                                     now=Now} = State) ->
+    FirstAbove = Now + Interval,
+    {{nodrop, SojournTime}, L, State#state{first_above_time=FirstAbove}};
 do_dequeue([SojournTime | L], #state{first_above_time=FirstAbove,
                                      now=Now} = State)
   when Now >= FirstAbove ->

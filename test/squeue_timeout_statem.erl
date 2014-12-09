@@ -10,7 +10,8 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/1]).
--export([handle_time/3]).
+-export([handle_timeout/3]).
+-export([handle_out/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -52,9 +53,12 @@ args() ->
 init(Timeout) ->
     Timeout.
 
-handle_time(_Time, L, Timeout) ->
+handle_timeout(_Time, L, Timeout) ->
     Drop = fun(SojournTime) -> SojournTime >= Timeout end,
     {length(lists:takewhile(Drop, L)), Timeout}.
+
+handle_out(_Time, _L, Timeout) ->
+    {0, Timeout}.
 
 initial_state() ->
     squeue_statem:initial_state(?MODULE).

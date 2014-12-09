@@ -4,10 +4,14 @@ Sojourn queue - queue library using sojourn time based active queue management.
 
 Introduction
 ------------
-A subset of the `squeue` API is the `queue` module's API with one exception:
-when `{value, Item}` is returned by `queue`, `squeue` returns
-`{SojournTime, Item}`, where `SojournTime` (`non_neg_integer()`) is the
-sojourn time of the item (or length of time an item waited in the queue).
+A subset of the `squeue` API is very similar to the `queue` module's API. There
+are two differences. Firstly when `{value, Item}` is returned by `queue`,
+`squeue` returns `{SojournTime, Item}`, where `SojournTime`
+(`non_neg_integer()`) is the sojourn time of the item (or length of time an item
+waited in the queue). Secondly `out/1`, `out_r/1`, `drop/1` and
+`drop_r/1` return `{Result, Drops, Queue} or `{Drops, Queue}`, where the extra
+term `Drops` is a list of 2-tuples containing items (and their sojourn times)
+dropped by the queue management algorithm.
 
 `squeue` also provides an optional first argument to all `queue`
 functions: `Time`. This argument is of type `non_neg_integer()` and sets
@@ -17,8 +21,8 @@ may be dropped by the queues management algorithm. The dropped items
 will be included in the return value when the queue itself is also
 returned. The dropped items are a list of the form: `[{SojournTime, Item}]`,
 which is ordered with them item with the greatest `SojournTime` (i.e. the
-oldest) at the head. If the `Time` argument is equal to the current time
-of the queue no items are dropped.
+oldest) at the head.
+
 
 `squeue` includes 3 queue management algorithms (in order of complexity):
 * `squeue_naive`
@@ -54,14 +58,10 @@ squeue:new(Time, squeue_timeout, Timeout).
 squeue_codel
 ------------
 `squeue_codel` will drop items using an implementation of the CoDel queue
-management algorithm. There are two notable variations. Firstly that items are
-dropped when time advances, and not when dequeuing. Secondly that the time the
-queue became slow, rather than the current time when a slow queue discovers it
-is slow, is used when deciding when to a drop the first item after a period of
-not dropping. Create an empty `squeue` managed by `squeue_codel` (where `Target`
-is the target sojourn time, of type `pos_integer()`; `Interval`, the initial
-interval between drops, of type `pos_integer()`; `Time`, the initial time, of
-type `non_neg_integer()`):
+management algorithm. Create an empty `squeue` managed by `squeue_codel` (where
+`Target` is the target sojourn time, of type `pos_integer()`; `Interval`, the
+initial interval between drops, of type `pos_integer()`; `Time`, the initial
+time, of type `non_neg_integer()`):
 ```erlang
 squeue:new(squeue_codel, {Target, Interval}).
 squeue:new(Time, squeue_codel, {Target, Interval}).
@@ -69,7 +69,10 @@ squeue:new(Time, squeue_codel, {Target, Interval}).
 Custom Management
 -----------------
 It is planned to finalise and document the `squeue` behaviour to allow custom
-queue management modules.
+queue management modules. Note that the API will likely only be suitable
+for use of queue management algorithm that rely on the sojourn time of
+the head (oldest item) in the queue, and do not depend on queue size or
+the position of certain items.
 
 Additional API
 --------------

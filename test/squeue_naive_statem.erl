@@ -10,7 +10,8 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/1]).
--export([handle_time/3]).
+-export([handle_timeout/3]).
+-export([handle_out/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -52,7 +53,10 @@ args() ->
 init(State) ->
     State.
 
-handle_time(_Time, _L, State) ->
+handle_timeout(_Time, _L, State) ->
+    {0, State}.
+
+handle_out(_Time, _L, State) ->
     {0, State}.
 
 initial_state() ->

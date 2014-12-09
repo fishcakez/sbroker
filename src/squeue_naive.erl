@@ -8,7 +8,8 @@
 -behaviour(squeue).
 
 -export([init/1]).
--export([handle_time/3]).
+-export([handle_timeout/3]).
+-export([handle_out/3]).
 -export([handle_join/1]).
 
 %% @private
@@ -19,15 +20,28 @@ init(_Args) ->
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_time(Time, Q, undefined) -> {[], Q, undefined} when
+-spec handle_timeout(Time, Q, undefined) -> {[], Q, undefined} when
       Time :: non_neg_integer(),
       Q :: queue().
 -else.
--spec handle_time(Time, Q, undefined) -> {[], Q, undefined} when
+-spec handle_timeout(Time, Q, undefined) -> {[], Q, undefined} when
       Time :: non_neg_integer(),
       Q :: queue:queue().
 -endif.
-handle_time(_Time, Q, undefined) ->
+handle_timeout(_Time, Q, undefined) ->
+    {[], Q, undefined}.
+
+%% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_out(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue().
+-else.
+-spec handle_out(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue().
+-endif.
+handle_out(_Time, Q, undefined) ->
     {[], Q, undefined}.
 
 %% @private

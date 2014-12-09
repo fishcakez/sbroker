@@ -10,7 +10,8 @@
 -behaviour(squeue).
 
 -export([init/1]).
--export([handle_time/3]).
+-export([handle_timeout/3]).
+-export([handle_out/3]).
 -export([handle_join/1]).
 
 -record(state, {timeout :: pos_integer(),
@@ -25,7 +26,7 @@ init(Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_time(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
       State :: #state{},
@@ -33,7 +34,7 @@ init(Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
       NQ :: queue(),
       NState :: #state{}.
 -else.
--spec handle_time(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(),
       State :: #state{},
@@ -41,11 +42,26 @@ init(Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
       NQ :: queue:queue(),
       NState :: #state{}.
 -endif.
-handle_time(Time, Q, #state{timeout_next=TimeoutNext} = State)
+handle_timeout(Time, Q, #state{timeout_next=TimeoutNext} = State)
   when Time < TimeoutNext ->
     {[], Q, State};
-handle_time(Time, Q, #state{timeout=Timeout} = State) ->
+handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
     timeout(queue:peek(Q), Time - Timeout, Time, Q, State, []).
+
+%% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_out(Time, Q, State) -> {[], Q, State} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
+      State :: #state{}.
+-else.
+-spec handle_out(Time, Q, State) -> {[], Q, State} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue(),
+      State :: #state{}.
+-endif.
+handle_out(_Time, Q, State) ->
+    {[], Q, State}.
 
 %% @private
 -spec handle_join(State) -> NState when
