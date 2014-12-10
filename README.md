@@ -83,6 +83,8 @@ drops, of type `pos_integer()`; `Timeout` is the timeout length, of type
 squeue:new(squeue_codel_timeout, {Target, Interval, Timeout}).
 squeue:new(Time, squeue_codel_timeout, {Target, Interval, Timeout}).
 ```
+`Timeout` must be greater than `Target`, if it is not then the CoDel
+alogirthm would not be applied.
 
 Custom Management
 -----------------

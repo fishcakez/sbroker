@@ -8,7 +8,7 @@
 %% queue; `Interval', `pos_integer()', the initial interval between drops once
 %% the queue becomes slow; `Timeout', `pos_integer()', the timeout value, i.e.
 %% the minimum sojourn time at which items are dropped from the queue due to a
-%% timeout.
+%% timeout. `Timeout' must be greater than `Target'.
 %%
 %% @reference Kathleen Nichols and Van Jacobson, Controlling Queue Delay,
 %% ACM Queue, 6th May 2012.
@@ -31,7 +31,7 @@
       Interval :: pos_integer(),
       Timeout :: pos_integer(),
       State :: #state{}.
-init({Target, Interval, Timeout}) ->
+init({Target, Interval, Timeout}) when Target < Timeout ->
     #state{timeout=Timeout, codel=squeue_codel:init({Target, Interval})}.
 
 %% @private
@@ -56,7 +56,7 @@ handle_timeout(Time, Q, #state{timeout_next=TimeoutNext} = State)
   when Time < TimeoutNext ->
     {[], Q, State};
 handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
-    timeout(queue:peek(Q), Time - Timeout, Time, Q, State, []).
+    timeout(queue:peek(Q), Time - Timeout, Time, Q, State).
 
 %% @private
 -ifdef(LEGACY_TYPES).
@@ -103,6 +103,33 @@ handle_join(Time, Q, #state{codel=Codel} = State) ->
             {[], NQ, State#state{codel=NCodel}}
     end.
 
+timeout(empty, _MinStart, Time, Q, #state{timeout=Timeout} = State) ->
+    %% If an item is added immediately the first time it (or any item) could be
+    %% dropped due to a timeout is in timeout.
+    {[], Q, State#state{timeout_next=Time+Timeout}};
+timeout({value, {Start, _}}, MinStart, _Time, Q,
+        #state{timeout=Timeout} = State) when Start > MinStart ->
+    %% Item is below sojourn timeout, it is the first item that can be
+    %% dropped due to a timeout and it can't be dropped due to a timeout until
+    %% it is above sojourn timeout.
+    {[], Q, State#state{timeout_next=Start+Timeout}};
+timeout(_Result, MinStart, Time, Q, #state{codel=Codel} = State) ->
+    %% Item is above sojourn timeout so drop it. CoDel must be used to
+    %% dequeue so that it's state is kept up to date.
+    {Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+    NState = State#state{codel=NCodel},
+    %% CoDel can only drop once per Time and so if CoDel is in dropping
+    %% mode it can't drop anymore. The only reason CoDel would change
+    %% its state is if an item with a sojourn below target, reset it to
+    %% non-dropping or an item above set it start tracking a first slow
+    %% interval. As the timeout must be greater than target
+    %% (otherwise CoDel does not executed) then CoDel will not change
+    %% its state if only items with a sojourn time of timeout or greater
+    %% are dequeued. Also the queue must be on its first slow interval,
+    %% or a later one as a item with a sojourn time above target (>=
+    %% timeout) has been dequeued.
+    timeout(queue:peek(NQ), MinStart, Time, NQ, NState, Drops).
+
 timeout(empty, _MinStart, Time, Q, #state{timeout=Timeout} = State, Drops) ->
     %% If an item is added immediately the first time it (or any item) could be
     %% dropped due to a timeout is in timeout.
@@ -113,23 +140,6 @@ timeout({value, {Start, _}}, MinStart, _Time, Q,
     %% dropped due to a timeout and it can't be dropped due to a timeout until
     %% it is above sojourn timeout.
     {Drops, Q, State#state{timeout_next=Start+Timeout}};
-timeout(_Result, MinStart, Time, Q, #state{codel=Codel} = State, Drops) ->
-    %% Item is above sojourn timeout so drop it. CoDel must be used to
-    %% dequeue so that it's state is kept up to date.
-    {Drops2, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
-    NDrops = Drops2 ++ Drops,
-    NState = State#state{codel=NCodel},
-    case queue:peek(NQ) of
-        empty ->
-            %% Previous item was dropped by CoDel.
-            {NDrops, NQ, NState};
-        {value, {Start, _}} when Start > MinStart ->
-            %% Previous item was dropped by CoDel, don't drop this item
-            %% though as it is below sojourn timeout.
-            {NDrops, NQ, NState};
-        {value, Item} ->
-            %% Item is above sojourn timeout, drop it and try again.
-            NQ2 = queue:drop(NQ),
-            NDrops2 = [Item | NDrops],
-            timeout(queue:peek(NQ2), MinStart, Time, NQ2, NState, NDrops2)
-    end.
+timeout({value, Item}, MinStart, Time, Q, State, Drops) ->
+    NQ = queue:drop(Q),
+    timeout(queue:peek(NQ), MinStart, Time, NQ, State, [Item | Drops]).

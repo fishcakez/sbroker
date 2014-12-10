@@ -50,9 +50,9 @@ module() ->
     squeue_codel_timeout.
 
 args() ->
-    {Target, Interval} = squeue_codel_statem:args(),
-    Timeout = squeue_timeout_statem:args(),
-    {Target, Interval, Timeout}.
+    ?SUCHTHAT({Target, _Interval, Timeout},
+              {choose(1, 3), choose(1, 3), choose(1, 4)},
+              Timeout > Target).
 
 init({Target, Interval, Timeout}) ->
     #state{codel=squeue_codel_statem:init({Target, Interval}),
