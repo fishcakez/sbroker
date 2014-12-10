@@ -404,16 +404,15 @@ out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    Drops2 = sojourn_drops(Time, Drops),
-    {Drops3, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
-    Drops4 = Drops2 ++ sojourn_drops(Time, Drops3),
+    {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
+    Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
     {Result, NQ3} = queue:out(NQ2),
     NS = S#squeue{time=Time, queue=NQ3, state=NState2},
     case Result of
         empty ->
-            {empty, Drops4, NS};
+            {empty, Drops3, NS};
         {value, Item} ->
-            {sojourn_time(Time, Item), Drops4, NS}
+            {sojourn_time(Time, Item), Drops3, NS}
     end;
 out(Time, #squeue{time=Time} = S) ->
     out(S);
@@ -470,16 +469,15 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    Drops2 = sojourn_drops(Time, Drops),
-    {Drops3, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
-    Drops4 = Drops2 ++ sojourn_drops(Time, Drops3),
+    {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
+    Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
     {Result, NQ3} = queue:out_r(NQ2),
     NS = S#squeue{time=Time, queue=NQ3, state=NState2},
     case Result of
         empty ->
-            {empty, Drops4, NS};
+            {empty, Drops3, NS};
         {value, Item} ->
-            {sojourn_time(Time, Item), Drops4, NS}
+            {sojourn_time(Time, Item), Drops3, NS}
     end;
 out_r(Time, #squeue{time=Time} = S) ->
     out_r(S);
@@ -612,14 +610,19 @@ reverse(Time, #squeue{} = S) ->
 %%
 %% Both returned queues, `S1' and `S2', will maintain the queue management state
 %% of queue `S'.
--spec split(N, S) -> {S1, S2} when
+-spec split(N, S) -> {Drops, S1, S2} when
       N :: non_neg_integer(),
       S :: squeue(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       S1 :: squeue(Item),
       S2 :: squeue(Item).
-split(N, #squeue{queue=Q} = S) ->
-    {Q1, Q2} = queue:split(N, Q),
-    {S#squeue{queue=Q1}, S#squeue{queue=Q2}}.
+split(N, #squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
+    {Drops, NQ, NState} = Module:handle_out(Time, Q, State),
+    Drops2 = sojourn_drops(Time, Drops),
+    {Q1, Q2} = queue:split(N, NQ),
+    S1 = S#squeue{queue=Q1, state=NState},
+    S2 = S#squeue{queue=Q2, state=NState},
+    {Drops2, S1, S2}.
 
 %% @doc Advances the queue, `S', to time `Time' and drops items, then splits the
 %% remaing queue in two, with the `N' items at head in one queue, `S1', and the
@@ -641,11 +644,14 @@ split(N, #squeue{queue=Q} = S) ->
 split(Time, N, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    {S1, S2} = split(N, S#squeue{time=Time, queue=NQ, state=NState}),
-    {sojourn_drops(Time, Drops), S1, S2};
+    {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
+    Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
+    {Q1, Q2} = queue:split(N, NQ2),
+    S1 = S#squeue{time=Time, queue=Q1, state=NState2},
+    S2 = S#squeue{time=Time, queue=Q2, state=NState2},
+    {Drops3, S1, S2};
 split(Time, N, #squeue{time=Time} = S) ->
-    {S1, S2} = split(N, S),
-    {[], S1, S2};
+    split(N, S);
 split(Time, N, #squeue{} = S) ->
     error(badtime, [Time, N, S]).
 
@@ -738,13 +744,16 @@ join(Time, #squeue{} = S1, #squeue{} = S2) ->
 %%
 %% If `Filter(Item)' returns a list of items, these items appear in the new
 %% queue with all items having the start time of the origin item, `Item'.
--spec filter(Filter, S) -> NS when
+-spec filter(Filter, S) -> {Drops, NS} when
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
       S :: squeue(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-filter(Filter, #squeue{queue=Q} = S) ->
-    NQ = queue:filter(make_filter(Filter), Q),
-    S#squeue{queue=NQ}.
+filter(Filter, #squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
+    {Drops, NQ, NState} = Module:handle_out(Time, Q, State),
+    Drops2 = sojourn_drops(Time, Drops),
+    NQ2 = queue:filter(make_filter(Filter), NQ),
+    {Drops2, S#squeue{queue=NQ2, state=NState}}.
 
 %% @doc Advances the queue, `S', to time `Time'  and drops items, then applys a
 %% fun, `Filter', to all remaining items in the queue. Returns a tuple
@@ -771,10 +780,13 @@ filter(Time, Filter,
        #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    NQ2 = queue:filter(make_filter(Filter), NQ),
-    {sojourn_drops(Time, Drops), S#squeue{time=Time, queue=NQ2, state=NState}};
+    {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
+    Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
+    NQ3 = queue:filter(make_filter(Filter), NQ2),
+    NS = S#squeue{time=Time, queue=NQ3, state=NState2},
+    {Drops3, NS};
 filter(Time, Filter, #squeue{time=Time} = S) ->
-    {[], filter(Filter, S)};
+    filter(Filter, S);
 filter(Time, Filter, #squeue{} = S) ->
     error(badtime, [Time, Filter, S]).
 
@@ -1029,10 +1041,9 @@ drop(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 drop(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    Drops2 = sojourn_drops(Time, Drops),
-    {Drops3, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
-    Drops4 = Drops2 ++ sojourn_drops(Time, Drops3),
-    {Drops4, S#squeue{time=Time, queue=queue:drop(NQ2), state=NState2}};
+    {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
+    Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
+    {Drops3, S#squeue{time=Time, queue=queue:drop(NQ2), state=NState2}};
 drop(Time, #squeue{time=Time} = S) ->
     drop(S);
 drop(Time, #squeue{} = S) ->
@@ -1071,10 +1082,9 @@ drop_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 drop_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    Drops2 = sojourn_drops(Time, Drops),
-    {Drops3, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
-    Drops4 = Drops2 ++ sojourn_drops(Time, Drops3),
-    {Drops4, S#squeue{time=Time, queue=queue:drop_r(NQ2), state=NState2}};
+    {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
+    Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
+    {Drops3, S#squeue{time=Time, queue=queue:drop_r(NQ2), state=NState2}};
 drop_r(Time, #squeue{time=Time} = S) ->
     drop_r(S);
 drop_r(Time, #squeue{} = S) ->

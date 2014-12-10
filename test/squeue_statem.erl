@@ -596,31 +596,37 @@ split_args(#state{time=Time, list=L, squeue=S}) ->
     oneof([[incr_time(Time), choose(0, length(L)), S],
            [choose(0, length(L)), S]]).
 
-split_pre(#state{list=L}, [N, _S]) ->
+split_pre(State, [N, _S]) ->
+    #state{list=L} = prepare_out_state(State),
     N =< length(L);
-split_pre(#state{time=Time} = State, [NTime, N, _S]) when NTime >= Time ->
-    #state{list=L} = advance_time_state(State, NTime),
-    N =< length(L);
+split_pre(#state{time=Time} = State, [NTime, N, S]) when NTime >= Time ->
+    NState= advance_time_state(State, NTime),
+    split_pre(NState, [N, S]);
 split_pre(_State, _Args) ->
     false.
 
-split_next(#state{list=L} = State, Value, [N, _S]) ->
-    Elem = (N rem 2) + 1,
-    VS = {call, erlang, element, [Elem, Value]},
-    NL = element(Elem, lists:split(N, L)),
-    State#state{list=NL, squeue=VS};
-split_next(State, Value, [Time, N, _S]) ->
+split_next(State, Value, [N, _S]) ->
     Elem = (N rem 2) + 1,
     VS = {call, erlang, element, [Elem + 1, Value]},
-    #state{list=L} = NState = advance_time_state(State, Time),
+    #state{list=L} = NState = prepare_out_state(State),
     NL = element(Elem, lists:split(N, L)),
-    NState#state{list=NL, squeue=VS}.
+    NState#state{list=NL, squeue=VS};
+split_next(State, Value, [Time, N, S]) ->
+    NState = advance_time_state(State, Time),
+    split_next(NState, Value, [N, S]).
 
-split_post(_State, [_N, _S], {S2, S3}) ->
+split_post(State, [_N, _S], {Drops, S2, S3}) ->
+    prepare_out_drops(State) =:= Drops andalso
     squeue:is_queue(S2) andalso squeue:is_queue(S3);
-split_post(State, [Time, _N, _S], {Drops, S2, S3}) ->
-    advance_time_drops(State, Time) =:= Drops andalso
-    squeue:is_queue(S2) andalso squeue:is_queue(S3).
+split_post(State, [Time, N, S], {Drops, S2, S3}) ->
+    {Drops2, NState} = advance_time(State, Time),
+    case lists:prefix(Drops2, Drops) of
+        true ->
+            {_, Drops3} = lists:split(length(Drops2), Drops),
+            split_post(NState, [N, S], {Drops3, S2, S3});
+        false ->
+            false
+    end.
 
 filter(Method, Item, S) ->
     squeue:filter(make_filter(Method, Item), S).
@@ -648,27 +654,37 @@ filter_pre(#state{time=Time}, [NTime, _Action, _Item, _S]) ->
 filter_pre(_State, [_Action, _Item, _S]) ->
     true.
 
-filter_next(#state{list=L} = State, VS, [duplicate, Item, _S]) ->
+filter_next(State, Value, [duplicate, Item, _S]) ->
+    VS = {call, erlang, element, [2, Value]},
+    #state{list=L} = NState = prepare_out_state(State),
     Duplicate = fun({_, Item2} = Elem) when Item2 =:= Item ->
                         [Elem, Elem];
                    (Other) ->
                         [Other]
                 end,
     NL = lists:flatmap(Duplicate, L),
-    State#state{list=NL, squeue=VS};
-filter_next(#state{list=L} = State, VS, [filter, Item, _S]) ->
+    NState#state{list=NL, squeue=VS};
+filter_next(State, Value, [filter, Item, _S]) ->
+    VS = {call, erlang, element, [2, Value]},
+    #state{list=L} = NState = prepare_out_state(State),
     Filter = fun({_, Item2} ) -> Item2 =:= Item end,
     NL = lists:filter(Filter, L),
-    State#state{list=NL, squeue=VS};
+    NState#state{list=NL, squeue=VS};
 filter_next(State, Value, [Time, Action, Item, S]) ->
-    VS = {call, erlang, element, [2, Value]},
     NState = advance_time_state(State, Time),
-    filter_next(NState, VS, [Action, Item, S]).
+    filter_next(NState, Value, [Action, Item, S]).
 
-filter_post(_State, [_Action, _Item, _S], NS) ->
-    squeue:is_queue(NS);
-filter_post(State, [Time, _Action, _Item, _S], {Drops, NS}) ->
-    advance_time_drops(State, Time) =:= Drops andalso squeue:is_queue(NS).
+filter_post(State, [_Action, _Item, _S], {Drops, NS}) ->
+    prepare_out_drops(State) =:= Drops andalso squeue:is_queue(NS);
+filter_post(State, [Time, Action, Item, S], {Drops, NS}) ->
+    {Drops2, NState} = advance_time(State, Time),
+    case lists:prefix(Drops2, Drops) of
+        true ->
+            {_, Drops3} = lists:split(length(Drops2), Drops),
+            filter_post(NState, [Action, Item, S], {Drops3, NS});
+        false ->
+            false
+    end.
 
 get_args(#state{time=Time, squeue=S}) ->
     oneof([[incr_time(Time), S], [S]]).
