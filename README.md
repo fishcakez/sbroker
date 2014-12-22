@@ -114,6 +114,8 @@ rebar compile
 
 Documentation
 -------------
+Available at: http://hexdocs.pm/sbroker/
+
 Rebar builds documentation:
 ```
 rebar doc
