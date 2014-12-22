@@ -9,7 +9,8 @@ defmodule SBroker.Mixfile do
           source_url: "https://github.com/fishcakez/sbroker",
           description: "Sojourn-time based active queue management process
             broker",
-          package: package()]
+          package: package(),
+          aliases: [docs: "edoc"]]
       end
 
       def application, do: []
