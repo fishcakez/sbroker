@@ -1,6 +1,6 @@
 @title Sojourn-time based active queue management process broker
 @doc `sbroker' is a process match maker for two groups of processes.
-Active queue management is supplied by `squeue`, which is a queue module
+Active queue management is supplied by `squeue', which is a queue module
 with a similar API to OTP's `queue'.
 
 Four queue management callback modules are provided for use with `squeue':
