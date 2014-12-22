@@ -27,7 +27,7 @@ calls `sbroker:bid/1` and the other party `sbroker:ask/1`. If a match
 is found both return `{settled, Ref, Pid, SojournTime}`, where `SojournTime` is
 the time spent in milliseconds waiting for a match (one will have a time
 of 0), `Pid` is the other process in the match and `Ref` is the transaction
-reference. If no match is found, returns `{droppped, SojournTime}`.
+reference. If no match is found, returns `{dropped, SojournTime}`.
 
 Processes calling `sbroker:bid/1` are only matched with a process calling
 `sbroker:ask/1` and vice versa.
