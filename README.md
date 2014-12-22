@@ -83,27 +83,27 @@ Asynchronous versions of `bid/1` and `ask/1` are avaliable as
 `async_bid/1` and `async_ask/1`. On a successful match the following
 message is sent:
 ```erlang
-{Ref, {settled, Ref, Pid, SojournTime}}
+{AsyncRef, {settled, Ref, Pid, SojournTime}}
 ```
-Where `Ref` is the return value of `async_bid/1` or `async_ask/1`. If a
+Where `AsyncRef` is the return value of `async_bid/1` or `async_ask/1`. If a
 match is not found:
 ```erlang
-{Ref, {dropped, SojournTime}}
+{AsyncRef, {dropped, SojournTime}}
 ```
 
 Asynchronous requests can be cancelled with `cancel/2`:
 
 ```erlang
 {ok, Broker} = sbroker:start_link().
-Ref = sbroker:async_bid(Broker).
-ok = sbroker:cancel(Broker, Ref).
+AsyncRef = sbroker:async_bid(Broker).
+ok = sbroker:cancel(Broker, AsyncRef).
 ```
 To help prevent race conditions when using asynchronous requests the
 message to the `async_ask/1` or `ask/1` process is always sent before
 the message to the `async_bid/1` or `bid/1` process. Therefore if the
 initial message between the two groups always flows in one direction,
 it may be beneficial for the receiver of that message to call
-`async_ask/1` or `ask/1`, and the sender to call `async_bid/1 or `bid/1`.
+`async_ask/1` or `ask/1`, and the sender to call `async_bid/1` or `bid/1`.
 
 Build
 -----
