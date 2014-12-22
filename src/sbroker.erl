@@ -185,7 +185,7 @@ start_link(Name) ->
 %% queue. Processes that call `bid/1' (or `async_bid/1') can not be matched with
 %% a process calling `ask/1' (or `async_ask/1') will be queued in this queue.
 %% Similarly, the second argument, `AskingSpec', is the queue specification for
-%% the asking queue. Processes that call `ask/1' (or `async_ask/1) are enqueued
+%% the asking queue. Processes that call `ask/1' (or `async_ask/1') are enqueued
 %% in this queue The third argument, `Interval', is the interval in milliseconds
 %% that the active queue is polled. This ensures that the active queue
 %% management strategy is applied even if no processes are enqueued/dequeued.
