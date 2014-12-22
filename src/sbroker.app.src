@@ -1,5 +1,5 @@
-{application, squeue,
- [{description, "Sojourn-time based active queue management library"}
+{application, sbroker,
+ [{description, "Sojourn-time based active queue management process broker"}
  ,{vsn, "0.1.0"}
  ,{registered, []}
  ,{applications,

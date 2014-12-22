@@ -136,8 +136,8 @@
 -record(squeue, {module :: module(),
                  state :: any(),
                  time = 0 :: non_neg_integer(),
-                 queue = queue:new() :: queue:queue()}).
--type squeue() :: squeue(any()).
+                 queue = queue:new() :: queue:queue({non_neg_integer(), _})}).
+-type squeue() :: squeue(_).
 -opaque squeue(Item) ::
     #squeue{queue :: queue:queue({non_neg_integer(), Item})}.
 
@@ -299,12 +299,10 @@ in(Item, #squeue{time=Time, queue=Q} = S) ->
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 in(Time, Item, #squeue{module=Module, state=State, time=PrevTime, queue=Q} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     NS = S#squeue{time=Time, queue=queue:in({Time, Item}, NQ), state=NState},
     {sojourn_drops(Time, Drops), NS};
-in(Time, Item, #squeue{time=Time} = S) ->
-    {[], in(Item, S)};
 in(Time, Item, #squeue{} = S) ->
     error(badtime, [Time, Item, S]).
 
@@ -402,7 +400,7 @@ out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
     Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
@@ -414,8 +412,6 @@ out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
         {value, Item} ->
             {sojourn_time(Time, Item), Drops3, NS}
     end;
-out(Time, #squeue{time=Time} = S) ->
-    out(S);
 out(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
@@ -467,7 +463,7 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
     Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
@@ -479,8 +475,6 @@ out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
         {value, Item} ->
             {sojourn_time(Time, Item), Drops3, NS}
     end;
-out_r(Time, #squeue{time=Time} = S) ->
-    out_r(S);
 out_r(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 
@@ -778,15 +772,13 @@ filter(Filter, #squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       NS :: squeue(Item).
 filter(Time, Filter,
        #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {Drops2, NQ2, NState2} = Module:handle_out(Time, NQ, NState),
     Drops3 = sojourn_drops(Time, Drops, sojourn_drops(Time, Drops2)),
     NQ3 = queue:filter(make_filter(Filter), NQ2),
     NS = S#squeue{time=Time, queue=NQ3, state=NState2},
     {Drops3, NS};
-filter(Time, Filter, #squeue{time=Time} = S) ->
-    filter(Filter, S);
 filter(Time, Filter, #squeue{} = S) ->
     error(badtime, [Time, Filter, S]).
 
@@ -840,11 +832,9 @@ time(#squeue{time=Time}) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue().
 timeout(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {sojourn_drops(Time, Drops), S#squeue{time=Time, queue=NQ, state=NState}};
-timeout(Time, #squeue{time=Time} = S) ->
-    {[], S};
 timeout(Time, #squeue{} = S) ->
     error(badtime, [Time, S]).
 

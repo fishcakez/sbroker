@@ -1,114 +1,109 @@
-squeue
-======
-Sojourn queue - queue library using sojourn time based active queue management.
+sbroker
+=======
+
+Sojourn Broker - process broker for matchmaking between two groups of processes
+using sojourn time based active queue management to prevent congestion.
 
 Introduction
 ------------
-A subset of the `squeue` API is very similar to the `queue` module's API. There
-are two differences. Firstly when `{value, Item}` is returned by `queue`,
-`squeue` returns `{SojournTime, Item}`, where `SojournTime`
-(`non_neg_integer()`) is the sojourn time of the item (or length of time an item
-waited in the queue). Secondly `out/1`, `out_r/1`, `drop/1` and
-`drop_r/1` return `{Result, Drops, Queue} or `{Drops, Queue}`, where the extra
-term `Drops` is a list of 2-tuples containing items (and their sojourn times)
-dropped by the queue management algorithm.
 
-`squeue` also provides an optional first argument to all `queue`
-functions: `Time`. This argument is of type `non_neg_integer()` and sets
-the current time of the queue, if `Time` is greater than (or equal) to
-the queue's previous time. When the `Time` argument is included items
-may be dropped by the queues management algorithm. The dropped items
-will be included in the return value when the queue itself is also
-returned. The dropped items are a list of the form: `[{SojournTime, Item}]`,
-which is ordered with them item with the greatest `SojournTime` (i.e. the
-oldest) at the head.
+`sbroker` is an experiment at an alternative to pooling. The philosophy
+is slightly different to traditional erlang pooling approaches as an
+`sbroker` process treates both sides (clients and workers) identically
+so it is more like a client-client relationship. Conceptual this is
+slightly different as both groups are exchanging themselves to gain a
+process from the other group. Whereas in a worker pool model the clients
+contact the pool seeking a worker. This means that workers contacting an
+`sbroker` should always "want" work, just as clients always "want" a
+worker for work.
 
+In terms of the traditional client-worker architecture it can be helpful for
+workers to call `ask/1` as they are offering their time, and clients to call
+`bid/1` as they are trying to obtain a workers time. However `sbroker` would
+work exactly the same the reverse way around.
 
-`squeue` includes 4 queue management algorithms (in order of complexity):
-* `squeue_naive`
-* `squeue_timeout`
-* `squeue_codel`
-* `squeue_codel_timeout`
+`sbroker` provides a simple interface to match processes. One party
+calls `sbroker:bid/1` and the other party `sbroker:ask/1`. If a match
+is found both return `{settled, Ref, Pid, SojournTime}`, where `SojournTime` is
+the time spent in milliseconds waiting for a match (one will have a time
+of 0), `Pid` is the other process in the match and `Ref` is the transaction
+reference. If no match is found, returns `{droppped, SojournTime}`.
 
-squeue_naive
-------------
+Processes calling `sbroker:bid/1` are only matched with a process calling
+`sbroker:ask/1` and vice versa.
 
-`squeue_naive` does not do any queue management, will never drop
-any items and is the default queue management backend. An empty `squeue`
-"managed" by `squeue_naive` can be created in one of four ways (where `Time`
-is the initial time, of type `non_neg_integer()`, and `Any` is any term and is
-ignored):
+Example
+-------
+
 ```erlang
-squeue:new().
-squeue:new(Time).
-squeue:new(squeue_naive, Any).
-squeue:new(Time, squeue_naive, Any).
+{ok, Broker} = sbroker:start_link(),
+Pid = spawn_link(fun() -> sbroker:ask(Broker) end),
+{settled _Ref, Pid, _SojournTime} = sbroker:bid(Broker).
 ```
 
-squeue_timeout
---------------
-`squeue_timeout` will drop any items with a sojourn time greater than a
-timeout value. Create an empty `squeue` managed by `squeue_timeout` (`Timeout`
-is the timeout length, of type `pos_integer()`, and `Time` is the initial time,
-of type `non_neg_integer()`):
+Usage
+-----
+
+`sbroker` provides configurable queues defined by `sbroker:queue_spec()`s. A
+`queue_spec` takes the form:
 ```erlang
-squeue:new(squeue_timeout, Timeout).
-squeue:new(Time, squeue_timeout, Timeout).
+{Module, Args, Out, Size, Drop}
+```
+`Module` is an `squeue` callback module to handle active queue
+management. The following modules are possible: `squeue_naive`,
+`squeue_timeout`, `squeue_codel` and `squeue_codel_timeout`.
+`Args` is the argument passed to the callback module. Information about
+the different backends and their arguments are avaliable in the
+documentation.
+
+`Out` sets the dequeue function, either the atom `out` (FIFO) or the
+atom `out_r` (LIFO).
+
+`Size` is the maximum size of the queue. Should the queue go above this
+size a process is dropped. The dropping strategy is determined by
+`Drop`, which is either the atom `drop` (head drop) or the atom `drop_r`
+(tail drop).
+
+An `sbroker` is started using `sbroker:start_link/0,1,3,4`:
+```erlang
+sbroker:start_link(BiddingSpec, AskingSpec, Interval).
+```
+`BiddingSpec` is the `queue_spec` for the queue containing processes calling
+`bid/1`. The queue is referred to as the bidding queue. Similarly `AskingSpec`
+is the `queue_spec` for the queue contaning processes calling `ask/1`.
+
+`Interval` is the interval in milliseconds that an `sbroker` is
+polled to apply timeout queue management. Note that timeout queue
+management can occur on every enqueue and dequeue, and is not reliant on
+the `Interval`. Setting a suitable interval ensures that active queue
+management can occur if no processes are queued or dequeued for a period
+of time.
+
+Asynchronous versions of `bid/1` and `ask/1` are avaliable as
+`async_bid/1` and `async_ask/1`. On a successful match the following
+message is sent:
+```erlang
+{Ref, {settled, Ref, Pid, SojournTime}}
+```
+Where `Ref` is the return value of `async_bid/1` or `async_ask/1`. If a
+match is not found:
+```erlang
+{Ref, {dropped, SojournTime}}
 ```
 
-squeue_codel
-------------
-`squeue_codel` will drop items using an implementation of the CoDel queue
-management algorithm. Create an empty `squeue` managed by `squeue_codel` (where
-`Target` is the target sojourn time, of type `pos_integer()`; `Interval`, the
-initial interval between drops, of type `pos_integer()`; `Time`, the initial
-time, of type `non_neg_integer()`):
-```erlang
-squeue:new(squeue_codel, {Target, Interval}).
-squeue:new(Time, squeue_codel, {Target, Interval}).
-```
+Asynchronous requests can be cancelled with `cancel/2`:
 
-squeue_codel_timeout
---------------------
-`squeue_codel_timeout` combines `squeue_codel` and `squeue_timeout` so
-that the CoDel algorithm is used with the addition that any items with a
-sojourn time over the timeout are dequeued. The dequeuing of timed out
-items will trigger the CoDel algorithm and so item with sojourn time
-below the timeout may also be dropped if the backlog is significant. Create an
-empty `squeue` managed by `squeue_codel_timeout` (where `Target` is the target
-sojourn time, of type `pos_integer()`; `Interval`, the initial interval between
-drops, of type `pos_integer()`; `Timeout` is the timeout length, of type
-`pos_integer()`; `Time`, the initial time, of type `non_neg_integer()`):
 ```erlang
-squeue:new(squeue_codel_timeout, {Target, Interval, Timeout}).
-squeue:new(Time, squeue_codel_timeout, {Target, Interval, Timeout}).
+{ok, Broker} = sbroker:start_link().
+Ref = sbroker:async_bid(Broker).
+ok = sbroker:cancel(Broker, Ref).
 ```
-`Timeout` must be greater than `Target`, if it is not then the CoDel
-alogirthm would not be applied.
-
-Custom Management
------------------
-It is planned to finalise and document the `squeue` behaviour to allow custom
-queue management modules. Note that the API will likely only be suitable
-for use of queue management algorithm that rely on the sojourn time of
-the head (oldest item) in the queue, and do not depend on queue size or
-the position of certain items.
-
-Additional API
---------------
-Retrieve the current time of a queue (with `Queue` as the queue):
-```erlang
-squeue:time(Queue)
-```
-Advance the current time of the queue (with `Time`, the new time; `Queue`,
-the queue; `Drops`, the dropped items; `NQueue`, the new queue after
-dropping items):
-```erlang
-{Drops, NQueue} = squeue:timeout(Time, Queue)
-```
-By combining the `queue`-like API described in the introduction and `timeout/2`
-it is possible to add active queue management to a module currently using
-`queue` with minimal refactoring.
+To help prevent race conditions when using asynchronous requests the
+message to the `async_ask/1` or `ask/1` process is always sent before
+the message to the `async_bid/1` or `bid/1` process. Therefore if the
+initial message between the two groups always flows in one direction,
+it may be beneficial for the receiver of that message to call
+`async_ask/1` or `ask/1`, and the sender to call `async_bid/1 or `bid/1`.
 
 Build
 -----
@@ -132,14 +127,13 @@ Rebar fetches test dependency and runs common test:
 rebar get-deps compile ct -C rebar.test.config
 ```
 
+Roadmap
+-------
+
+* Implement a pool that resizes based on feedback from sbroker.
+
 License
 -------
 Dual BSD/GPL license
 
 This is the license used by the CoDel authors in their example implementation.
-It was chosen for `squeue` to honour their desired freedoms of use of CoDel.
-
-Note when distributing beam files that a test only dependency (`PropEr`)
-is licensed under GPL. This dependency is not fetched by rebar unless
-`rebar.test.config` is specified as the config file, only files in `test/` use
-it and if it is not present any test requiring it will be skipped.

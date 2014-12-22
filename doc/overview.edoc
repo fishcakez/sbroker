@@ -1,11 +1,15 @@
-@title Sojourn-time based active queue management library
-@doc `squeue' provides sojourn-time based active queue management with a
-similar API to OTP's `queue'.
+@title Sojourn-time based active queue management process broker
+@doc `sbroker' is a process match maker for two groups of processes.
+Active queue management is supplied by `squeue`, which is a queue module
+with a similar API to OTP's `queue'.
 
-Three queue management modules are provided for use with `squeue':
-`squeue_naive', `squeue_timeout' and `squeue_codel'.
+Four queue management callback modules are provided for use with `squeue':
+`squeue_naive', `squeue_timeout', `squeue_codel' and
+`squeue_codel_timeout'.
 
+@see sbroker
 @see squeue
 @see squeue_naive
 @see squeue_timeout
 @see squeue_codel
+@see squeue_codel_timeout
