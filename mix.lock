@@ -1,0 +1,2 @@
+%{"mix-erlang-tasks": {:git, "git://github.com/alco/mix-erlang-tasks.git", "3d6b27da522206ca807bfded5f45d023b234350a", []},
+  "proper": {:git, "git://github.com/manopapad/proper.git", "87e4a56e8f97f1972cde44ed30500daa4641595f", [tag: "v1.1"]}}
