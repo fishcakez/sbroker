@@ -38,7 +38,7 @@ Example
 ```erlang
 {ok, Broker} = sbroker:start_link(),
 Pid = spawn_link(fun() -> sbroker:ask(Broker) end),
-{settled _Ref, Pid, _SojournTime} = sbroker:bid(Broker).
+{settled, _Ref, Pid, _SojournTime} = sbroker:bid(Broker).
 ```
 
 Usage
