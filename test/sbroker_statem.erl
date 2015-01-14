@@ -23,7 +23,7 @@
 
 -record(state, {sbroker, asks=[], ask_out, ask_drops, ask_state=[], ask_size,
                 ask_drop, bids=[], bid_out, bid_drops, bid_state=[], bid_size,
-                bid_drop}).
+                bid_drop, cancels=[]}).
 
 quickcheck() ->
     quickcheck([]).
@@ -130,7 +130,7 @@ start_link_args() ->
     [queue_spec(), queue_spec(), 10000].
 
 queue_spec() ->
-    {sbroker_statem_queue, list(choose(0, 2)), oneof([out, out_r]),
+    {sbroker_statem_queue, list(oneof([0, choose(1, 2)])), oneof([out, out_r]),
      oneof([choose(0, 5), infinity]), oneof([drop, drop_r])}.
 
 start_link_pre(#state{sbroker=Broker}, _) ->
@@ -361,12 +361,12 @@ cancel(Client) ->
 cancel_pre(#state{asks=Asks, bids=Bids}, [Client]) ->
     lists:member(Client, Asks) orelse lists:member(Client, Bids).
 
-cancel_next(#state{asks=[]} = State, _, [Client]) ->
+cancel_next(#state{asks=[], cancels=Cancels} = State, _, [Client]) ->
     NState = #state{bids=Bids} = bid_drop_state(bid_drop_state(State)),
-    NState#state{bids=Bids--[Client]};
-cancel_next(#state{bids=[]} = State, _, [Client]) ->
+    NState#state{bids=Bids--[Client], cancels=Cancels++[Client]};
+cancel_next(#state{bids=[], cancels=Cancels} = State, _, [Client]) ->
     NState = #state{asks=Asks} = ask_drop_state(ask_drop_state(State)),
-    NState#state{asks=Asks--[Client]}.
+    NState#state{asks=Asks--[Client], cancels=Cancels++[Client]}.
 
 cancel_post(#state{asks=[]} = State, _, ok) ->
     {Drops, NState} = bid_drop(State),
@@ -410,13 +410,13 @@ bad_cancel_post(#state{bids=[]} = State, _, {error, not_found}) ->
 bad_cancel_post(_, _, _) ->
     false.
 
-shutdown_client_command(#state{asks=[], bids=[]}) ->
+shutdown_client_command(#state{asks=[], bids=[], cancels=[]}) ->
     false;
 shutdown_client_command(_) ->
     true.
 
-shutdown_client_args(#state{asks=Asks, bids=Bids}) ->
-    [elements(Asks ++ Bids)].
+shutdown_client_args(#state{asks=Asks, bids=Bids, cancels=Cancels}) ->
+    [elements(Asks ++ Bids ++ Cancels)].
 
 shutdown_client(Client) ->
     Pid = client_pid(Client),
@@ -432,31 +432,45 @@ shutdown_client(Client) ->
             exit(timeout)
     end.
 
-shutdown_client_pre(#state{asks=Asks, bids=Bids}, [Client]) ->
-    lists:member(Client, Asks) orelse lists:member(Client, Bids).
+shutdown_client_pre(#state{asks=Asks, bids=Bids, cancels=Cancels}, [Client]) ->
+    lists:member(Client, Asks) orelse lists:member(Client, Bids) orelse
+    lists:member(Client, Cancels).
 
-shutdown_client_next(#state{asks=[]} = State, _, [Client]) ->
-    NState = #state{bids=Bids} = bid_drop_state(bid_drop_state(State)),
-    NState#state{bids=Bids--[Client]};
-shutdown_client_next(#state{bids=[]} = State, _, [Client]) ->
-    NState = #state{asks=Asks} = ask_drop_state(ask_drop_state(State)),
-    NState#state{asks=Asks--[Client]}.
+shutdown_client_next(#state{asks=Asks, bids=Bids, cancels=Cancels} = State, _,
+                     [Client]) ->
+    case lists:member(Client, Cancels) of
+        true ->
+            State#state{cancels=Cancels--[Client]};
+        false when Asks =:= [] ->
+            NState = #state{bids=NBids} = bid_drop_state(bid_drop_state(State)),
+            NState#state{bids=NBids--[Client]};
+        false when Bids =:= [] ->
+            NState = #state{asks=NAsks} = ask_drop_state(ask_drop_state(State)),
+            NState#state{asks=NAsks--[Client]}
+    end.
 
-shutdown_client_post(#state{asks=[]} = State, [Client], _) ->
-    {Drops, NState} = bid_drop(State),
-    {Drops2, _} = bid_drop(NState),
-    drops_post(Drops -- [Client]) andalso drops_post(Drops2 -- [Client]);
-shutdown_client_post(#state{bids=[]} = State, [Client], _) ->
-    {Drops, NState} = ask_drop(State),
-    {Drops2, _} = ask_drop(NState),
-    drops_post(Drops -- [Client]) andalso drops_post(Drops2 -- [Client]).
-%%
+shutdown_client_post(#state{asks=Asks, bids=Bids, cancels=Cancels} = State,
+                     [Client], _) ->
+    case lists:member(Client, Cancels) of
+        true ->
+            true;
+        false when Asks =:= [] ->
+            {Drops, NState} = bid_drop(State),
+            {Drops2, _} = bid_drop(NState),
+            drops_post(Drops--[Client]) andalso drops_post(Drops2--[Client]);
+        false when Bids =:= [] ->
+            {Drops, NState} = ask_drop(State),
+            {Drops2, _} = ask_drop(NState),
+            drops_post(Drops--[Client]) andalso drops_post(Drops2--[Client])
+    end.
+
+%% client
 
 client_pid({Pid, _}) ->
     Pid.
 
 client_call({Pid, MRef}, Call) ->
-    try gen:call(Pid, MRef, Call, 10) of
+    try gen:call(Pid, MRef, Call, 20) of
         {ok, Response} ->
             Response
     catch

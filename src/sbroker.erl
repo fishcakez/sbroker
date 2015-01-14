@@ -419,7 +419,12 @@ asking_cancel(ARef, #state{config=Config, asking=A} = State) ->
     {Reply, State#state{config=NConfig, asking=NA}}.
 
 cancel(Time, ARef, #queue{len=Len, squeue=S} = Q) ->
-    Cancel = fun({_, {_, ARef2}}) -> ARef2 =/= ARef end,
+    Cancel = fun({MRef, {_, ARef2}}) when ARef2 =:= ARef ->
+                     demonitor(MRef, [flush]),
+                     false;
+                (_) ->
+                     true
+             end,
     {Drops, NS} = squeue:filter(Time, Cancel, S),
     Dropped = drops(Drops),
     NLen = squeue:len(NS),
