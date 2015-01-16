@@ -127,7 +127,7 @@ ok = sthrottle:positive(Throttle).
 %% sbroker:ask/1 request is dropped as no ask_r/1 call.
 BrokerResponse = {drop, _SojournTime} = sbroker:ask(Broker).
 %% Applies feedback to throttle based on broker response. In this case reduces
-concurrency limit to 0 and the lock is lost.
+%% concurrency limit to 0 and the lock is lost.
 {done, _SojournTime} = sthrottle:signal(Pid, Ref, BrokerResponse).
 ```
 
