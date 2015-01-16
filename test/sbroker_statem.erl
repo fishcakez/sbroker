@@ -1,5 +1,8 @@
 -module(sbroker_statem).
 
+%% ask_r is replaced by bid to help separate the difference between ask and
+%% ask_r.
+
 -include_lib("proper/include/proper.hrl").
 
 -export([quickcheck/0]).
@@ -136,8 +139,8 @@ queue_spec() ->
 start_link_pre(#state{sbroker=Broker}, _) ->
     Broker =:= undefined.
 
-start_link_next(State, Value, [{_, BidDrops, BidOut, BidSize, BidDrop},
-                               {_, AskDrops, AskOut, AskSize, AskDrop}, _]) ->
+start_link_next(State, Value, [{_, AskDrops, AskOut, AskSize, AskDrop},
+                               {_, BidDrops, BidOut, BidSize, BidDrop}, _]) ->
     Broker = {call, erlang, element, [2, Value]},
     State#state{sbroker=Broker, bid_out=BidOut, bid_drops=BidDrops,
                 bid_state=BidDrops, bid_size=BidSize, bid_drop=BidDrop,
@@ -311,7 +314,7 @@ drops_post([]) ->
     true;
 drops_post([Client | Drops]) ->
     case result(Client) of
-        {dropped, _} ->
+        {drop, _} ->
             drops_post(Drops);
         Other ->
             ct:log("~p Drop: ~p", [Client, Other]),
@@ -322,7 +325,7 @@ settled_post(Client1, Client2) ->
     Pid1 = client_pid(Client1),
     Pid2 = client_pid(Client2),
     case {result(Client1), result(Client2)} of
-        {{settled, Ref, Pid2, 0}, {settled, Ref, Pid1, _}} ->
+        {{go, Ref, Pid2, 0}, {go, Ref, Pid1, _}} ->
             true;
         Result ->
             ct:log("Result: ~p", [Result]),
@@ -478,9 +481,16 @@ client_call({Pid, MRef}, Call) ->
             {exit, Reason}
     end.
 
-client_init(Broker, Fun) ->
+client_init(Broker, async_bid) ->
     MRef = monitor(process, Broker),
-    ARef = sbroker:Fun(Broker),
+    ARef = sbroker:async_ask_r(Broker),
+    client_init(Broker, MRef, ARef);
+client_init(Broker, async_ask) ->
+    MRef = monitor(process, Broker),
+    ARef = sbroker:async_ask(Broker),
+    client_init(Broker, MRef, ARef).
+
+client_init(Broker, MRef, ARef) ->
     proc_lib:init_ack({ok, self(), MRef}),
     client_loop(MRef, Broker, ARef, queued, []).
 

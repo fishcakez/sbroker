@@ -17,28 +17,23 @@ contact the pool seeking a worker. This means that workers contacting an
 `sbroker` should always "want" work, just as clients always "want" a
 worker for work.
 
-In terms of the traditional client-worker architecture it can be helpful for
-workers to call `ask/1` as they are offering their time, and clients to call
-`bid/1` as they are trying to obtain a workers time. However `sbroker` would
-work exactly the same the reverse way around.
-
 `sbroker` provides a simple interface to match processes. One party
-calls `sbroker:bid/1` and the other party `sbroker:ask/1`. If a match
-is found both return `{settled, Ref, Pid, SojournTime}`, where `SojournTime` is
+calls `sbroker:ask/1` and the other party `sbroker:ask_r/1`. If a match
+is found both return `{go, Ref, Pid, SojournTime}`, where `SojournTime` is
 the time spent in milliseconds waiting for a match (one will have a time
 of 0), `Pid` is the other process in the match and `Ref` is the transaction
-reference. If no match is found, returns `{dropped, SojournTime}`.
+reference. If no match is found, returns `{drop, SojournTime}`.
 
-Processes calling `sbroker:bid/1` are only matched with a process calling
-`sbroker:ask/1` and vice versa.
+Processes calling `sbroker:ask/1` are only matched with a process calling
+`sbroker:ask_r/1` and vice versa.
 
 Example
 -------
 
 ```erlang
 {ok, Broker} = sbroker:start_link(),
-Pid = spawn_link(fun() -> sbroker:ask(Broker) end),
-{settled, _Ref, Pid, _SojournTime} = sbroker:bid(Broker).
+Pid = spawn_link(fun() -> sbroker:ask_r(Broker) end),
+{go, _Ref, Pid, _SojournTime} = sbroker:ask(Broker).
 ```
 
 Usage
@@ -66,11 +61,12 @@ size a process is dropped. The dropping strategy is determined by
 
 An `sbroker` is started using `sbroker:start_link/0,1,3,4`:
 ```erlang
-sbroker:start_link(BiddingSpec, AskingSpec, Interval).
+sbroker:start_link(AskQueueSpec, AskRQueueSpec, Interval).
 ```
-`BiddingSpec` is the `queue_spec` for the queue containing processes calling
-`bid/1`. The queue is referred to as the bidding queue. Similarly `AskingSpec`
-is the `queue_spec` for the queue contaning processes calling `ask/1`.
+`AskQueueSpec` is the `queue_spec` for the queue containing processes calling
+`ask/1`. The queue is referred to as the `ask` queue. Similarly
+`AskRQueueSpec` is the `queue_spec` for the queue contaning processes calling
+`ask_r/1`, and the queue is referedd toas the `ask_r` queue.
 
 `Interval` is the interval in milliseconds that an `sbroker` is
 polled to apply timeout queue management. Note that timeout queue
@@ -79,31 +75,31 @@ the `Interval`. Setting a suitable interval ensures that active queue
 management can occur if no processes are queued or dequeued for a period
 of time.
 
-Asynchronous versions of `bid/1` and `ask/1` are avaliable as
-`async_bid/1` and `async_ask/1`. On a successful match the following
+Asynchronous versions of `ask/1` and `ask_r/1` are avaliable as
+`async_ask/1` and `async_ask_r/1`. On a successful match the following
 message is sent:
 ```erlang
-{AsyncRef, {settled, Ref, Pid, SojournTime}}
+{AsyncRef, {go, Ref, Pid, SojournTime}}
 ```
-Where `AsyncRef` is the return value of `async_bid/1` or `async_ask/1`. If a
+Where `AsyncRef` is the return value of `async_ask/1` or `async_ask_r/1`. If a
 match is not found:
 ```erlang
-{AsyncRef, {dropped, SojournTime}}
+{AsyncRef, {drop, SojournTime}}
 ```
 
 Asynchronous requests can be cancelled with `cancel/2`:
 
 ```erlang
 {ok, Broker} = sbroker:start_link().
-AsyncRef = sbroker:async_bid(Broker).
+AsyncRef = sbroker:async_ask(Broker).
 ok = sbroker:cancel(Broker, AsyncRef).
 ```
 To help prevent race conditions when using asynchronous requests the
-message to the `async_ask/1` or `ask/1` process is always sent before
-the message to the `async_bid/1` or `bid/1` process. Therefore if the
+message to the `async_ask_r/1` or `ask_r/1` process is always sent before
+the message to the `async_ask/1` or `ask/1` process. Therefore if the
 initial message between the two groups always flows in one direction,
 it may be beneficial for the receiver of that message to call
-`async_ask/1` or `ask/1`, and the sender to call `async_bid/1` or `bid/1`.
+`async_ask_r/1` or `ask_r/1`, and the sender to call `async_ask/1` or `ask/1`.
 
 Build
 -----

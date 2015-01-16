@@ -6,28 +6,28 @@
 %% Processes that die while in a queue are automatically removed to prevent
 %% matching with a process that is nolonger alive.
 %%
-%% There are two functions to join a queue: `bid/1' and `ask/1'. Processes
-%% that call `bid/1' are matched against processes that call `ask/1'. If no
+%% There are two functions to join a queue: `ask/1' and `ask_r/1'. Processes
+%% that call `ask/1' are matched against processes that call `ask_r/1'. If no
 %% match is immediately avaliable a process is queued in the relevant queue
 %% until a match becomes avaliable. If queue management is used processes may be
 %% dropped without a match.
 %%
-%% Processes calling `bid/1' try to match with/dequeue a process in the ask
-%% queue. If no process exists they are queued in the bid queue and await a
-%% process to call `ask/1'.
+%% Processes calling `ask/1' try to match with/dequeue a process in the `ask_r'
+%% queue. If no process exists they are queued in the `ask' queue and await a
+%% process to call `ask_r/1'.
 %%
-%% Similarly processes calling `ask/1' try to match with/dequeue a process
-%% in the bid queue. If no process exists they are queued in the ask queue and
-%% await a process to call `bid/1'.
+%% Similarly processes calling `ask_r/1' try to match with/dequeue a process
+%% in the `ask' queue. If no process exists they are queued in the `ask_r' queue
+%% and await a process to call `ask/1'.
 -module(sbroker).
 
 -behaviour(gen_fsm).
 
 %% public api
 
--export([bid/1]).
+-export([ask_r/1]).
 -export([ask/1]).
--export([async_bid/1]).
+-export([async_ask_r/1]).
 -export([async_ask/1]).
 -export([cancel/2]).
 
@@ -79,63 +79,49 @@
 
 %% public api
 
-%% @doc Tries to match with a process calling `ask/1' on the same broker.
-%% Returns `{settled, Ref, Pid, SojournTime}' on a successful match or
-%% `{dropped, SojournTime}'.
+%% @doc Tries to match with a process calling `ask_r/1' on the same broker.
+%% Returns `{go, Ref, Pid, SojournTime}' on a successful match or
+%% `{drop, SojournTime}'.
 %%
 %% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
 %% matched process. `SojournTime' is the time spent in the queue in
 %% milliseconds.
--spec bid(Broker) -> Settled | Dropped when
+-spec ask(Broker) -> Go | Drop when
       Broker :: broker(),
-      Settled :: {settled, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
       SojournTime :: non_neg_integer(),
-      Dropped :: {dropped, SojournTime}.
-bid(Broker) ->
-    gen_fsm:sync_send_event(Broker, bid, infinity).
-
-%% @doc Tries to match with a process calling `bid/1' on the same broker.
-%%
-%% @see bid/1
--spec ask(Broker) -> Settled | Dropped when
-      Broker :: broker(),
-      Settled :: {settled, Ref, Pid, SojournTime},
-      Ref :: reference(),
-      Pid :: pid(),
-      SojournTime :: non_neg_integer(),
-      Dropped :: {dropped, SojournTime}.
+      Drop :: {drop, SojournTime}.
 ask(Broker) ->
     gen_fsm:sync_send_event(Broker, ask, infinity).
 
-%% @doc Sends an asynchronous request to match with a process calling `ask/1'.
+%% @doc Tries to match with a process calling `ask/1' on the same broker.
+%%
+%% @see ask/1
+-spec ask_r(Broker) -> Go | Drop when
+      Broker :: broker(),
+      Go :: {go, Ref, Pid, SojournTime},
+      Ref :: reference(),
+      Pid :: pid(),
+      SojournTime :: non_neg_integer(),
+      Drop :: {drop, SojournTime}.
+ask_r(Broker) ->
+    gen_fsm:sync_send_event(Broker, bid, infinity).
+
+%% @doc Sends an asynchronous request to match with a process calling `ask_r/1'.
 %% Returns a `reference()', `ARef', which can be used to identify the reply
 %% containing the result of the request, or to cancel the request using
 %% `cancel/1'.
 %%
-%% The reply is of the form `{ARef, {settle, Ref, Pid, SojournTime}' or
-%% `{ARef, {dropped, SojournTime}}'.
+%% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
+%% `{ARef, {drop, SojournTime}}'.
 %%
 %% Multiple asynchronous requests can be made from a single process to a broker
 %% and no guarantee is made of the order of replies. If the broker exits or is
 %% on a disconnected node there is no guarantee of a reply and so the caller
 %% should take appriopriate steps to handle this scenario.
 %%
-%% @see cancel/2
--spec async_bid(Broker) -> ARef when
-      Broker :: broker(),
-      ARef :: reference().
-async_bid(Broker) ->
-    ARef = make_ref(),
-    %% Will use {self(), ARef} as the From term from a sync call. This
-    %% means that a reply is sent to self() in form {ARef, Reply}.
-    gen_fsm:send_event(Broker, {bid, {self(), ARef}}),
-    ARef.
-
-%% @doc Sends an asynchronous request to match with a process calling `bid/1'.
-%%
-%% @see async_bid/1
 %% @see cancel/2
 -spec async_ask(Broker) -> ARef when
       Broker :: broker(),
@@ -147,12 +133,27 @@ async_ask(Broker) ->
     gen_fsm:send_event(Broker, {ask, {self(), ARef}}),
     ARef.
 
+%% @doc Sends an asynchronous request to match with a process calling `ask/1'.
+%%
+%% @see async_ask/1
+%% @see cancel/2
+-spec async_ask_r(Broker) -> ARef when
+      Broker :: broker(),
+      ARef :: reference().
+async_ask_r(Broker) ->
+    ARef = make_ref(),
+    %% Will use {self(), ARef} as the From term from a sync call. This
+    %% means that a reply is sent to self() in form {ARef, Reply}.
+    gen_fsm:send_event(Broker, {bid, {self(), ARef}}),
+    ARef.
+
+
 %% @doc Cancels an asynchronous request. Returns `ok' on success and
 %% `{error, not_found}' if the request does not exist. In the later case a
 %% caller may wish to check its message queue for an existing reply.
 %%
-%% @see async_bid/1
 %% @see async_ask/1
+%% @see async_ask_r/1
 -spec cancel(Broker, ARef) -> ok | {error, not_found} when
       Broker :: broker(),
       ARef :: reference().
@@ -181,14 +182,15 @@ start_link(Name) ->
 
 %% @doc Starts a broker with custom queues.
 %%
-%% The first argument, `BiddingSpec', is the queue specification for the bidding
-%% queue. Processes that call `bid/1' (or `async_bid/1') can not be matched with
-%% a process calling `ask/1' (or `async_ask/1') will be queued in this queue.
-%% Similarly, the second argument, `AskingSpec', is the queue specification for
-%% the asking queue. Processes that call `ask/1' (or `async_ask/1') are enqueued
-%% in this queue The third argument, `Interval', is the interval in milliseconds
-%% that the active queue is polled. This ensures that the active queue
-%% management strategy is applied even if no processes are enqueued/dequeued.
+%% The first argument, `AskQueueSpec', is the queue specification for the `ask'
+%% queue. Processes that call `ask/1' (or `async_ask/1') can not be matched with
+%% a process calling `ask_r/1' (or `async_ask_r/1') will be queued in this
+%% queue. Similarly, the second argument, `AskRQueueSpec', is the queue
+%% specification for `ask_r' queue. Processes that call `ask_r/1' (or
+%% `async_ask_r/1') are enqueued in this queue. The third argument, `Interval',
+%% is the interval in milliseconds that the active queue is polled. This ensures
+%% that the active queue management strategy is applied even if no processes are
+%% enqueued/dequeued.
 %%
 %% A queue specifcation takes the following form:
 %% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
@@ -200,32 +202,37 @@ start_link(Name) ->
 %% defines the strategy to take when the maximum size, `Size', of the queue is
 %% exceeded. It is either the atom `drop' (drop from the head of the queue, i.e.
 %% head drop) or `drop_r' (drop from the tail of the queue, i.e. tail drop)
--spec start_link(BiddingSpec, AskingSpec, Interval) -> StartReturn when
-      BiddingSpec :: queue_spec(),
-      AskingSpec :: queue_spec(),
+-spec start_link(AskQueueSpec, AskRQueueSpec, Interval) -> StartReturn when
+      AskQueueSpec :: queue_spec(),
+      AskRQueueSpec :: queue_spec(),
       Interval :: pos_integer(),
       StartReturn :: start_return().
-start_link(BiddingSpec, AskingSpec, Interval) ->
-    gen_fsm:start_link(?MODULE, {BiddingSpec, AskingSpec, Interval}, []).
+start_link(AskQueueSpec, AskRQueueSpec, Interval) ->
+    gen_fsm:start_link(?MODULE, {AskQueueSpec, AskRQueueSpec, Interval}, []).
 
 %% @doc Starters a registered broker with custom queues.
 %% @see start_link/3
--spec start_link(Name, BiddingSpec, AskingSpec, Interval) -> StartReturn when
+-spec start_link(Name, AskQueueSpec, AskRQueueSpec, Interval) ->
+    StartReturn when
       Name :: name(),
-      BiddingSpec :: queue_spec(),
-      AskingSpec :: queue_spec(),
+      AskQueueSpec :: queue_spec(),
+      AskRQueueSpec :: queue_spec(),
       Interval :: pos_integer(),
       StartReturn :: start_return().
-start_link(Name, BiddingSpec, AskingSpec, Interval) ->
-    gen_fsm:start_link(Name, ?MODULE, {BiddingSpec, AskingSpec, Interval}, []).
+start_link(Name, AskQueueSpec, AskRQueueSpec, Interval) ->
+    gen_fsm:start_link(Name, ?MODULE, {AskQueueSpec, AskRQueueSpec, Interval},
+                       []).
 
 %% gen_fsm api
 
+%% Inside the gen_fsm an ask_r request is refered to as a bid to make the
+%% difference between ask and ask_r clearer.
+
 %% @private
-init({BiddingSpec, AskingSpec, Interval}) ->
+init({AskQueueSpec, AskRQueueSpec, Interval}) ->
     Config = #config{interval=Interval},
-    State = #state{config=start_timer(Config), bidding=new(BiddingSpec),
-                   asking=new(AskingSpec)},
+    State = #state{config=start_timer(Config), asking=new(AskQueueSpec),
+                   bidding=new(AskRQueueSpec)},
     {ok, bidding, State}.
 
 %% @private
@@ -363,9 +370,9 @@ asking_bid(Bid, #state{config=Config, asking=A, bidding=B} = State) ->
     end.
 
 settle(MRef, {PidB, _} = Bid, SojournTimeB, {PidA, _} = Ask, SojournTimeA) ->
-    %% Ask notified always messaged first.
-    gen_fsm:reply(Ask, {settled, MRef, PidB, SojournTimeA}),
-    gen_fsm:reply(Bid, {settled, MRef, PidA, SojournTimeB}).
+    %% Bid notified always messaged first.
+    gen_fsm:reply(Bid, {go, MRef, PidA, SojournTimeB}),
+    gen_fsm:reply(Ask, {go, MRef, PidB, SojournTimeA}).
 
 in(Time, {Pid, _} = From,
    #queue{drop_out=DropOut, size=Size, len=Len, squeue=S} = Q) ->
@@ -392,7 +399,7 @@ drops(Items) ->
 
 drops([{SojournTime, {MRef, From}} | Rest], N) ->
     demonitor(MRef, [flush]),
-    gen_fsm:reply(From, {dropped, SojournTime}),
+    gen_fsm:reply(From, {drop, SojournTime}),
     drops(Rest, N+1);
 drops([], N) ->
     N.
