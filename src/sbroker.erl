@@ -171,7 +171,7 @@ start_link() ->
     Spec = {squeue_timeout, 5000, out, infinity, drop},
     start_link(Spec, Spec, 200).
 
-%% @doc Starters a registered broker with default queues.
+%% @doc Starts a registered broker with default queues.
 %% @see start_link/1
 -spec start_link(Name) -> StartReturn when
       Name :: name(),
@@ -210,7 +210,7 @@ start_link(Name) ->
 start_link(AskQueueSpec, AskRQueueSpec, Interval) ->
     gen_fsm:start_link(?MODULE, {AskQueueSpec, AskRQueueSpec, Interval}, []).
 
-%% @doc Starters a registered broker with custom queues.
+%% @doc Starts a registered broker with custom queues.
 %% @see start_link/3
 -spec start_link(Name, AskQueueSpec, AskRQueueSpec, Interval) ->
     StartReturn when
