@@ -3,7 +3,7 @@ defmodule SBroker.Mixfile do
 
       def project do
         [app: :sbroker,
-          version: "0.2.0-dev",
+          version: "0.2.0",
           elixir: "~> 1.0",
           deps: deps(),
           source_url: "https://github.com/fishcakez/sbroker",
