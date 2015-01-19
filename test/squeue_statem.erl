@@ -2,6 +2,8 @@
 
 -include_lib("proper/include/proper.hrl").
 
+-compile({no_auto_import, [time/0]}).
+
 -export([initial_state/1]).
 -export([command/1]).
 -export([precondition/2]).
@@ -95,18 +97,19 @@ postcondition(State, {call, _, len, Args}, Result) ->
 postcondition(State, {call, _, to_list, Args}, Result) ->
     to_list_post(State, Args, Result).
 
-new_time() ->
+time() ->
     choose(0, 10).
 
 item() ->
     oneof([a, b, c]).
 
-incr_time(Time) ->
-    ?LET(Incr, choose(0, 3), Time + Incr).
+time(Time) ->
+    frequency([{10, ?LET(Incr, choose(0, 3), Time + Incr)},
+               {1, choose(0, Time)}]).
 
 new_args(#state{mod=Mod}) ->
     Args = [Mod:module(), Mod:args()],
-    oneof([[new_time() | Args], Args]).
+    oneof([[time() | Args], Args]).
 
 new_pre(#state{squeue=S}, _Args) ->
     S =:= undefined.
@@ -123,11 +126,9 @@ new_post(_state, [_Mod, _Args], S) ->
     squeue:is_queue(S).
 
 in_args(#state{time=Time, squeue=S}) ->
-    oneof([[incr_time(Time), item(), S],
+    oneof([[time(Time), item(), S],
            [item(), S]]).
 
-in_pre(#state{time=Time}, [NTime, _Item, _S]) ->
-    NTime >= Time;
 in_pre(_State, _Args) ->
     true.
 
@@ -149,11 +150,9 @@ in_post(State, [Time, _Item, _S], {Drops, NS}) ->
     end.
 
 out_args(#state{time=Time, squeue=S}) ->
-    oneof([[incr_time(Time), S],
+    oneof([[time(Time), S],
            [S]]).
 
-out_pre(#state{time=Time}, [NTime, _S]) ->
-    NTime >= Time;
 out_pre(_State, _Args) ->
     true.
 
@@ -299,11 +298,9 @@ make_filter(filter, Item) ->
 
 filter_args(#state{time=Time, squeue=S}) ->
     Args = [oneof([duplicate, filter]), item(), S],
-    oneof([[incr_time(Time) | Args], Args]).
+    oneof([[time(Time) | Args], Args]).
 
-filter_pre(#state{time=Time}, [NTime, _Action, _Item, _S]) ->
-    NTime >= Time;
-filter_pre(_State, [_Action, _Item, _S]) ->
+filter_pre(_State, _Args) ->
     true.
 
 filter_next(State, Value, [duplicate, Item, _S]) ->
@@ -351,7 +348,7 @@ time_post(#state{time=Time}, _Args, Time2) ->
     Time =:= Time2.
 
 timeout_args(#state{time=Time, squeue=S}) ->
-    [incr_time(Time), S].
+    [time(Time), S].
 
 timeout_pre(#state{time=Time}, [NTime, _S]) ->
       NTime >= Time.
@@ -397,6 +394,8 @@ advance_time_drops(State, Time) ->
     {Drops, _} = advance_time(State, Time),
     Drops.
 
+advance_time(#state{time=Time} = State, NTime) when Time > NTime ->
+    advance_time(State, Time);
 advance_time(#state{mod=Mod, mod_state=ModState, time=Time, list=L} = State,
              NTime) ->
     Diff = NTime - Time,

@@ -170,8 +170,8 @@ in(Item, #squeue{time=Time, queue=Q} = S) ->
 %% the item, `Item', at the tail of queue, `S'. Returns a tuple containing the
 %% dropped items and their sojourn times, `Drops', and resulting queue, `NS'.
 %%
-%% This function raises the error `badtime' if `Time' is not a valid time
-%% greater than or equal to the current time of the queue, `S'.
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
 -spec in(Time, Item, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -182,8 +182,9 @@ in(Time, Item, #squeue{module=Module, state=State, time=PrevTime, queue=Q} = S)
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     NS = S#squeue{time=Time, queue=queue:in({Time, Item}, NQ), state=NState},
     {sojourn_drops(Time, Drops), NS};
-in(Time, Item, #squeue{} = S) ->
-    error(badtime, [Time, Item, S]).
+in(Time, Item, #squeue{time=PrevTime} = S)
+  when is_integer(Time) andalso Time >= 0 ->
+    in(PrevTime, Item, S).
 
 %% @doc Drops items, `Drops', from the queue, `S', and then removes the item,
 %% `Item', from the head of the remaining queue. Returns
@@ -224,8 +225,8 @@ out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 %% is included in the result in the place of the atom `value' and items can be
 %% dropped.
 %%
-%% This function raises the error `badtime' if `Time' is not a valid time
-%% greater than or equal to the current time of the queue, `S'.
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
 -spec out(Time, S) -> {Result, Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -245,8 +246,8 @@ out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
         {value, Item} ->
             {sojourn_time(Time, Item), Drops3, NS}
     end;
-out(Time, #squeue{} = S) ->
-    error(badtime, [Time, S]).
+out(Time, #squeue{time=PrevTime} = S) when is_integer(Time) andalso Time >= 0 ->
+    out(PrevTime, S).
 
 %% @doc Drops items, `Drops', from the queue, `S', and then removes the item,
 %% `Item', from the tail of the remaining queue. Returns
@@ -287,8 +288,8 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 %% is included in the result in the place of the atom `value' and items can be
 %% dropped.
 %%
-%% This function raises the error `badtime' if `Time' is not a valid time
-%% greater than or equal to the current time of the queue, `S'.
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
 -spec out_r(Time, S) -> {Result, Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -308,8 +309,9 @@ out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
         {value, Item} ->
             {sojourn_time(Time, Item), Drops3, NS}
     end;
-out_r(Time, #squeue{} = S) ->
-    error(badtime, [Time, S]).
+out_r(Time, #squeue{time=PrevTime} = S)
+  when is_integer(Time) andalso Time >= 0 ->
+    out_r(PrevTime, S).
 
 %% @doc Returns a list of items, `List', in the queue, `S'.
 %%
@@ -386,8 +388,8 @@ filter(Filter, #squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 %% If `Filter(Item)' returns a list of items, these items appear in the new
 %% queue with all items having the start time of the origin item, `Item'.
 %%
-%% This function raises the error `badtime' if `Time' is not a valid time
-%% greater than or equal to the current time of the queue, `S'.
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
 -spec filter(Time, Filter, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
@@ -403,8 +405,9 @@ filter(Time, Filter,
     NQ3 = queue:filter(make_filter(Filter), NQ2),
     NS = S#squeue{time=Time, queue=NQ3, state=NState2},
     {Drops3, NS};
-filter(Time, Filter, #squeue{} = S) ->
-    error(badtime, [Time, Filter, S]).
+filter(Time, Filter, #squeue{time=PrevTime} = S)
+  when is_integer(Time) andalso Time >= 0 ->
+    filter(PrevTime, Filter, S).
 
 %% Additional API
 
@@ -419,8 +422,8 @@ time(#squeue{time=Time}) ->
 %% containing the dropped items and their sojourn times, `Drops', and resulting
 %% queue, `NS'.
 %%
-%% This function raises the error `badtime' if `Time' is not a valid time
-%% greater than or equal to the current time of the queue, `S'.
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
 -spec timeout(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
@@ -430,8 +433,9 @@ timeout(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {sojourn_drops(Time, Drops), S#squeue{time=Time, queue=NQ, state=NState}};
-timeout(Time, #squeue{} = S) ->
-    error(badtime, [Time, S]).
+timeout(Time, #squeue{time=PrevTime} = S)
+  when is_integer(Time) andalso Time >= 0 ->
+    timeout(PrevTime, S).
 
 %% Test API
 
