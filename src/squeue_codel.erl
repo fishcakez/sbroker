@@ -15,8 +15,8 @@
 
 -export([init/1]).
 -export([handle_timeout/3]).
--export([handle_in/3]).
--export([handle_out/3]).
+-export([handle_enqueue/3]).
+-export([handle_dequeue/3]).
 -export([handle_join/3]).
 
 -record(config, {target :: pos_integer(),
@@ -59,22 +59,22 @@ handle_timeout(_Time, Q, State) ->
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_in(Time, Q, State) -> {[], Q, State} when
+-spec handle_enqueue(Time, Q, State) -> {[], Q, State} when
       Time :: non_neg_integer(),
       Q :: queue(),
       State :: state().
 -else.
--spec handle_in(Time, Q, State) -> {[], Q, State} when
+-spec handle_enqueue(Time, Q, State) -> {[], Q, State} when
       Time :: non_neg_integer(),
       Q :: queue:queue(),
       State :: state().
 -endif.
-handle_in(_Time, Q, State) ->
+handle_enqueue(_Time, Q, State) ->
     {[], Q, State}.
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_dequeue(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
       State :: state(),
@@ -82,7 +82,7 @@ handle_in(_Time, Q, State) ->
       NQ :: queue(),
       NState :: state().
 -else.
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_dequeue(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(Item),
       State :: state(),
@@ -90,10 +90,10 @@ handle_in(_Time, Q, State) ->
       NQ :: queue:queue(Item),
       NState :: state().
 -endif.
-handle_out(Time, Q, #state{out_next=OutNext} = State)
+handle_dequeue(Time, Q, #state{out_next=OutNext} = State)
   when Time < OutNext ->
     {[], Q, State};
-handle_out(Time, Q, #state{config=#config{target=Target}} = State) ->
+handle_dequeue(Time, Q, #state{config=#config{target=Target}} = State) ->
     out(queue:peek(Q), Time - Target, Time, Q, State).
 
 %% @private

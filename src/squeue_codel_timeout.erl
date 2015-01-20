@@ -18,8 +18,8 @@
 
 -export([init/1]).
 -export([handle_timeout/3]).
--export([handle_in/3]).
--export([handle_out/3]).
+-export([handle_enqueue/3]).
+-export([handle_dequeue/3]).
 -export([handle_join/3]).
 
 -record(state, {timeout :: pos_integer(),
@@ -61,7 +61,7 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_in(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_enqueue(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
       State :: #state{},
@@ -69,7 +69,7 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
       NQ :: queue(),
       NState :: #state{}.
 -else.
--spec handle_in(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_enqueue(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(Item),
       State :: #state{},
@@ -77,12 +77,12 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
       NQ :: queue:queue(Item),
       NState :: #state{}.
 -endif.
-handle_in(Time, Q, State) ->
+handle_enqueue(Time, Q, State) ->
     handle_timeout(Time, Q, State).
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_dequeue(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
       State :: #state{},
@@ -90,7 +90,7 @@ handle_in(Time, Q, State) ->
       NQ :: queue(),
       NState :: #state{}.
 -else.
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_dequeue(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(Item),
       State :: #state{},
@@ -98,25 +98,25 @@ handle_in(Time, Q, State) ->
       NQ :: queue:queue(Item),
       NState :: #state{}.
 -endif.
-handle_out(Time, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
+handle_dequeue(Time, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
   when Time < TimeoutNext ->
-    {Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+    {Drops, NQ, NCodel} = squeue_codel:handle_dequeue(Time, Q, Codel),
     {Drops, NQ, State#state{codel=NCodel}};
-handle_out(Time, Q, #state{timeout=Timeout, codel=Codel} = State) ->
+handle_dequeue(Time, Q, #state{timeout=Timeout, codel=Codel} = State) ->
     MinStart = Time - Timeout,
     case queue:peek(Q) of
         empty ->
-            {[], NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+            {[], NQ, NCodel} = squeue_codel:handle_dequeue(Time, Q, Codel),
             TimeoutNext = Time + Timeout,
             {[], NQ, State#state{codel=NCodel, timeout_next=TimeoutNext}};
         {value, {Start, _}} when Start > MinStart ->
-            {Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+            {Drops, NQ, NCodel} = squeue_codel:handle_dequeue(Time, Q, Codel),
             TimeoutNext = Start + Timeout,
             {Drops, NQ, State#state{codel=NCodel, timeout_next=TimeoutNext}};
         Result ->
             {Drops, NQ, NState} = timeout(Result, MinStart, Time, Q, State),
             #state{codel=NCodel} = NState,
-            {Drops2, NQ2, NCodel2} = squeue_codel:handle_out(Time, NQ, NCodel),
+            {Drops2, NQ2, NCodel2} = squeue_codel:handle_dequeue(Time, NQ, NCodel),
             {Drops2 ++ Drops, NQ2, NState#state{codel=NCodel2}}
     end.
 
@@ -156,7 +156,7 @@ timeout({value, {Start, _}}, MinStart, _Time, Q,
 timeout(_Result, MinStart, Time, Q, #state{codel=Codel} = State) ->
     %% Item is above sojourn timeout so drop it. CoDel must be used to
     %% dequeue so that it's state is kept up to date.
-    {Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+    {Drops, NQ, NCodel} = squeue_codel:handle_dequeue(Time, Q, Codel),
     NState = State#state{codel=NCodel},
     %% CoDel can only drop once per Time and so if CoDel is in dropping
     %% mode it can't drop anymore. The only reason CoDel would change
