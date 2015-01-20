@@ -21,8 +21,6 @@
 %% `squeue_timeout', `squeue_codel'.
 -module(squeue).
 
--compile({no_auto_import, [get/1]}).
-
 %% Original API
 
 -export([new/0]).
