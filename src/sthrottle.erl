@@ -87,7 +87,7 @@
 %% public api
 
 %% @doc Tries to gain access to a work lock. Returns
-%% `{go, Ref, Pid, SojournTime}' on success or `{drop SojournTime}' on failure.
+%% `{go, Ref, Pid, SojournTime}' on success or `{drop, SojournTime}' on failure.
 %%
 %% `Ref' is the lock reference, which is a `reference()'. `Pid' is the `pid()'
 %% of the throttle. `SojournTime' is the time spent in the queue in
