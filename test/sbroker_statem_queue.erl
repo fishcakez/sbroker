@@ -4,6 +4,7 @@
 
 -export([init/1]).
 -export([handle_timeout/3]).
+-export([handle_in/3]).
 -export([handle_out/3]).
 -export([handle_join/3]).
 
@@ -21,6 +22,9 @@ init(Drops) ->
     {Drops, Drops}.
 
 handle_timeout(_, Q, State) ->
+    handle(Q, State).
+
+handle_in(_, Q, State) ->
     handle(Q, State).
 
 handle_out(_, Q, State) ->

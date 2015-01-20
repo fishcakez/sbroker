@@ -18,6 +18,7 @@
 
 -export([init/1]).
 -export([handle_timeout/3]).
+-export([handle_in/3]).
 -export([handle_out/3]).
 -export([handle_join/3]).
 
@@ -60,6 +61,27 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
 
 %% @private
 -ifdef(LEGACY_TYPES).
+-spec handle_in(Time, Q, State) -> {Drops, NQ, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
+      State :: #state{},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
+      NQ :: queue(),
+      NState :: #state{}.
+-else.
+-spec handle_in(Time, Q, State) -> {Drops, NQ, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue(Item),
+      State :: #state{},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
+      NQ :: queue:queue(Item),
+      NState :: #state{}.
+-endif.
+handle_in(Time, Q, State) ->
+    handle_timeout(Time, Q, State).
+
+%% @private
+-ifdef(LEGACY_TYPES).
 -spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
@@ -76,9 +98,27 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
       NQ :: queue:queue(Item),
       NState :: #state{}.
 -endif.
-handle_out(Time, Q, #state{codel=Codel} = State) ->
+handle_out(Time, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
+  when Time < TimeoutNext ->
     {Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
-    {Drops, NQ, State#state{codel=NCodel}}.
+    {Drops, NQ, State#state{codel=NCodel}};
+handle_out(Time, Q, #state{timeout=Timeout, codel=Codel} = State) ->
+    MinStart = Time - Timeout,
+    case queue:peek(Q) of
+        empty ->
+            {[], NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+            TimeoutNext = Time + Timeout,
+            {[], NQ, State#state{codel=NCodel, timeout_next=TimeoutNext}};
+        {value, {Start, _}} when Start > MinStart ->
+            {Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+            TimeoutNext = Start + Timeout,
+            {Drops, NQ, State#state{codel=NCodel, timeout_next=TimeoutNext}};
+        Result ->
+            {Drops, NQ, NState} = timeout(Result, MinStart, Time, Q, State),
+            #state{codel=NCodel} = NState,
+            {Drops2, NQ2, NCodel2} = squeue_codel:handle_out(Time, NQ, NCodel),
+            {Drops2 ++ Drops, NQ2, NState#state{codel=NCodel2}}
+    end.
 
 %% @private
 -ifdef(LEGACY_TYPES).

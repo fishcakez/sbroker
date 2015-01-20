@@ -284,7 +284,7 @@ done_next(#state{active=Active, size=Size, done=Done} = State, _, [Client])
     State#state{active=Active--[Client], done=Done++[Client]};
 done_next(#state{active=Active, done=Done, out=Out} = State, _, [Client]) ->
     NState = State#state{active=Active--[Client], done=Done++[Client]},
-    case ask_drop_state(ask_drop_state(NState)) of
+    case ask_drop_state(NState) of
         #state{asks=[]} = NState2 ->
             NState2;
         #state{asks=Asks, active=NActive} = NState2 when Out =:= out ->
@@ -297,16 +297,13 @@ done_next(#state{active=Active, done=Done, out=Out} = State, _, [Client]) ->
 done_post(#state{active=Active, size=Size}, _, ok) when length(Active) > Size ->
     true;
 done_post(#state{out=Out} = State, _, ok) ->
-    {Drops, NState} = ask_drop(State),
-    case ask_drop(NState) of
-        {Drops2, #state{asks=[]}} ->
-            drops_post(Drops) andalso drops_post(Drops2);
-        {Drops2, #state{asks=Asks}} when Out =:= out ->
-            go_post(hd(Asks)) andalso drops_post(Drops) andalso
-            drops_post(Drops2);
-        {Drops2, #state{asks=Asks}} when Out =:= out_r ->
-            go_post(lists:last(Asks)) andalso drops_post(Drops) andalso
-            drops_post(Drops2)
+    case ask_drop(State) of
+        {Drops, #state{asks=[]}} ->
+            drops_post(Drops);
+        {Drops, #state{asks=Asks}} when Out =:= out ->
+            go_post(hd(Asks)) andalso drops_post(Drops);
+        {Drops, #state{asks=Asks}} when Out =:= out_r ->
+            go_post(lists:last(Asks)) andalso drops_post(Drops)
     end;
 done_post(_, _, {error, _}) ->
     false.
@@ -327,18 +324,15 @@ cancel_pre(#state{asks=Asks}, [Client]) ->
     lists:member(Client, Asks).
 
 cancel_next(#state{cancels=Cancels} = State, _, [Client]) ->
-    NState = #state{asks=Asks} = ask_drop_state(ask_drop_state(State)),
+    NState = #state{asks=Asks} = ask_drop_state(State),
     NState#state{asks=Asks--[Client], cancels=Cancels++[Client]}.
 
 cancel_post(State, _, ok) ->
-    {Drops, NState} = ask_drop(State),
-    {Drops2, _} = ask_drop(NState),
-    drops_post(Drops) andalso drops_post(Drops2);
+    {Drops, _} = ask_drop(State),
+    drops_post(Drops);
 cancel_post(State, [Client], {error, not_found}) ->
-    {Drops, NState} = ask_drop(State),
-    {Drops2, _} = ask_drop(NState),
-    drops_post(Drops) andalso drops_post(Drops2) andalso
-    (lists:member(Client, Drops) orelse lists:member(Client, Drops2)).
+    {Drops, _} = ask_drop(State),
+    drops_post(Drops) andalso lists:member(Client, Drops).
 
 shutdown_client_command(#state{asks=[], active=[], done=[], cancels=[]}) ->
     false;
@@ -374,14 +368,13 @@ shutdown_client_next(#state{asks=Asks, active=Active, done=Done,
                      [Client]) ->
     case {lists:member(Client, Asks), lists:member(Client, Active)} of
         {true, false} ->
-            NState = ask_drop_state(State),
-            NState2 = #state{asks=NAsks} = ask_drop_state(NState),
-            NState2#state{asks=NAsks--[Client]};
+            NState = #state{asks=NAsks} = ask_drop_state(State),
+            NState#state{asks=NAsks--[Client]};
         {false, true} when length(Active) > Size ->
             State#state{active=Active--[Client]};
         {false, true} ->
             NState = State#state{active=Active--[Client]},
-            case ask_drop_state(ask_drop_state(NState)) of
+            case ask_drop_state(NState) of
                 #state{asks=[]} = NState2 ->
                     NState2;
                 #state{asks=NAsks, active=NActive} = NState2 when Out =:= out ->
@@ -400,23 +393,19 @@ shutdown_client_post(#state{asks=Asks, active=Active, size=Size,
                             out=Out} = State, [Client], _) ->
     case {lists:member(Client, Asks), lists:member(Client, Active)} of
         {true, false} ->
-            {Drops, NState} = ask_drop(State),
-            {Drops2, _} = ask_drop(NState),
-            drops_post(Drops--[Client]) andalso drops_post(Drops2--[Client]);
+            {Drops, _} = ask_drop(State),
+            drops_post(Drops--[Client]);
         {false, true} when length(Active) > Size ->
             true;
         {false, true} ->
             NState = State#state{active=Active--[Client]},
-            {Drops, NState2} = ask_drop(NState),
-            case ask_drop(NState2) of
-                {Drops2, #state{asks=[]}} ->
-                    drops_post(Drops) andalso drops_post(Drops2);
-                {Drops2, #state{asks=NAsks}} when Out =:= out ->
-                    drops_post(Drops) andalso drops_post(Drops2) andalso
-                    go_post(hd(NAsks));
-                {Drops2, #state{asks=NAsks}} when Out =:= out_r ->
-                    drops_post(Drops) andalso drops_post(Drops2) andalso
-                    go_post(lists:last(NAsks))
+            case ask_drop(NState) of
+                {Drops, #state{asks=[]}} ->
+                    drops_post(Drops);
+                {Drops, #state{asks=NAsks}} when Out =:= out ->
+                    drops_post(Drops) andalso go_post(hd(NAsks));
+                {Drops, #state{asks=NAsks}} when Out =:= out_r ->
+                    drops_post(Drops) andalso go_post(lists:last(NAsks))
             end;
         {false, false} ->
             true
@@ -432,7 +421,7 @@ positive_next(#state{active=Active, size=Size} = State, _, _)
     State#state{size=Size+1};
 positive_next(#state{active=Active, out=Out, size=Size} = State, _, _) ->
     NState = State#state{size=Size+1},
-    case ask_drop_state(ask_drop_state(NState)) of
+    case ask_drop_state(NState) of
         #state{asks=[]} = NState2 ->
             NState2;
         #state{asks=Asks} = NState2 when Out =:= out ->
@@ -450,16 +439,13 @@ positive_post(#state{active=Active, size=Size}, _, _)
     true;
 positive_post(#state{out=Out, size=Size} = State, _, _) ->
     NState = State#state{size=Size+1},
-    {Drops, NState2} = ask_drop(NState),
-    case ask_drop(NState2) of
-        {Drops2, #state{asks=[]}} ->
-            drops_post(Drops) andalso drops_post(Drops2);
-        {Drops2, #state{asks=Asks}} when Out =:= out ->
-            drops_post(Drops) andalso drops_post(Drops2) andalso
-            go_post(hd(Asks));
-        {Drops2, #state{asks=Asks}} when Out =:= out_r ->
-            drops_post(Drops) andalso drops_post(Drops2) andalso
-            go_post(lists:last(Asks))
+    case ask_drop(NState) of
+        {Drops, #state{asks=[]}} ->
+            drops_post(Drops);
+        {Drops, #state{asks=Asks}} when Out =:= out ->
+            drops_post(Drops) andalso go_post(hd(Asks));
+        {Drops, #state{asks=Asks}} when Out =:= out_r ->
+            drops_post(Drops) andalso go_post(lists:last(Asks))
     end.
 
 negative_args(#state{sthrottle=Throttle}) ->
@@ -543,7 +529,7 @@ client_pid({Pid, _}) ->
     Pid.
 
 client_call({Pid, MRef}, Call) ->
-    try gen:call(Pid, MRef, Call, 20) of
+    try gen:call(Pid, MRef, Call, 50) of
         {ok, Response} ->
             Response
     catch

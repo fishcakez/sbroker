@@ -15,6 +15,7 @@
 
 -export([init/1]).
 -export([handle_timeout/3]).
+-export([handle_in/3]).
 -export([handle_out/3]).
 -export([handle_join/3]).
 
@@ -54,6 +55,21 @@ init({Target, Interval})
       State :: state().
 -endif.
 handle_timeout(_Time, Q, State) ->
+    {[], Q, State}.
+
+%% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_in(Time, Q, State) -> {[], Q, State} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
+      State :: state().
+-else.
+-spec handle_in(Time, Q, State) -> {[], Q, State} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue(),
+      State :: state().
+-endif.
+handle_in(_Time, Q, State) ->
     {[], Q, State}.
 
 %% @private

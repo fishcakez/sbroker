@@ -318,7 +318,7 @@ init({Min, Max, {Mod, Args, Out, SSize, Drop}, Interval})
     Config = #config{interval=Interval, min=Min, max=Max, out=Out,
                      drop_out=drop_out(Drop), squeue_size=SSize},
     {Config2, Time} = start_timer(Config),
-    {[], S} = squeue:new(Time, Mod, Args),
+    S = squeue:new(Time, Mod, Args),
     State = #state{config=Config2, size=Min, squeue=S},
     case Min of
         0 ->
