@@ -25,8 +25,10 @@
 
 %% public api
 
--export([ask_r/1]).
 -export([ask/1]).
+-export([ask_r/1]).
+-export([nb_ask/1]).
+-export([nb_ask_r/1]).
 -export([async_ask_r/1]).
 -export([async_ask/1]).
 -export([cancel/2]).
@@ -96,6 +98,7 @@
 ask(Broker) ->
     gen_fsm:sync_send_event(Broker, ask, infinity).
 
+
 %% @doc Tries to match with a process calling `ask/1' on the same broker.
 %%
 %% @see ask/1
@@ -108,6 +111,38 @@ ask(Broker) ->
       Drop :: {drop, SojournTime}.
 ask_r(Broker) ->
     gen_fsm:sync_send_event(Broker, bid, infinity).
+
+%% @doc Tries to match with a process calling `ask_r/1' on the same broker but
+%% does not enqueue the request if no immediate match. Returns
+%% `{go, Ref, Pid, 0}' on a successful match or `{retry, 0}'.
+%%
+%% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
+%% matched process. `0' reflects the fact that no time was spent in the queue.
+%%
+%% @see ask/1
+-spec nb_ask(Broker) -> Go | Retry when
+      Broker :: broker(),
+      Go :: {go, Ref, Pid, SojournTime},
+      Ref :: reference(),
+      Pid :: pid(),
+      SojournTime :: 0,
+      Retry :: {retry, SojournTime}.
+nb_ask(Broker) ->
+    gen_fsm:sync_send_event(Broker, nb_ask, infinity).
+
+%% @doc Tries to match with a process calling `ask/1' on the same broker but
+%% does not enqueue the request if no immediate match.
+%%
+%% @see nb_ask/1
+-spec nb_ask_r(Broker) -> Go | Retry when
+      Broker :: broker(),
+      Go :: {go, Ref, Pid, SojournTime},
+      Ref :: reference(),
+      Pid :: pid(),
+      SojournTime :: 0,
+      Retry :: {retry, SojournTime}.
+nb_ask_r(Broker) ->
+    gen_fsm:sync_send_event(Broker, nb_bid, infinity).
 
 %% @doc Sends an asynchronous request to match with a process calling `ask_r/1'.
 %% Returns a `reference()', `ARef', which can be used to identify the reply
@@ -249,8 +284,13 @@ bidding({timeout, _, ?MODULE}, State) ->
 %% @private
 bidding(bid, Bid, State) ->
     bidding_bid(Bid, State);
+bidding(nb_bid, Bid, State) ->
+    retry(Bid),
+    {next_state, bidding, State};
 bidding(ask, Ask, State) ->
     bidding_ask(Ask, State);
+bidding(nb_ask, Ask, State) ->
+    bidding_nb_ask(Ask, State);
 bidding({cancel, ARef}, _From, State) ->
     {Reply, NState} = bidding_cancel(ARef, State),
     {reply, Reply, bidding, NState}.
@@ -269,8 +309,13 @@ asking({timeout, _, ?MODULE}, State) ->
 %% @private
 asking(bid, Bid, State) ->
     asking_bid(Bid, State);
+asking(nb_bid, Bid, State) ->
+    asking_nb_bid(Bid, State);
 asking(ask, Ask, State) ->
     asking_ask(Ask, State);
+asking(nb_ask, Ask, State) ->
+    retry(Ask),
+    {next_state, asking, State};
 asking({cancel, ARef}, _From, State) ->
     {Reply, NState} = asking_cancel(ARef, State),
     {reply, Reply, asking, NState}.
@@ -352,6 +397,17 @@ bidding_ask(Ask, #state{config=Config, bidding=B, asking=A} = State) ->
             {next_state, asking, NState}
     end.
 
+bidding_nb_ask(Ask, #state{config=Config, bidding=B} = State) ->
+    {NConfig, Time} = read_timer(Config),
+    case out(Time, B) of
+        {{SojournTime, {MRef, Bid}}, NB} ->
+            settle(MRef, Bid, SojournTime, Ask, 0),
+            {next_state, bidding, State#state{config=NConfig, bidding=NB}};
+        {empty, NB} ->
+            retry(Ask),
+            {next_state, asking, State#state{config=NConfig, bidding=NB}}
+    end.
+
 asking_ask(Ask, #state{config=Config, asking=A} = State) ->
     {NConfig, Time} = read_timer(Config),
     NState = State#state{config=NConfig, asking=in(Time, Ask, A)},
@@ -369,10 +425,24 @@ asking_bid(Bid, #state{config=Config, asking=A, bidding=B} = State) ->
             {next_state, bidding, NState}
     end.
 
+asking_nb_bid(Bid, #state{config=Config, asking=A} = State) ->
+    {NConfig, Time} = read_timer(Config),
+    case out(Time, A) of
+        {{SojournTime, {MRef, Ask}}, NA} ->
+            settle(MRef, Bid, 0, Ask, SojournTime),
+            {next_state, asking, State#state{config=NConfig, asking=NA}};
+        {empty, NA} ->
+            retry(Bid),
+            {next_state, bidding, State#state{config=NConfig, asking=NA}}
+    end.
+
 settle(MRef, {PidB, _} = Bid, SojournTimeB, {PidA, _} = Ask, SojournTimeA) ->
     %% Bid notified always messaged first.
     gen_fsm:reply(Bid, {go, MRef, PidA, SojournTimeB}),
     gen_fsm:reply(Ask, {go, MRef, PidB, SojournTimeA}).
+
+retry(From) ->
+    gen_fsm:reply(From, {retry, 0}).
 
 in(Time, {Pid, _} = From,
    #queue{drop_out=DropOut, size=Size, len=Len, squeue=S} = Q) ->

@@ -26,6 +26,7 @@
 %% public api
 
 -export([ask/1]).
+-export([nb_ask/1]).
 -export([async_ask/1]).
 -export([cancel/2]).
 -export([done/2]).
@@ -107,6 +108,21 @@
 ask(Throttle) ->
     gen_fsm:sync_send_event(Throttle, ask, infinity).
 
+%% @doc Tries to match gain access to a work lock but does not enqueue the
+%% request if no lock is available immediately. Returns `{go, Ref, Pid, 0}' on
+%% a success or `{retry, 0}'.
+%%
+%% `Ref' is the lock reference, which is a `reference()'. `Pid' is the `pid()'
+%% of the throttle. `0' reflects the fact that no time was spent in the queue.
+%%
+%% @see ask/1
+-spec nb_ask(Throttle) -> {go, Ref, Pid, 0} | {retry, 0} when
+      Throttle :: throttle(),
+      Ref :: reference(),
+      Pid :: pid().
+nb_ask(Throttle) ->
+    gen_fsm:sync_send_event(Throttle, nb_ask, infinity).
+
 %% @doc Sends an asynchronous request to gain access to a work lock. Returns a
 %% `reference()', `ARef', which can be used to identify the reply containing the
 %% result of the request, or to cancel the request using `cancel/1'.
@@ -182,7 +198,7 @@ negative(Throttle) ->
 -spec signal(Throttle, Ref, Response) -> Response when
       Throttle :: throttle(),
       Ref :: reference(),
-      Response :: {go, Ref2, Pid, SojournTime},
+      Response :: {go, Ref2, Pid, SojournTime} | {retry, SojournTime},
       Ref2 :: reference(),
       Pid :: pid(),
       SojournTime :: non_neg_integer();
@@ -211,6 +227,9 @@ signal(Throttle, Ref, {go, _, _, 0} = Response) ->
     Response;
 signal(_, Ref, {go, _, _, _} = Response) ->
     _ = put(Ref, go),
+    Response;
+signal(_, Ref, {retry, _} = Response) ->
+    _ = put(Ref, retry),
     Response.
 
 %% @doc Removes process dictionary entries relating to the lock `Ref'.
@@ -349,6 +368,8 @@ grow({drop, MRef}, _, #state{active=Active} = State) ->
     end;
 grow(ask, From, State) ->
     grow_ask(From, State);
+grow(nb_ask, From, State) ->
+    grow_ask(From, State);
 grow({done, MRef}, _, #state{active=Active} = State) ->
     case gb_sets:is_element(MRef, Active) of
         true ->
@@ -379,6 +400,9 @@ steady({drop, MRef}, _, #state{active=Active} = State) ->
     end;
 steady(ask, From, State) ->
     steady_ask(From, State);
+steady(nb_ask, From, State) ->
+    retry(From),
+    {next_state, steady, State};
 steady({done, MRef}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(MRef, Active) of
         true ->
@@ -409,6 +433,9 @@ shrink({drop, MRef}, _, #state{active=Active} = State) ->
     end;
 shrink(ask, From, State) ->
     shrink_ask(From, State);
+shrink(nb_ask, From, State) ->
+    retry(From),
+    {next_state, shrink, State};
 shrink({done, MRef}, _, #state{active=Active} = State) ->
     case gb_sets:is_element(MRef, Active) of
         true ->
@@ -720,3 +747,6 @@ drops([], N) ->
 
 go(From, Ref, SojournTime) ->
     gen_fsm:reply(From, {go, Ref, self(), SojournTime}).
+
+retry(From) ->
+    gen_fsm:reply(From, {retry, 0}).

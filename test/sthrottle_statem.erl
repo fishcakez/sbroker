@@ -14,13 +14,13 @@
 -export([postcondition/3]).
 -export([cleanup/1]).
 
--export([spawn_client/1]).
+-export([spawn_client/2]).
 -export([signal/2]).
 -export([done/1]).
 -export([cancel/1]).
 -export([shutdown_client/1]).
 
--export([client_init/1]).
+-export([client_init/2]).
 
 -record(state, {sthrottle, asks=[], out, drops, q_state=[], q_size, drop,
                 active=[], done=[], cancels=[], min, max, size,
@@ -174,7 +174,7 @@ signal_command(#state{active=Active}) ->
 signal_args(#state{active=Active}) ->
     [elements(Active),
      oneof([{go, make_ref(), self(), oneof([0, choose(1, 5)])},
-            {drop, choose(1, 5)}])].
+            {drop, choose(1, 5)}, {retry, choose(0, 5)}])].
 
 signal(Client, Reply) ->
     client_call(Client, {signal, Reply}).
@@ -206,7 +206,11 @@ signal_next(#state{active=Active, min=Min, replies=Replies, done=Done,
 signal_next(#state{replies=Replies, min=Min} = State, _,
                   [Client, {drop, _} = Reply]) ->
     NReplies = orddict:store(Client, Reply, Replies),
-    State#state{replies=NReplies, size=Min}.
+    State#state{replies=NReplies, size=Min};
+signal_next(#state{replies=Replies} = State, _,
+                  [Client, {retry, _} = Reply]) ->
+    NReplies = orddict:store(Client, Reply, Replies),
+    State#state{replies=NReplies}.
 
 signal_post(#state{sthrottle=Throttle, replies=Replies} = State,
                   [Client, {go, _, _, 0} = Reply], Result) ->
@@ -222,19 +226,21 @@ signal_post(#state{active=Active, min=Min}, [_, {drop, SojournTime}],
                   Result) when length(Active) > Min ->
     Result =:= {done, SojournTime};
 signal_post(_, [_, {drop, _} = Reply], Result) ->
+    Result =:= Reply;
+signal_post(_, [_, {retry, _} = Reply], Result) ->
     Result =:= Reply.
 
 spawn_client_args(#state{sthrottle=Throttle}) ->
-    [Throttle].
+    [Throttle, oneof([ask, nb_ask])].
 
-spawn_client(Throttle) ->
-    {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Throttle]),
+spawn_client(Throttle, AskFun) ->
+    {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Throttle, AskFun]),
     {Pid, MRef}.
 
-spawn_client_next(#state{active=Active, size=Size} = State, Client, [_])
+spawn_client_next(#state{active=Active, size=Size} = State, Client, [_, _])
   when length(Active) < Size ->
     State#state{active=Active ++ [Client]};
-spawn_client_next(#state{q_size=QSize, drop=Drop} = State, Client, [_]) ->
+spawn_client_next(#state{q_size=QSize, drop=Drop} = State, Client, [_, ask]) ->
     #state{asks=Asks} = NState = ask_drop_state(State),
     NState2 = NState#state{asks=Asks ++ [Client]},
     case length(Asks) + 1 > QSize of
@@ -246,12 +252,14 @@ spawn_client_next(#state{q_size=QSize, drop=Drop} = State, Client, [_]) ->
             NState3#state{asks=droplast(NAsks)};
         false ->
             NState2
-    end.
+    end;
+spawn_client_next(State, _, [_, nb_ask]) ->
+    State.
 
-spawn_client_post(#state{active=Active, size=Size}, [_], Client)
+spawn_client_post(#state{active=Active, size=Size}, [_, _], Client)
   when length(Active) < Size ->
     go_post(Client);
-spawn_client_post(#state{q_size=QSize, drop=Drop} = State, _, Client) ->
+spawn_client_post(#state{q_size=QSize, drop=Drop} = State, [_, ask], Client) ->
     {Drops, #state{asks=Asks} = NState} = ask_drop(State),
     NState2 = NState#state{asks=Asks ++ [Client]},
     case length(Asks) + 1 > QSize of
@@ -265,7 +273,9 @@ spawn_client_post(#state{q_size=QSize, drop=Drop} = State, _, Client) ->
             (NAsks =:= [] orelse drops_post([lists:last(NAsks)]));
         false ->
             drops_post(Drops)
-    end.
+    end;
+spawn_client_post(_, [_, nb_ask], Client) ->
+    retry_post(Client).
 
 done(Client) ->
     client_call(Client, done).
@@ -503,6 +513,14 @@ go_post(Client) ->
             false
     end.
 
+retry_post(Client) ->
+    case result(Client) of
+        {retry, 0} ->
+            true;
+        _ ->
+            false
+    end.
+
 drops_post([]) ->
     true;
 drops_post([Client | Drops]) ->
@@ -516,11 +534,16 @@ drops_post([Client | Drops]) ->
 
 %% client
 
-client_init(Throttle) ->
+client_init(Throttle, ask) ->
     MRef = monitor(process, Throttle),
     ARef = sthrottle:async_ask(Throttle),
     proc_lib:init_ack({ok, self(), MRef}),
-    client_loop(MRef, Throttle, ARef, queued, []).
+    client_loop(MRef, Throttle, ARef, queued, []);
+client_init(Throttle, nb_ask) ->
+    MRef = monitor(process, Throttle),
+    State = sthrottle:nb_ask(Throttle),
+    proc_lib:init_ack({ok, self(), MRef}),
+    client_loop(MRef, Throttle, undefined, State, []).
 
 result(Client) ->
     client_call(Client, result).
@@ -579,9 +602,6 @@ client_loop(MRef, Throttle, ARef, State, Froms) ->
         {MRef, From, result} when State =:= queued ->
             client_loop(MRef, Throttle, ARef, State, [From | Froms]);
         {MRef, From, result} ->
-            gen:reply(From, State),
-            client_loop(MRef, Throttle, ARef, State, Froms);
-        {MRef, From, get_state} ->
             gen:reply(From, State),
             client_loop(MRef, Throttle, ARef, State, Froms)
     end.
