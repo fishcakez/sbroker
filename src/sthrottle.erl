@@ -123,9 +123,14 @@ ask(Throttle) ->
 nb_ask(Throttle) ->
     gen_fsm:sync_send_event(Throttle, nb_ask, infinity).
 
-%% @doc Sends an asynchronous request to gain access to a work lock. Returns a
-%% `reference()', `ARef', which can be used to identify the reply containing the
-%% result of the request, or to cancel the request using `cancel/1'.
+%% @doc Sends an asynchronous request to gain access to a work lock. Returns
+%% `{await, ARef, Process}'.
+%%
+%% `ARef' is a `reference()' that uniquely identifies the reply containing the
+%% result of the request and can also be used to cancel request using
+%% `cancel/2'. `Process', is the pid (`pid()') or process name
+%% (`{atom(), node()}') of the throttle, which can be used to monitor the
+%% throttle and/or cancel the request.
 %%
 %% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
 %% `{ARef, {drop, SojournTime}}'.
@@ -137,14 +142,20 @@ nb_ask(Throttle) ->
 %% scenario.
 %%
 %% @see cancel/2
--spec async_ask(Throttle) -> ARef when
+-spec async_ask(Throttle) -> {await, ARef, Process} when
       Throttle :: throttle(),
-      ARef :: reference().
+      ARef :: reference(),
+      Process :: pid() | {atom(), node()}.
 async_ask(Throttle) ->
-    ARef = make_ref(),
-    From = {self(), ARef},
-    gen_fsm:send_event(Throttle, {ask, From}),
-    ARef.
+    case sbroker_util:whereis(Throttle) of
+        undefined ->
+            exit({noproc, {?MODULE, async_ask, [Throttle]}});
+        Throttle2 ->
+            ARef = make_ref(),
+            From = {self(), ARef},
+            gen_fsm:send_event(Throttle2, {ask, From}),
+            {await, ARef, Throttle2}
+    end.
 
 %% @doc Cancels an asynchronous request. Returns `ok' on success and
 %% `{error, not_found}' if the request does not exist. In the later case a

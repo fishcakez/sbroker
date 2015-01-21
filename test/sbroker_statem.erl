@@ -500,7 +500,7 @@ client_call({Pid, MRef}, Call) ->
 
 client_init(Broker, async_bid) ->
     MRef = monitor(process, Broker),
-    ARef = sbroker:async_ask_r(Broker),
+    {await, ARef, Broker} = sbroker:async_ask_r(Broker),
     client_init(Broker, MRef, ARef, queued);
 client_init(Broker, nb_bid) ->
     MRef = monitor(process, Broker),
@@ -508,7 +508,7 @@ client_init(Broker, nb_bid) ->
     client_init(MRef, Broker, undefined, State);
 client_init(Broker, async_ask) ->
     MRef = monitor(process, Broker),
-    ARef = sbroker:async_ask(Broker),
+    {await, ARef, Broker} = sbroker:async_ask(Broker),
     client_init(Broker, MRef, ARef, queued);
 client_init(Broker, nb_ask) ->
     MRef = monitor(process, Broker),
