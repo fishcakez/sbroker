@@ -29,8 +29,10 @@
 -export([ask_r/1]).
 -export([nb_ask/1]).
 -export([nb_ask_r/1]).
--export([async_ask_r/1]).
 -export([async_ask/1]).
+-export([async_ask/2]).
+-export([async_ask_r/1]).
+-export([async_ask_r/2]).
 -export([cancel/2]).
 
 -export([start_link/0]).
@@ -144,24 +146,24 @@ nb_ask(Broker) ->
 nb_ask_r(Broker) ->
     gen_fsm:sync_send_event(Broker, nb_bid, infinity).
 
-%% @doc Sends an asynchronous request to match with a process calling `ask_r/1'.
-%% Returns `{await, ARef, Process}'.
+%% @doc Monitors the broker and sends an asynchronous request to match with a
+%% process calling `ask_r/1'. Returns `{await, ARef, Process}'.
 %%
-%% `ARef' is a `reference()' that uniquely identifies the reply containing the
-%% result of the request and can also be used cancel the request using
-%% `cancel/2'. `Process', is the pid (`pid()') or process name
-%% (`{atom(), node()}') of the broker, which can be used to monitor the broker
-%% and/or cancel the request.
+%% `ARef' is a monitor `reference()' that uniquely identifies the reply
+%% containing the result of the request. `Process', is the pid (`pid()') or
+%% process name (`{atom(), node()}') of the monitored broker. To cancel the
+%% request call `cancel(Process, ARef)'.
 %%
 %% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
 %% `{ARef, {drop, SojournTime}}'.
 %%
-%% Multiple asynchronous requests can be made from a single process to a broker
-%% and no guarantee is made of the order of replies. If the broker exits or is
-%% on a disconnected node there is no guarantee of a reply and so the caller
-%% should take appriopriate steps to handle this scenario.
+%% Multiple asynchronous requests can be made from a single process to a
+%% broker and no guarantee is made of the order of replies. A process making
+%% multiple requests can reuse the monitor reference for subsequent requests to
+%% the same broker process (`Process') using `async_ask/2'.
 %%
 %% @see cancel/2
+%% @see async_ask/2
 -spec async_ask(Broker) -> {await, ARef, Process} when
       Broker :: broker(),
       ARef :: reference(),
@@ -171,14 +173,45 @@ async_ask(Broker) ->
         undefined ->
             exit({noproc, {?MODULE, async_ask, [Broker]}});
         Broker2 ->
-            ARef = make_ref(),
+            ARef = monitor(process, Broker2),
             %% Will use {self(), ARef} as the From term from a sync call. This
             %% means that a reply is sent to self() in form {ARef, Reply}.
             gen_fsm:send_event(Broker2, {ask, {self(), ARef}}),
             {await, ARef, Broker2}
     end.
 
-%% @doc Sends an asynchronous request to match with a process calling `ask/1'.
+%% @doc Sends an asynchronous request to match with a process calling `ask_r/1'.
+%% Returns `{await, ARef, Process}'.
+%%
+%% `ARef' is a `reference()' that identifies the reply containing the result of
+%% the request. `Process', is the pid (`pid()') or process name
+%% (`{atom(), node()}') of the broker. To cancel all requests identified by
+%% `ARef' on broker `Process' call `cancel(Process, ARef)'.
+%%
+%% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
+%% `{ARef, {drop, SojournTime}}'.
+%%
+%% Multiple asynchronous requests can be made from a single process to a
+%% broker and no guarantee is made of the order of replies. If the broker
+%% exits or is on a disconnected node there is no guarantee of a reply and so
+%% the caller should take appropriate steps to handle this scenario.
+%%
+%% @see cancel/2
+-spec async_ask(Broker, ARef) -> {await, ARef, Process} when
+      Broker :: broker(),
+      ARef :: reference(),
+      Process :: pid() | {atom(), node()}.
+async_ask(Broker, ARef) ->
+    case sbroker_util:whereis(Broker) of
+        undefined ->
+            exit({noproc, {?MODULE, async_ask, [Broker]}});
+        Broker2 ->
+            gen_fsm:send_event(Broker2, {ask, {self(), ARef}}),
+            {await, ARef, Broker2}
+    end.
+
+%% @doc Monitors the broker and sends an asynchronous request to match with a
+%% process calling `ask/1'.
 %%
 %% @see async_ask/1
 %% @see cancel/2
@@ -191,10 +224,25 @@ async_ask_r(Broker) ->
         undefined ->
             exit({noproc, {?MODULE, async_ask_r, [Broker]}});
         Broker2 ->
-            ARef = make_ref(),
-            %% Will use {self(), ARef} as the From term from a sync call. This
-            %% means that a reply is sent to self() in form {ARef, Reply}.
-            gen_fsm:send_event(Broker, {bid, {self(), ARef}}),
+            ARef = monitor(process, Broker2),
+            gen_fsm:send_event(Broker2, {bid, {self(), ARef}}),
+            {await, ARef, Broker2}
+    end.
+
+%% @doc Sends an asynchronous request to match with a process calling `ask/1'.
+%%
+%% @see async_ask/2
+%% @see cancel/2
+-spec async_ask_r(Broker, ARef) -> {await, ARef, Process} when
+      Broker :: broker(),
+      ARef :: reference(),
+      Process :: pid() | {atom(), node()}.
+async_ask_r(Broker, ARef) ->
+    case sbroker_util:whereis(Broker) of
+        undefined ->
+            exit({noproc, {?MODULE, async_ask_r, [Broker]}});
+        Broker2 ->
+            gen_fsm:send_event(Broker2, {bid, {self(), ARef}}),
             {await, ARef, Broker2}
     end.
 

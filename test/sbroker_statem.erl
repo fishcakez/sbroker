@@ -500,22 +500,24 @@ client_call({Pid, MRef}, Call) ->
 
 client_init(Broker, async_bid) ->
     MRef = monitor(process, Broker),
-    {await, ARef, Broker} = sbroker:async_ask_r(Broker),
-    client_init(Broker, MRef, ARef, queued);
+    ARef = make_ref(),
+    {await, ARef, Broker} = sbroker:async_ask_r(Broker, ARef),
+    client_init(MRef, Broker, ARef, queued);
 client_init(Broker, nb_bid) ->
     MRef = monitor(process, Broker),
     State = sbroker:nb_ask_r(Broker),
     client_init(MRef, Broker, undefined, State);
 client_init(Broker, async_ask) ->
     MRef = monitor(process, Broker),
-    {await, ARef, Broker} = sbroker:async_ask(Broker),
-    client_init(Broker, MRef, ARef, queued);
+    ARef = make_ref(),
+    {await, ARef, Broker} = sbroker:async_ask(Broker, ARef),
+    client_init(MRef, Broker, ARef, queued);
 client_init(Broker, nb_ask) ->
     MRef = monitor(process, Broker),
     State = sbroker:nb_ask(Broker),
     client_init(MRef, Broker, undefined, State).
 
-client_init(Broker, MRef, ARef, State) ->
+client_init(MRef, Broker, ARef, State) ->
     proc_lib:init_ack({ok, self(), MRef}),
     client_loop(MRef, Broker, ARef, State, []).
 

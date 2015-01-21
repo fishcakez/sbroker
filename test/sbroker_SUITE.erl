@@ -93,9 +93,10 @@ statem(Config) ->
 
 ask_whereis_name(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker),
+    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
     Self = sbroker_ask:whereis_name(Broker),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
 
@@ -105,9 +106,10 @@ ask_whereis_name(_) ->
 
 ask_send(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker),
+    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
     ok = sbroker_ask:send(Broker, hello),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
     receive hello -> ok after 100 -> exit(timeout) end,
@@ -124,9 +126,10 @@ ask_send(_) ->
 
 nb_ask_whereis_name(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker),
+    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
     Self = sbroker_nb_ask:whereis_name(Broker),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
 
@@ -136,9 +139,10 @@ nb_ask_whereis_name(_) ->
 
 nb_ask_send(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker),
+    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
     ok = sbroker_nb_ask:send(Broker, hello),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
     receive hello -> ok after 100 -> exit(timeout) end,
@@ -155,9 +159,10 @@ nb_ask_send(_) ->
 
 ask_r_whereis_name(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask(Broker),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
     Self = sbroker_ask_r:whereis_name(Broker),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
 
@@ -167,9 +172,10 @@ ask_r_whereis_name(_) ->
 
 ask_r_send(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask(Broker),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
     ok = sbroker_ask_r:send(Broker, hello),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
     receive hello -> ok after 100 -> exit(timeout) end,
@@ -186,9 +192,10 @@ ask_r_send(_) ->
 
 nb_ask_r_whereis_name(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask(Broker),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
     Self = sbroker_nb_ask_r:whereis_name(Broker),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
 
@@ -198,9 +205,10 @@ nb_ask_r_whereis_name(_) ->
 
 nb_ask_r_send(_) ->
     {ok, Broker} = sbroker:start_link(),
+    Ref = make_ref(),
     Self = self(),
 
-    {await, Ref, Broker} = sbroker:async_ask(Broker),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
     ok = sbroker_nb_ask_r:send(Broker, hello),
     receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
     receive hello -> ok after 100 -> exit(timeout) end,

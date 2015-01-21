@@ -81,8 +81,8 @@ message is sent:
 ```erlang
 {AsyncRef, {go, Ref, Pid, SojournTime}}
 ```
-Where `AsyncRef` is the return value of `async_ask/1` or `async_ask_r/1`. If a
-match is not found:
+Where `AsyncRef` is a monitor reference of the broker, and included in the
+return values of `async_ask/1` and `async_ask_r/1`. If a match is not found:
 ```erlang
 {AsyncRef, {drop, SojournTime}}
 ```
@@ -91,7 +91,7 @@ Asynchronous requests can be cancelled with `cancel/2`:
 
 ```erlang
 {ok, Broker} = sbroker:start_link().
-AsyncRef = sbroker:async_ask(Broker).
+{await, AsyncRef, Broker} = sbroker:async_ask(Broker).
 ok = sbroker:cancel(Broker, AsyncRef).
 ```
 To help prevent race conditions when using asynchronous requests the

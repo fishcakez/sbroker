@@ -28,6 +28,7 @@
 -export([ask/1]).
 -export([nb_ask/1]).
 -export([async_ask/1]).
+-export([async_ask/2]).
 -export([cancel/2]).
 -export([done/2]).
 
@@ -123,25 +124,24 @@ ask(Throttle) ->
 nb_ask(Throttle) ->
     gen_fsm:sync_send_event(Throttle, nb_ask, infinity).
 
-%% @doc Sends an asynchronous request to gain access to a work lock. Returns
-%% `{await, ARef, Process}'.
+%% @doc Monitors the throttle and sends an asynchronous request to gain access
+%% to a work lock. Returns `{await, ARef, Process}'.
 %%
-%% `ARef' is a `reference()' that uniquely identifies the reply containing the
-%% result of the request and can also be used to cancel request using
-%% `cancel/2'. `Process', is the pid (`pid()') or process name
-%% (`{atom(), node()}') of the throttle, which can be used to monitor the
-%% throttle and/or cancel the request.
+%% `ARef' is a monitor `reference()' that uniquely identifies the reply
+%% containing the result of the request. `Process', is the pid (`pid()') or
+%% process name (`{atom(), node()}') of the monitored throttle. To cancel the
+%% request call `cancel(Process, ARef)'.
 %%
 %% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
 %% `{ARef, {drop, SojournTime}}'.
 %%
 %% Multiple asynchronous requests can be made from a single process to a
-%% throttle and no guarantee is made of the order of replies. If the throttle
-%% exits or is on a disconnected node there is no guarantee of
-%% a reply and so the caller should take appriopriate steps to handle this
-%% scenario.
+%% throttle and no guarantee is made of the order of replies. A process making
+%% multiple requests can reuse the monitor reference for subsequent requests to
+%% the same throttle process (`Process') using `async_ask/2'.
 %%
 %% @see cancel/2
+%% @see async_ask/2
 -spec async_ask(Throttle) -> {await, ARef, Process} when
       Throttle :: throttle(),
       ARef :: reference(),
@@ -151,15 +151,49 @@ async_ask(Throttle) ->
         undefined ->
             exit({noproc, {?MODULE, async_ask, [Throttle]}});
         Throttle2 ->
-            ARef = make_ref(),
+            ARef = monitor(process, Throttle2),
             From = {self(), ARef},
             gen_fsm:send_event(Throttle2, {ask, From}),
             {await, ARef, Throttle2}
     end.
 
-%% @doc Cancels an asynchronous request. Returns `ok' on success and
-%% `{error, not_found}' if the request does not exist. In the later case a
-%% caller may wish to check its message queue for an existing reply.
+%% @doc Sends an asynchronous request, identified by `ARef', to gain access to a
+%% work lock. Returns `{await, ARef, Process}'.
+%%
+%% `ARef' is a `reference()' that identifies the reply containing the result of
+%% the request. `Process', is the pid (`pid()') or process name
+%% (`{atom(), node()}') of the throttle. To cancel all requests identified by
+%% `ARef' on throttle `Process' call `cancel(Process, ARef)'.
+%%
+%% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
+%% `{ARef, {drop, SojournTime}}'.
+%%
+%% Multiple asynchronous requests can be made from a single process to a
+%% throttle and no guarantee is made of the order of replies. If the throttle
+%% exits or is on a disconnected node there is no guarantee of a reply and so
+%% the caller should take appropriate steps to handle this scenario.
+%%
+%% @see cancel/2
+-spec async_ask(Throttle, ARef) -> {await, ARef, Process} when
+      Throttle :: throttle(),
+      ARef :: reference(),
+      Process :: pid() | {atom(), node()}.
+async_ask(Throttle, ARef) when is_reference(ARef) ->
+    case sbroker_util:whereis(Throttle) of
+        undefined ->
+            exit({noproc, {?MODULE, async_ask, [Throttle, ARef]}});
+        Throttle2 ->
+            From = {self(), ARef},
+            gen_fsm:send_event(Throttle2, {ask, From}),
+            {await, ARef, Throttle2}
+    end.
+
+%% @doc Cancels asynchronous requests identified by `ARef'. Returns `ok' on
+%% success and `{error, not_found}' if no requests exist. In the later case, or
+%% if multiple requests with the same `ARef' were sent, a caller may have
+%% replies in its message queue.
+%%
+%% This function does not remove a monitor setup by `async_ask/1'.
 %%
 %% @see async_ask/1
 -spec cancel(Throttle, ARef) -> ok | {error, not_found} when

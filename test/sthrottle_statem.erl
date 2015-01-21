@@ -536,7 +536,8 @@ drops_post([Client | Drops]) ->
 
 client_init(Throttle, ask) ->
     MRef = monitor(process, Throttle),
-    {await, ARef, Throttle} = sthrottle:async_ask(Throttle),
+    ARef = make_ref(),
+    {await, ARef, Throttle} = sthrottle:async_ask(Throttle, ARef),
     proc_lib:init_ack({ok, self(), MRef}),
     client_loop(MRef, Throttle, ARef, queued, []);
 client_init(Throttle, nb_ask) ->
