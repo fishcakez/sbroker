@@ -1,4 +1,3 @@
--module(sbroker_nb_ask_r).
 %% @doc This modules provides utility functions for messaging a process calling
 %% `sbroker:ask/1' on a broker. The process is looked up by calling
 %% `sbroker:nb_ask_r/1'. If `sbroker:nb_ask_r/1' returns `{retry, 0}' then no
@@ -7,6 +6,7 @@
 %% This module can be used with `via' names. For example
 %% `gen_server:call({via, sbroker_nb_ask_r, Broker}, hello)' will make a
 %% gen_server call to a process calling `sbroker:ask/1' on broker `Broker'.
+-module(sbroker_nb_ask_r).
 
 -export([whereis_name/1]).
 -export([send/2]).

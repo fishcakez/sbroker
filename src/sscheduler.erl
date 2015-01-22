@@ -1,4 +1,3 @@
--module(sscheduler).
 %% @doc This modules provides utility functions for basic load balancing based
 %% on the scheduler id of the calling process. It is designed for use with OTP
 %% behaviour messaging using `via' names, e.g.
@@ -11,6 +10,7 @@
 %% It is not possible to locally look up the pid of a process with name
 %% `{atom(), node()}' if the node is not the local node. Therefore a registered
 %% name on another node is not supported for use with `via'.
+-module(sscheduler).
 
 -export([whereis_name/1]).
 -export([send/2]).
