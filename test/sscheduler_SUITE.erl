@@ -139,10 +139,10 @@ send_pid(_) ->
     Ref = make_ref(),
 
     sscheduler:send({Self}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     sscheduler:send({Self, Self}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     ok.
 
@@ -151,16 +151,16 @@ send_local(_) ->
     Ref = make_ref(),
 
     sscheduler:send({?MODULE}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     sscheduler:send({?MODULE, ?MODULE}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     Self = sscheduler:send({{?MODULE, node()}}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     Self = sscheduler:send({{?MODULE, node()}, {?MODULE, node()}}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     sscheduler:send({{?MODULE, node}}, Ref),
     sscheduler:send({{?MODULE, node}, {?MODULE, node}}, Ref),
@@ -212,10 +212,10 @@ send_global(_) ->
     Ref = make_ref(),
 
     sscheduler:send({Name}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     sscheduler:send({Name, Name}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     global:unregister_name({?MODULE, global}),
 
@@ -243,10 +243,10 @@ send_via(_) ->
     Ref = make_ref(),
 
     sscheduler:send({Name}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     sscheduler:send({Name, Name}, Ref),
-    do_receive(Ref),
+    receive Ref -> ok after 0 -> exit(no_msg) end,
 
     global:unregister_name({?MODULE, via}),
 
@@ -280,8 +280,3 @@ send_empty(_) ->
     end,
 
     ok.
-
-%% Helpers
-
-do_receive(Ref) ->
-    receive Ref -> ok after 0 -> error(no_msg, [Ref]) end.
