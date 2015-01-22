@@ -67,6 +67,9 @@
                        non_neg_integer() | infinity, drop | drop_r}.
 -type squeue() :: squeue:squeue().
 
+-export_type([broker/0]).
+-export_type([queue_spec/0]).
+
 -record(config, {interval :: pos_integer(),
                  next_timeout = 0 :: non_neg_integer(),
                  timer = make_ref() :: reference()}).

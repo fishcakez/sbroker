@@ -70,6 +70,9 @@
 -type queue_spec() :: {module(), any(), out | out_r,
                        non_neg_integer() | infinity, drop | drop_r}.
 
+-export_type([throttle/0]).
+-export_type([queue_spec/0]).
+
 -record(config, {interval :: pos_integer(),
                  next_timeout = 0 :: non_neg_integer(),
                  timer = make_ref() :: reference(),
@@ -287,7 +290,7 @@ signal(_, Ref, {retry, _} = Response) ->
 %% This function can also be used to forget any data used by `signal/3' while
 %% the lock is still active. Future calls to `signal/3' on the same lock will
 %% still work and may re-add an entry to the process dictionary.
--spec erlang:erase(Ref) -> ok when
+-spec erase(Ref) -> ok when
       Ref :: reference().
 erase(Ref) ->
     _ = erlang:erase({?MODULE, Ref}),
