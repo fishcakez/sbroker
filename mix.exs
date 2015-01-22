@@ -22,7 +22,7 @@ defmodule SBroker.Mixfile do
 
       defp package do
         [contributors: ["James Fish"],
-          licenses: ["Dual BSD/GPL v2.0"],
+          licenses: ["Apache v2.0"],
           links: %{"Github" => "https://github.com/fishcakez/sbroker"}]
       end
 
