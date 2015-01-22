@@ -161,6 +161,4 @@ rebar get-deps compile ct -C rebar.test.config
 
 License
 -------
-Dual BSD/GPL license
-
-This is the license used by the CoDel authors in their example implementation.
+Apache License, Version 2.0
