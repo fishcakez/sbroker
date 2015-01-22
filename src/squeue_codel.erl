@@ -1,5 +1,5 @@
 %% @doc Implements CoDel based roughly on Controlling Queue Delay, see
-%% reference, with some changes.
+%% reference.
 %%
 %% `squeue_codel' can be used as the active queue management module in a
 %% `squeue' queue. It's arguments are of the form `{Target, Interval}', with
