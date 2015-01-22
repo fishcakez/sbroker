@@ -21,7 +21,7 @@
 %% of the process associated with the name. If no process is associated with the
 %% name returns `undefined'.
 -spec whereis_name(Processes) -> Process | undefined when
-      Processes :: tuple(sbroker:broker()) | tuple(sthrottle:throttle()),
+      Processes :: tuple(),
       Process :: pid() | {atom(), node()}.
 whereis_name({}) ->
     undefined;
@@ -37,7 +37,7 @@ whereis_name(Tuple) ->
 %% a locally registered name on another node, or a process is associated with
 %% the name. Otherwise exits.
 -spec send(Throttle, Msg) -> ok when
-      Throttle :: tuple(sbroker:broker()) | tuple(sthrottle:throttle()),
+      Throttle :: tuple(),
       Msg :: any().
 send(Brokers, Msg) ->
     case whereis_name(Brokers) of
