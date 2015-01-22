@@ -17,25 +17,21 @@
 
 %% test cases
 
--export([statem/1]).
+-export([naive/1]).
+-export([timeout/1]).
+-export([codel/1]).
+-export([codel_timeout/1]).
 
 %% common_test api
 
 all() ->
-    [{group, naive},
-     {group, timeout},
-     {group, codel},
-     {group, codel_timeout}].
+    [{group, property}].
 
 suite() ->
     [{timetrap, {seconds, 30}}].
 
 groups() ->
-    [{naive, [{group, property}]},
-     {timeout, [{group, property}]},
-     {codel, [{group, property}]},
-     {codel_timeout, [{group, property}]},
-     {property, [statem]}].
+    [{property, [parallel], [naive, timeout, codel, codel_timeout]}].
 
 init_per_suite(Config) ->
     QcOpts = [{numtests, 300}, long_result, {on_output, fun log/2}],
@@ -47,18 +43,6 @@ end_per_suite(_Config) ->
 group(_Group) ->
     [].
 
-init_per_group(naive, Config) ->
-    init_per_group(all, [{quickcheck_module, squeue_naive_statem} |
-                         Config]);
-init_per_group(timeout, Config) ->
-    init_per_group(all, [{quickcheck_module, squeue_timeout_statem} |
-                         Config]);
-init_per_group(codel, Config) ->
-    init_per_group(all, [{quickcheck_module, squeue_codel_statem} |
-                         Config]);
-init_per_group(codel_timeout, Config) ->
-    init_per_group(all, [{quickcheck_module, squeue_codel_timeout_statem} |
-                         Config]);
 init_per_group(property, Config) ->
     case code:is_loaded(proper) of
         {file, _} ->
@@ -85,10 +69,9 @@ end_per_testcase(_TestCase, _Config) ->
 
 %% test cases
 
-statem(Config) ->
-    QcMod = ?config(quickcheck_module, Config),
+naive(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
-    case QcMod:quickcheck(QcOpts) of
+    case squeue_naive_statem:quickcheck(QcOpts) of
         true ->
             ok;
         {error, Reason} ->
@@ -98,6 +81,42 @@ statem(Config) ->
             error(counterexample)
     end.
 
+
+timeout(Config) ->
+    QcOpts = ?config(quickcheck_options, Config),
+    case squeue_timeout_statem:quickcheck(QcOpts) of
+        true ->
+            ok;
+        {error, Reason} ->
+            error(Reason);
+        CounterExample ->
+            ct:log("Counter Example:~n~p", [CounterExample]),
+            error(counterexample)
+    end.
+
+codel(Config) ->
+    QcOpts = ?config(quickcheck_options, Config),
+    case squeue_codel_statem:quickcheck(QcOpts) of
+        true ->
+            ok;
+        {error, Reason} ->
+            error(Reason);
+        CounterExample ->
+            ct:log("Counter Example:~n~p", [CounterExample]),
+            error(counterexample)
+    end.
+
+codel_timeout(Config) ->
+    QcOpts = ?config(quickcheck_options, Config),
+    case squeue_codel_timeout_statem:quickcheck(QcOpts) of
+        true ->
+            ok;
+        {error, Reason} ->
+            error(Reason);
+        CounterExample ->
+            ct:log("Counter Example:~n~p", [CounterExample]),
+            error(counterexample)
+    end.
 %% Custom log format.
 log(".", []) ->
     ok;

@@ -32,18 +32,16 @@
 %% common_test api
 
 all() ->
-    [{group, whereis},
-     {group, send}].
+    [{group, via}].
 
 suite() ->
     [{ct_hooks, [cth_surefire]},
      {timetrap, {seconds, 120}}].
 
 groups() ->
-    [{whereis, [parallel],
-      [whereis_pid, whereis_local, whereis_global, whereis_via, whereis_empty]},
-     {send, [parallel],
-      [send_pid, send_local, send_global, send_via, send_empty]}].
+    [{via, [parallel], [whereis_pid, whereis_local, whereis_global, whereis_via,
+                        whereis_empty, send_pid, send_local, send_global,
+                        send_via, send_empty]}].
 
 init_per_suite(Config) ->
     Config.
