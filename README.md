@@ -159,11 +159,6 @@ Rebar fetches test dependency and runs common test:
 rebar get-deps compile ct -C rebar.test.config
 ```
 
-Roadmap
--------
-
-* Implement a pool that resizes based on feedback from sbroker.
-
 License
 -------
 Dual BSD/GPL license
