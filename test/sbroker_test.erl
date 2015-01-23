@@ -17,29 +17,27 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @private
--module(sbroker_util).
+-module(sbroker_test).
 
--export([whereis/1]).
+-behaviour(sbroker).
 
--type process() :: pid()| atom() | {atom(), node()} | {global, any()} |
-    {via, module(), any()}.
+%% public api
 
+-export([start_link/0]).
 
--spec whereis(Process) -> Pid | {Name, Node} | undefined when
-      Process :: process(),
-      Pid :: pid(),
-      Name :: atom(),
-      Node :: node().
-whereis(Pid) when is_pid(Pid) ->
-    Pid;
-whereis(Name) when is_atom(Name) ->
-    erlang:whereis(Name);
-whereis({Name, Node}) when is_atom(Name) andalso Node =:= node() ->
-    erlang:whereis(Name);
-whereis({Name, Node} = Process) when is_atom(Name) andalso is_atom(Node) ->
-    Process;
-whereis({global, Name}) ->
-    global:whereis_name(Name);
-whereis({via, Mod, Name}) ->
-    Mod:whereis_name(Name).
+%% sbroker api
+
+-export([init/1]).
+
+%% public api
+
+-spec start_link() -> {ok, Pid} when
+      Pid :: pid().
+start_link() ->
+    sbroker:start_link(?MODULE, undefined).
+
+%% sbroker api
+
+init(undefined) ->
+    QSpec = {squeue_timeout, 200, out, infinity, drop},
+    {ok, {QSpec, QSpec, 100}}.

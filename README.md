@@ -27,15 +27,6 @@ reference. If no match is found, returns `{drop, SojournTime}`.
 Processes calling `sbroker:ask/1` are only matched with a process calling
 `sbroker:ask_r/1` and vice versa.
 
-Example
--------
-
-```erlang
-{ok, Broker} = sbroker:start_link(),
-Pid = spawn_link(fun() -> sbroker:ask_r(Broker) end),
-{go, _Ref, Pid, _SojournTime} = sbroker:ask(Broker).
-```
-
 Usage
 -----
 
@@ -59,9 +50,17 @@ size a process is dropped. The dropping strategy is determined by
 `Drop`, which is either the atom `drop` (head drop) or the atom `drop_r`
 (tail drop).
 
-An `sbroker` is started using `sbroker:start_link/0,1,3,4`:
+An `sbroker` is started using `sbroker:start_link/2,3`:
 ```erlang
-sbroker:start_link(AskQueueSpec, AskRQueueSpec, Interval).
+sbroker:start_link(Module, Args).
+sbroker:start_link(Name, Module, Args).
+```
+
+The sbroker will call `Module:init(Args)`, which should return the specification
+for the sbroker:
+```erlang
+init(_) ->
+    {ok, {AskQueueSpec, AskRQueueSpec, Interval}}.
 ```
 `AskQueueSpec` is the `queue_spec` for the queue containing processes calling
 `ask/1`. The queue is referred to as the `ask` queue. Similarly
@@ -75,7 +74,41 @@ the `Interval`. Setting a suitable interval ensures that active queue
 management can occur if no processes are queued or dequeued for a period
 of time.
 
-Asynchronous versions of `ask/1` and `ask_r/1` are avaliable as
+For example:
+```erlang
+-module(sbroker_example).
+
+-behaviour(sbroker).
+
+-export([start_link/0]).
+-export([init/1]).
+
+start_link() ->
+    sbroker:start_link(?MODULE, undefined).
+
+init(_) ->
+    QueueSpec = {squeue_timeout, 200, out, 16, drop},
+    Interval = 100,
+    {ok, {QueueSpec, QueueSpec, Interval}}.
+```
+`sbroker_example:start_link/0` will start an `sbroker` with queues configured by 
+`QueueSpec`.
+
+This configuration uses the `squeue_timeout` queue management module which drops
+requests after they have been in the queue for `200` milliseconds. `out` sets
+the queue to `FIFO`. `16` sets the maximum length of the queue. `drop` sets the
+queue to drop processes from the head of the queue (head drop) when the
+maximum size is reached. `Interval` sets the poll rate of the queue, which means
+that the maximum time between drops is `100` milliseconds.
+
+To use this `sbroker`:
+```erlang
+{ok, Broker} = sbroker_example:start_link(),
+Pid = spawn_link(fun() -> sbroker:ask_r(Broker) end),
+{go, _Ref, Pid, _SojournTime} = sbroker:ask(Broker).
+```
+
+Asynchronous versions of `ask/1` and `ask_r/1` are available as
 `async_ask/1` and `async_ask_r/1`. On a successful match the following
 message is sent:
 ```erlang
@@ -90,7 +123,7 @@ return values of `async_ask/1` and `async_ask_r/1`. If a match is not found:
 Asynchronous requests can be cancelled with `cancel/2`:
 
 ```erlang
-{ok, Broker} = sbroker:start_link().
+{ok, Broker} = sbroker_example:start_link().
 {await, AsyncRef, Broker} = sbroker:async_ask(Broker).
 ok = sbroker:cancel(Broker, AsyncRef).
 ```

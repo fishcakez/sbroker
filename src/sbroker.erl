@@ -53,11 +53,11 @@
 -export([async_ask_r/1]).
 -export([async_ask_r/2]).
 -export([cancel/2]).
+-export([change_config/2]).
 
--export([start_link/0]).
--export([start_link/1]).
+-export([start_link/2]).
 -export([start_link/3]).
--export([start_link/4]).
+
 
 %% gen_fsm api
 
@@ -84,24 +84,18 @@
 -type start_return() :: {ok, pid()} | {error, any()}.
 -type queue_spec() :: {module(), any(), out | out_r,
                        non_neg_integer() | infinity, drop | drop_r}.
--type squeue() :: squeue:squeue().
 
 -export_type([broker/0]).
 -export_type([queue_spec/0]).
 
--record(config, {interval :: pos_integer(),
-                 next_timeout = 0 :: non_neg_integer(),
-                 timer = make_ref() :: reference()}).
+-callback init(Args :: any()) ->
+    {ok, {queue_spec(), queue_spec(), pos_integer()}} | ignore.
 
--record(queue, {out :: out | out_r,
-                drop_out :: out | out_r,
-                size :: non_neg_integer() | infinity,
-                len = 0 :: non_neg_integer(),
-                squeue :: squeue()}).
-
--record(state, {config :: #config{},
-                bidding :: #queue{squeue :: squeue()},
-                asking :: #queue{squeue :: squeue()}}).
+-record(state, {module :: module(),
+                args :: any(),
+                timer :: sbroker_timer:timer(),
+                bidding :: sbroker_queue:drop_queue(),
+                asking :: sbroker_queue:drop_queue()}).
 
 %% public api
 
@@ -121,7 +115,6 @@
       Drop :: {drop, SojournTime}.
 ask(Broker) ->
     gen_fsm:sync_send_event(Broker, ask, infinity).
-
 
 %% @doc Tries to match with a process calling `ask/1' on the same broker.
 %%
@@ -169,15 +162,15 @@ nb_ask_r(Broker) ->
     gen_fsm:sync_send_event(Broker, nb_bid, infinity).
 
 %% @doc Monitors the broker and sends an asynchronous request to match with a
-%% process calling `ask_r/1'. Returns `{await, ARef, Process}'.
+%% process calling `ask_r/1'. Returns `{await, Tag, Process}'.
 %%
-%% `ARef' is a monitor `reference()' that uniquely identifies the reply
+%% `Tag' is a monitor `reference()' that uniquely identifies the reply
 %% containing the result of the request. `Process', is the pid (`pid()') or
 %% process name (`{atom(), node()}') of the monitored broker. To cancel the
-%% request call `cancel(Process, ARef)'.
+%% request call `cancel(Process, Tag)'.
 %%
-%% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
-%% `{ARef, {drop, SojournTime}}'.
+%% The reply is of the form `{Tag, {go, Ref, Pid, SojournTime}' or
+%% `{Tag, {drop, SojournTime}}'.
 %%
 %% Multiple asynchronous requests can be made from a single process to a
 %% broker and no guarantee is made of the order of replies. A process making
@@ -186,32 +179,32 @@ nb_ask_r(Broker) ->
 %%
 %% @see cancel/2
 %% @see async_ask/2
--spec async_ask(Broker) -> {await, ARef, Process} when
+-spec async_ask(Broker) -> {await, Tag, Process} when
       Broker :: broker(),
-      ARef :: reference(),
+      Tag :: reference(),
       Process :: pid() | {atom(), node()}.
 async_ask(Broker) ->
     case sbroker_util:whereis(Broker) of
         undefined ->
             exit({noproc, {?MODULE, async_ask, [Broker]}});
         Broker2 ->
-            ARef = monitor(process, Broker2),
-            %% Will use {self(), ARef} as the From term from a sync call. This
-            %% means that a reply is sent to self() in form {ARef, Reply}.
-            gen_fsm:send_event(Broker2, {ask, {self(), ARef}}),
-            {await, ARef, Broker2}
+            Tag = monitor(process, Broker2),
+            %% Will use {self(), Tag} as the From term from a sync call. This
+            %% means that a reply is sent to self() in form {Tag, Reply}.
+            gen_fsm:send_event(Broker2, {ask, {self(), Tag}}),
+            {await, Tag, Broker2}
     end.
 
 %% @doc Sends an asynchronous request to match with a process calling `ask_r/1'.
-%% Returns `{await, ARef, Process}'.
+%% Returns `{await, Tag, Process}'.
 %%
-%% `ARef' is a `reference()' that identifies the reply containing the result of
-%% the request. `Process', is the pid (`pid()') or process name
-%% (`{atom(), node()}') of the broker. To cancel all requests identified by
-%% `ARef' on broker `Process' call `cancel(Process, ARef)'.
+%% `Tag' is a `any()' that identifies the reply containing the result of the
+%% request. `Process', is the pid (`pid()') or process name (`{atom(), node()}')
+%% of the broker. To cancel all requests identified by `Tag' on broker
+%% `Process' call `cancel(Process, Tag)'.
 %%
-%% The reply is of the form `{ARef, {go, Ref, Pid, SojournTime}' or
-%% `{ARef, {drop, SojournTime}}'.
+%% The reply is of the form `{Tag, {go, Ref, Pid, SojournTime}' or
+%% `{Tag, {drop, SojournTime}}'.
 %%
 %% Multiple asynchronous requests can be made from a single process to a
 %% broker and no guarantee is made of the order of replies. If the broker
@@ -219,17 +212,17 @@ async_ask(Broker) ->
 %% the caller should take appropriate steps to handle this scenario.
 %%
 %% @see cancel/2
--spec async_ask(Broker, ARef) -> {await, ARef, Process} when
+-spec async_ask(Broker, Tag) -> {await, Tag, Process} when
       Broker :: broker(),
-      ARef :: reference(),
+      Tag :: any(),
       Process :: pid() | {atom(), node()}.
-async_ask(Broker, ARef) ->
+async_ask(Broker, Tag) ->
     case sbroker_util:whereis(Broker) of
         undefined ->
             exit({noproc, {?MODULE, async_ask, [Broker]}});
         Broker2 ->
-            gen_fsm:send_event(Broker2, {ask, {self(), ARef}}),
-            {await, ARef, Broker2}
+            gen_fsm:send_event(Broker2, {ask, {self(), Tag}}),
+            {await, Tag, Broker2}
     end.
 
 %% @doc Monitors the broker and sends an asynchronous request to match with a
@@ -237,35 +230,35 @@ async_ask(Broker, ARef) ->
 %%
 %% @see async_ask/1
 %% @see cancel/2
--spec async_ask_r(Broker) -> {await, ARef, Process} when
+-spec async_ask_r(Broker) -> {await, Tag, Process} when
       Broker :: broker(),
-      ARef :: reference(),
+      Tag :: reference(),
       Process :: pid() | {atom(), node()}.
 async_ask_r(Broker) ->
     case sbroker_util:whereis(Broker) of
         undefined ->
             exit({noproc, {?MODULE, async_ask_r, [Broker]}});
         Broker2 ->
-            ARef = monitor(process, Broker2),
-            gen_fsm:send_event(Broker2, {bid, {self(), ARef}}),
-            {await, ARef, Broker2}
+            Tag = monitor(process, Broker2),
+            gen_fsm:send_event(Broker2, {bid, {self(), Tag}}),
+            {await, Tag, Broker2}
     end.
 
 %% @doc Sends an asynchronous request to match with a process calling `ask/1'.
 %%
 %% @see async_ask/2
 %% @see cancel/2
--spec async_ask_r(Broker, ARef) -> {await, ARef, Process} when
+-spec async_ask_r(Broker, Tag) -> {await, Tag, Process} when
       Broker :: broker(),
-      ARef :: reference(),
+      Tag :: any(),
       Process :: pid() | {atom(), node()}.
-async_ask_r(Broker, ARef) ->
+async_ask_r(Broker, Tag) ->
     case sbroker_util:whereis(Broker) of
         undefined ->
             exit({noproc, {?MODULE, async_ask_r, [Broker]}});
         Broker2 ->
-            gen_fsm:send_event(Broker2, {bid, {self(), ARef}}),
-            {await, ARef, Broker2}
+            gen_fsm:send_event(Broker2, {bid, {self(), Tag}}),
+            {await, Tag, Broker2}
     end.
 
 %% @doc Cancels an asynchronous request. Returns `ok' on success and
@@ -274,43 +267,37 @@ async_ask_r(Broker, ARef) ->
 %%
 %% @see async_ask/1
 %% @see async_ask_r/1
--spec cancel(Broker, ARef) -> ok | {error, not_found} when
+-spec cancel(Broker, Tag) -> ok | {error, not_found} when
       Broker :: broker(),
-      ARef :: reference().
-cancel(Broker, ARef) ->
-    gen_fsm:sync_send_event(Broker, {cancel, ARef}).
+      Tag :: any().
+cancel(Broker, Tag) ->
+    gen_fsm:sync_send_event(Broker, {cancel, Tag}).
 
-%% @doc Starts a broker with default queues. The default queue uses
-%% `squeue_timeout' with a timeout of `5000', which means that items are dropped
-%% if they spend longer than 5000ms in the queue. The queue has a size of
-%% `infinity' and uses `out' to dequeue items. The tick interval is `200', so
-%% the active queue management timeout strategy is applied at least every 200ms.
--spec start_link() -> StartReturn when
-    StartReturn :: start_return().
-start_link() ->
-    Spec = {squeue_timeout, 5000, out, infinity, drop},
-    start_link(Spec, Spec, 200).
-
-%% @doc Starts a registered broker with default queues.
-%% @see start_link/1
--spec start_link(Name) -> StartReturn when
-      Name :: name(),
-      StartReturn :: start_return().
-start_link(Name) ->
-    Spec = {squeue_timeout, 5000, out, infinity, drop},
-    start_link(Name, Spec, Spec, 200).
-
-%% @doc Starts a broker with custom queues.
+%% @doc Change the configuration of the broker. Returns `ok' on success and
+%% `{error, Reason}' on failure, where `Reason', is the reason for failure.
 %%
-%% The first argument, `AskQueueSpec', is the queue specification for the `ask'
-%% queue. Processes that call `ask/1' (or `async_ask/1') can not be matched with
-%% a process calling `ask_r/1' (or `async_ask_r/1') will be queued in this
-%% queue. Similarly, the second argument, `AskRQueueSpec', is the queue
-%% specification for `ask_r' queue. Processes that call `ask_r/1' (or
-%% `async_ask_r/1') are enqueued in this queue. The third argument, `Interval',
-%% is the interval in milliseconds that the active queue is polled. This ensures
-%% that the active queue management strategy is applied even if no processes are
-%% enqueued/dequeued.
+%% Broker calls the `init/1' callback to get the new configuration. If `init/1'
+%% returns `ignore' the config does not change.
+%%
+%% @see start_link/2
+-spec change_config(Broker, Timeout) -> ok | {error, Reason} when
+      Broker :: broker(),
+      Timeout :: timeout(),
+      Reason :: any().
+change_config(Broker, Timeout) ->
+    gen_fsm:sync_send_all_state_event(Broker, change_config, Timeout).
+
+%% @doc Starts a broker with callback module `Module' and argument `Args'.
+%%
+%% The callback modules implements one callback, `init/1', with single argument
+%% `Args'. `init/1' should return
+%% `{ok, {AskQueueSpec, AskRQueueSpec, Interval})' or `ignore'. `AskQueuSpec' is
+%% the queue specification for the `ask' queue and `AskRQueueSpec' is the queue
+%% specification for the `ask_r' queue. `Interval' is the internval in
+%% milliseconds that the active queue is polled. This ensures that the active
+%% queue management strategy is applied even if no processes are
+%% enqueued/dequeued. In the case of `ignore' the broker is not started and
+%% `start_link' returns `ignore'.
 %%
 %% A queue specifcation takes the following form:
 %% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
@@ -322,26 +309,24 @@ start_link(Name) ->
 %% defines the strategy to take when the maximum size, `Size', of the queue is
 %% exceeded. It is either the atom `drop' (drop from the head of the queue, i.e.
 %% head drop) or `drop_r' (drop from the tail of the queue, i.e. tail drop)
--spec start_link(AskQueueSpec, AskRQueueSpec, Interval) -> StartReturn when
-      AskQueueSpec :: queue_spec(),
-      AskRQueueSpec :: queue_spec(),
-      Interval :: pos_integer(),
+-spec start_link(Module, Args) -> StartReturn when
+      Module :: module(),
+      Args :: any(),
       StartReturn :: start_return().
-start_link(AskQueueSpec, AskRQueueSpec, Interval) ->
-    gen_fsm:start_link(?MODULE, {AskQueueSpec, AskRQueueSpec, Interval}, []).
+start_link(Module, Args) ->
+    gen_fsm:start_link(?MODULE, {Module, Args}, []).
 
-%% @doc Starts a registered broker with custom queues.
-%% @see start_link/3
--spec start_link(Name, AskQueueSpec, AskRQueueSpec, Interval) ->
-    StartReturn when
+%% @doc Starts a broker with name `Name', callback module `Module' and argument
+%% `Args'.
+%%
+%% @see start_link/2
+-spec start_link(Name, Module, Args) -> StartReturn when
       Name :: name(),
-      AskQueueSpec :: queue_spec(),
-      AskRQueueSpec :: queue_spec(),
-      Interval :: pos_integer(),
+      Module :: module(),
+      Args :: any(),
       StartReturn :: start_return().
-start_link(Name, AskQueueSpec, AskRQueueSpec, Interval) ->
-    gen_fsm:start_link(Name, ?MODULE, {AskQueueSpec, AskRQueueSpec, Interval},
-                       []).
+start_link(Name, Module, Args) ->
+    gen_fsm:start_link(Name, ?MODULE, {Module, Args}, []).
 
 %% gen_fsm api
 
@@ -349,22 +334,25 @@ start_link(Name, AskQueueSpec, AskRQueueSpec, Interval) ->
 %% difference between ask and ask_r clearer.
 
 %% @private
-init({AskQueueSpec, AskRQueueSpec, Interval}) ->
-    Config = #config{interval=Interval},
-    State = #state{config=start_timer(Config), asking=new(AskQueueSpec),
-                   bidding=new(AskRQueueSpec)},
-    {ok, bidding, State}.
+init({Module, Args}) ->
+    case catch Module:init(Args) of
+        {ok, {AskQueueSpec, AskRQueueSpec, Interval}} ->
+            init(Module, Args, AskQueueSpec, AskRQueueSpec, Interval);
+        ignore ->
+            ignore;
+        {'EXIT', Reason} ->
+            {stop, Reason};
+        Other ->
+            {stop, {bad_return, {Module, init, Other}}}
+    end.
 
 %% @private
 bidding({bid, Bid}, State) ->
     bidding_bid(Bid, State);
 bidding({ask, Ask}, State) ->
     bidding_ask(Ask, State);
-bidding({timeout, TRef, ?MODULE},
-        #state{config=#config{timer=TRef, next_timeout=Time}} = State) ->
-    {next_state, bidding, bidding_timeout(Time, State)};
-bidding({timeout, _, ?MODULE}, State) ->
-    {next_state, bidding, State}.
+bidding({timeout, TRef, sbroker_timer}, State) when is_reference(TRef) ->
+    {next_state, bidding, bidding_timeout(State)}.
 
 %% @private
 bidding(bid, Bid, State) ->
@@ -376,8 +364,8 @@ bidding(ask, Ask, State) ->
     bidding_ask(Ask, State);
 bidding(nb_ask, Ask, State) ->
     bidding_nb_ask(Ask, State);
-bidding({cancel, ARef}, _From, State) ->
-    {Reply, NState} = bidding_cancel(ARef, State),
+bidding({cancel, Tag}, _From, State) ->
+    {Reply, NState} = bidding_cancel(Tag, State),
     {reply, Reply, bidding, NState}.
 
 %% @private
@@ -385,11 +373,8 @@ asking({bid, Bid}, State) ->
     asking_bid(Bid, State);
 asking({ask, Ask}, State) ->
     asking_ask(Ask, State);
-asking({timeout, TRef, ?MODULE},
-       #state{config=#config{timer=TRef, next_timeout=Time}} = State) ->
-    {next_state, asking, asking_timeout(Time, State)};
-asking({timeout, _, ?MODULE}, State) ->
-    {next_state, asking, State}.
+asking({timeout, TRef, sbroker_timer}, State) when is_reference(TRef) ->
+    {next_state, asking, asking_timeout(State)}.
 
 %% @private
 asking(bid, Bid, State) ->
@@ -401,8 +386,8 @@ asking(ask, Ask, State) ->
 asking(nb_ask, Ask, State) ->
     retry(Ask),
     {next_state, asking, State};
-asking({cancel, ARef}, _From, State) ->
-    {Reply, NState} = asking_cancel(ARef, State),
+asking({cancel, Tag}, _From, State) ->
+    {Reply, NState} = asking_cancel(Tag, State),
     {reply, Reply, asking, NState}.
 
 %% @private
@@ -410,19 +395,20 @@ handle_event(Event, _, State) ->
     {stop, {bad_event, Event}, State}.
 
 %% @private
-handle_sync_event(force_timeout, _, StateName,
-             #state{config=#config{timer=TRef}} = State) ->
-    _ = erlang:cancel_timer(TRef),
-    gen_fsm:send_event(self(), {timeout, TRef, ?MODULE}),
+handle_sync_event(change_config, _, StateName, State) ->
+    {Reply, NState} = safe_config_change(State),
+    {reply, Reply, StateName, NState};
+handle_sync_event(force_timeout, _, StateName, State) ->
+    gen_fsm:send_event(self(), {timeout, make_ref(), sbroker_timer}),
     {reply, ok, StateName, State};
 handle_sync_event(Event, _, _, State) ->
     {stop, {bad_event, Event}, State}.
 
 %% @private
 handle_info({'DOWN', MRef, _, _, _}, bidding, State) ->
-    {next_state, bidding, bidding_filter(MRef, State)};
+    {next_state, bidding, bidding_down(MRef, State)};
 handle_info({'DOWN', MRef, _, _, _}, asking, State) ->
-    {next_state, asking, asking_filter(MRef, State)};
+    {next_state, asking, asking_down(MRef, State)};
 handle_info(Msg, StateName, State) ->
     error_logger:error_msg("sbroker ~p received unexpected message: ~p~n",
                            [self(), Msg]),
@@ -430,7 +416,7 @@ handle_info(Msg, StateName, State) ->
 
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) ->
-    {ok, StateName, State}.
+    {ok, StateName, config_change(State)}.
 
 %% @private
 terminate(_Reason, _StateName, _State) ->
@@ -444,180 +430,148 @@ force_timeout(Broker) ->
 
 %% Internal
 
-start_timer(#config{interval=Interval, next_timeout=NextTimeout} = Config) ->
-    TRef = gen_fsm:start_timer(Interval, ?MODULE),
-    Config#config{next_timeout=NextTimeout+Interval, timer=TRef}.
+init(Module, Args, AskQueueSpec, AskRQueueSpec, Interval) ->
+    {Time, Timer} = sbroker_timer:start(Interval),
+    A = sbroker_queue:new(Time, AskQueueSpec),
+    B = sbroker_queue:new(Time, AskRQueueSpec),
+    State = #state{module=Module, args=Args, timer=Timer, asking=A, bidding=B},
+    {ok, bidding, State}.
 
-read_timer(#config{next_timeout=NextTimeout, timer=TRef} = Config) ->
-    case erlang:read_timer(TRef) of
-        false ->
-            {start_timer(Config), NextTimeout};
-        Rem ->
-            {Config, NextTimeout-Rem}
-    end.
+bidding_bid(Bid, #state{timer=Timer, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    NB = sbroker_queue:in(Time, Bid, B),
+    {next_state, bidding, State#state{timer=NTimer, bidding=NB}}.
 
-new({Mod, Args, Out, Size, Drop})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
-    S=squeue:new(Mod, Args),
-    #queue{out=Out, drop_out=drop_out(Drop), size=Size, squeue=S}.
-
-drop_out(drop) -> out;
-drop_out(drop_r) -> out_r.
-
-bidding_bid(Bid, #state{config=Config, bidding=B} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    NState = State#state{config=NConfig, bidding=in(Time, Bid, B)},
-    {next_state, bidding, NState}.
-
-bidding_ask(Ask, #state{config=Config, bidding=B, asking=A} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    case out(Time, B) of
+bidding_ask(Ask, #state{timer=Timer, bidding=B, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    case sbroker_queue:out(Time, B) of
         {{SojournTime, {MRef, Bid}}, NB} ->
             settle(MRef, Bid, SojournTime, Ask, 0),
-            {next_state, bidding, State#state{config=NConfig, bidding=NB}};
+            {next_state, bidding, State#state{timer=NTimer, bidding=NB}};
         {empty, NB} ->
-            NA = in(Time, Ask, A),
-            NState = State#state{config=NConfig, bidding=NB, asking=NA},
+            NA = sbroker_queue:in(Time, Ask, A),
+            NState = State#state{timer=NTimer, bidding=NB, asking=NA},
             {next_state, asking, NState}
     end.
 
-bidding_nb_ask(Ask, #state{config=Config, bidding=B} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    case out(Time, B) of
+bidding_nb_ask(Ask, #state{timer=Timer, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    case sbroker_queue:out(Time, B) of
         {{SojournTime, {MRef, Bid}}, NB} ->
             settle(MRef, Bid, SojournTime, Ask, 0),
-            {next_state, bidding, State#state{config=NConfig, bidding=NB}};
+            {next_state, bidding, State#state{timer=NTimer, bidding=NB}};
         {empty, NB} ->
             retry(Ask),
-            {next_state, asking, State#state{config=NConfig, bidding=NB}}
+            {next_state, asking, State#state{timer=NTimer, bidding=NB}}
     end.
 
-asking_ask(Ask, #state{config=Config, asking=A} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    NState = State#state{config=NConfig, asking=in(Time, Ask, A)},
-    {next_state, asking, NState}.
+asking_ask(Ask, #state{timer=Timer, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    NA = sbroker_queue:in(Time, Ask, A),
+    {next_state, asking, State#state{timer=NTimer, asking=NA}}.
 
-asking_bid(Bid, #state{config=Config, asking=A, bidding=B} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    case out(Time, A) of
+asking_bid(Bid, #state{timer=Timer, asking=A, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    case sbroker_queue:out(Time, A) of
         {{SojournTime, {MRef, Ask}}, NA} ->
             settle(MRef, Bid, 0, Ask, SojournTime),
-            {next_state, asking, State#state{config=NConfig, asking=NA}};
+            {next_state, asking, State#state{timer=NTimer, asking=NA}};
         {empty, NA} ->
-            NB = in(Time, Bid, B),
-            NState = State#state{config=NConfig, asking=NA, bidding=NB},
+            NB = sbroker_queue:in(Time, Bid, B),
+            NState = State#state{timer=NTimer, asking=NA, bidding=NB},
             {next_state, bidding, NState}
     end.
 
-asking_nb_bid(Bid, #state{config=Config, asking=A} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    case out(Time, A) of
+asking_nb_bid(Bid, #state{timer=Timer, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    case sbroker_queue:out(Time, A) of
         {{SojournTime, {MRef, Ask}}, NA} ->
             settle(MRef, Bid, 0, Ask, SojournTime),
-            {next_state, asking, State#state{config=NConfig, asking=NA}};
+            {next_state, asking, State#state{timer=NTimer, asking=NA}};
         {empty, NA} ->
             retry(Bid),
-            {next_state, bidding, State#state{config=NConfig, asking=NA}}
+            {next_state, bidding, State#state{timer=NTimer, asking=NA}}
     end.
 
 settle(MRef, {PidB, _} = Bid, SojournTimeB, {PidA, _} = Ask, SojournTimeA) ->
     %% Bid notified always messaged first.
     gen_fsm:reply(Bid, {go, MRef, PidA, SojournTimeB}),
-    gen_fsm:reply(Ask, {go, MRef, PidB, SojournTimeA}).
+    gen_fsm:reply(Ask, {go, MRef, PidB, SojournTimeA}),
+    demonitor(MRef, [flush]).
 
 retry(From) ->
     gen_fsm:reply(From, {retry, 0}).
 
-in(Time, {Pid, _} = From,
-   #queue{drop_out=DropOut, size=Size, len=Len, squeue=S} = Q) ->
-    MRef = monitor(process, Pid),
-    {Drops, NS} = squeue:in(Time, {MRef, From}, S),
-    case Len - drops(Drops) + 1 of
-        NLen when NLen > Size ->
-            {Dropped2, NS2} = drop_out(DropOut, NS),
-            Q#queue{len=NLen-Dropped2, squeue=NS2};
-        NLen ->
-            Q#queue{len=NLen, squeue=NS}
-    end.
-
-drop_out(DropOut, Q) ->
-    case squeue:DropOut(Q) of
-        {empty, Drops, NQ} ->
-            {drops(Drops), NQ};
-        {Item, Drops, NQ} ->
-            {drops(Drops) + drops([Item]), NQ}
-    end.
-
-drops(Items) ->
-    drops(Items, 0).
-
-drops([{SojournTime, {MRef, From}} | Rest], N) ->
-    demonitor(MRef, [flush]),
-    gen_fsm:reply(From, {drop, SojournTime}),
-    drops(Rest, N+1);
-drops([], N) ->
-    N.
-
-out(Time, #queue{out=Out, len=Len, squeue=S} = Q) ->
-    case squeue:Out(Time, S) of
-        {empty, Drops, NS2} ->
-            {empty, Q#queue{len=Len-drops(Drops), squeue=NS2}};
-        {{_, {MRef, _}} = Item, Drops, NS2} ->
-            %% It might be nice to use info here also but that would be awkward
-            %% to test.
-            demonitor(MRef, [flush]),
-            {Item, Q#queue{len=Len-drops(Drops)-1, squeue=NS2}}
-    end.
-
-bidding_cancel(ARef, #state{config=Config, bidding=B} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    {Reply, NB} = cancel(Time, ARef, B),
-    {Reply, State#state{config=NConfig, bidding=NB}}.
-
-asking_cancel(ARef, #state{config=Config, asking=A} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    {Reply, NA} = cancel(Time, ARef, A),
-    {Reply, State#state{config=NConfig, asking=NA}}.
-
-cancel(Time, ARef, #queue{len=Len, squeue=S} = Q) ->
-    Cancel = fun({MRef, {_, ARef2}}) when ARef2 =:= ARef ->
-                     demonitor(MRef, [flush]),
-                     false;
-                (_) ->
-                     true
-             end,
-    {Drops, NS} = squeue:filter(Time, Cancel, S),
-    Dropped = drops(Drops),
-    NLen = squeue:len(NS),
-    NQ = Q#queue{len=NLen, squeue=NS},
-    case Len - Dropped of
-        %% No items filtered, i.e. the async request not in queue
-        NLen ->
-            {{error, not_found}, NQ};
+bidding_cancel(Tag, #state{timer=Timer, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    {Cancelled, NB} = sbroker_queue:cancel(Time, Tag, B),
+    NState = State#state{timer=NTimer, bidding=NB},
+    case Cancelled of
+        0 ->
+            {{error, not_found}, NState};
         _ ->
-            {ok, NQ}
+            {ok, NState}
     end.
 
-bidding_timeout(Time, #state{config=Config, bidding=B} = State) ->
-    State#state{config=start_timer(Config), bidding=timeout(Time, B)}.
+asking_cancel(Tag, #state{timer=Timer, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    {Cancelled, NA} = sbroker_queue:cancel(Time, Tag, A),
+    NState = State#state{timer=NTimer, asking=NA},
+    case Cancelled of
+        0 ->
+            {{error, not_found}, NState};
+        _ ->
+            {ok, NState}
+    end.
 
-asking_timeout(Time, #state{config=Config, asking=A} = State) ->
-    State#state{config=start_timer(Config), asking=timeout(Time, A)}.
+bidding_timeout(#state{timer=Timer, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:restart(Timer),
+    NB = sbroker_queue:timeout(Time, B),
+    State#state{timer=NTimer, bidding=NB}.
 
-timeout(Time, #queue{len=Len, squeue=S} = Q) ->
-    {Drops, NS} = squeue:timeout(Time, S),
-    Q#queue{len=Len-drops(Drops), squeue=NS}.
+asking_timeout(#state{timer=Timer, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:restart(Timer),
+    NA = sbroker_queue:timeout(Time, A),
+    State#state{timer=NTimer, asking=NA}.
 
-bidding_filter(MRef, #state{config=Config, bidding=B} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    State#state{config=NConfig, bidding=filter(Time, MRef, B)}.
+bidding_down(MRef, #state{timer=Timer, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    NB = sbroker_queue:down(Time, MRef, B),
+    State#state{timer=NTimer, bidding=NB}.
 
-asking_filter(MRef, #state{config=Config, asking=A} = State) ->
-    {NConfig, Time} = read_timer(Config),
-    State#state{config=NConfig, asking=filter(Time, MRef, A)}.
+asking_down(MRef, #state{timer=Timer, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    NA = sbroker_queue:down(Time, MRef, A),
+    State#state{timer=NTimer, asking=NA}.
 
-filter(Time, MRef, #queue{squeue=S} = Q) ->
-    {Drops, NS} = squeue:filter(Time, fun({MRef2, _}) -> MRef2 =/= MRef end, S),
-    _ = drops(Drops),
-    Q#queue{len=squeue:len(NS), squeue=NS}.
+%% Same format of reply as sys:change_code/4,5
+safe_config_change(State) ->
+    try config_change(State) of
+        NState ->
+            {ok, NState}
+    catch
+        exit:Reason ->
+            {{error, {'EXIT', Reason}}, State};
+        error:Reason ->
+            NReason = {Reason, erlang:get_stacktrace()},
+            {{error, {'EXIT', NReason}}, State}
+    end.
+
+config_change(#state{module=Module, args=Args} = State) ->
+    case catch Module:init(Args) of
+        {ok, {AskQueueSpec, AskRQueueSpec, Interval}} ->
+            config_change(AskQueueSpec, AskRQueueSpec, Interval, State);
+        ignore ->
+            State;
+        {'EXIT', Reason} ->
+            exit(Reason);
+        Other ->
+            exit({bad_return, {Module, init, Other}})
+    end.
+
+config_change(AskQueueSpec, AskRQueueSpec, Interval,
+              #state{timer=Timer, asking=A, bidding=B} = State) ->
+    NA = sbroker_queue:config_change(AskQueueSpec, A),
+    NB = sbroker_queue:config_change(AskRQueueSpec, B),
+    {_, NTimer} = sbroker_timer:config_change(Interval, Timer),
+    State#state{timer=NTimer, asking=NA, bidding=NB}.

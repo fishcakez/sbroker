@@ -111,7 +111,7 @@ statem(Config) ->
     end.
 
 ask_whereis_name(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -124,7 +124,7 @@ ask_whereis_name(_) ->
     ok.
 
 ask_send(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -144,7 +144,7 @@ ask_send(_) ->
     ok.
 
 nb_ask_whereis_name(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -157,7 +157,7 @@ nb_ask_whereis_name(_) ->
     ok.
 
 nb_ask_send(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -177,7 +177,7 @@ nb_ask_send(_) ->
     ok.
 
 ask_r_whereis_name(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -190,7 +190,7 @@ ask_r_whereis_name(_) ->
     ok.
 
 ask_r_send(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -210,7 +210,7 @@ ask_r_send(_) ->
     ok.
 
 nb_ask_r_whereis_name(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
@@ -223,7 +223,7 @@ nb_ask_r_whereis_name(_) ->
     ok.
 
 nb_ask_r_send(_) ->
-    {ok, Broker} = sbroker:start_link(),
+    {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
 
