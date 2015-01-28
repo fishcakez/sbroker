@@ -101,40 +101,6 @@ initial message between the two groups always flows in one direction,
 it may be beneficial for the receiver of that message to call
 `async_ask_r/1` or `ask_r/1`, and the sender to call `async_ask/1` or `ask/1`.
 
-A pool of worker processes using `sbroker` can be dynamically resized based
-on load using `sthrottle`. `sthrottle` limits concurrency using `ask/1`,
-`async_ask/1` and `done/2`. Feedback is applied manually using
-`positive/1` or `negative/1`:
-
-```erlang
-%% Starts throttle with initial concurrency limit of 0.
-{ok, Throttle} = sthrottle:start_link().
-%% Manually positives concurrency limit by 1 (i.e. from 0 to 1):
-ok = sthrottle:positive(Throttle).
-%% Asks for a lock:
-{go, Ref, Throttle, _SojournTime} = sthrottle:ask(Throttle).
-%% Once task is complete releases lock (or exits):
-ok = sthrottle:done(Throttle, Ref).
-```
-
-A feedback loop can be used when working with an `sbroker` using `signal/3`:
-
-```erlang
-{ok, Broker} = sbroker:start_link().
-{ok, Throttle} = sthrottle:start_link().
-ok = sthrottle:positive(Throttle).
-{go, Ref, Pid, 0} = sthrottle:ask(Throttle).
-%% sbroker:ask/1 request is dropped as no ask_r/1 call.
-BrokerResponse = {drop, _SojournTime} = sbroker:ask(Broker).
-%% Applies feedback to throttle based on broker response. In this case reduces
-%% concurrency limit to 0 and the lock is lost.
-{done, _SojournTime} = sthrottle:signal(Pid, Ref, BrokerResponse).
-```
-
-If the broker responds differently or the throttle is in a different
-state the result of `signal/3` can be different. For all other return
-values the lock is not lost, see the docs for more information.
-
 Build
 -----
 Rebar builds:
