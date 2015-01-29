@@ -209,7 +209,7 @@ do_dequeue([SojournTime | L], State) ->
     {{nodrop, SojournTime}, L, State}.
 
 initial_state() ->
-    squeue_statem:initial_state(?MODULE).
+    squeue_statem:initial_state(squeue, ?MODULE).
 
 command(State) ->
     squeue_statem:command(State).

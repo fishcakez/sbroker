@@ -90,7 +90,7 @@ handle(Fun, Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
     {Drops + Drops2, State#state{timeout=NTimeout, codel=NCodel}}.
 
 initial_state() ->
-    squeue_statem:initial_state(?MODULE).
+    squeue_statem:initial_state(squeue, ?MODULE).
 
 command(State) ->
     squeue_statem:command(State).
