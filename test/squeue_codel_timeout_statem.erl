@@ -77,30 +77,17 @@ init({Target, Interval, Timeout}) ->
     #state{codel=squeue_codel_statem:init({Target, Interval}),
            timeout=squeue_timeout_statem:init(Timeout)}.
 
-handle_timeout(Time, L, #state{timeout=Timeout} = State) ->
-    %% Must drop at least as many as squeue_timeout to ensure all those
-    %% that have timed out have been dropped.
-    {MinDrops, NTimeout} = squeue_timeout_statem:handle_timeout(Time, L,
-                                                                Timeout),
-    handle_timeout(Time, L, State#state{timeout=NTimeout}, MinDrops, 0).
+handle_timeout(Time, L, State) ->
+    handle(handle_timeout, Time, L, State).
 
-handle_timeout(_Time, _L, State, MinDrops, Drops) when MinDrops =< Drops ->
-    {Drops, State};
-handle_timeout(Time, L, #state{codel=Codel} = State, MinDrops, Drops) ->
-    {Drops2, NCodel} = squeue_codel_statem:handle_out(Time, L, Codel),
-    NState = State#state{codel=NCodel},
-    {_, NL} = lists:split(Drops2, L),
-    case Drops2 of
-        0 ->
-            handle_timeout(Time, tl(NL), NState, MinDrops, Drops + 1);
-        _ ->
-            NDrops = Drops2 + Drops,
-            handle_timeout(Time, NL, NState, MinDrops, NDrops)
-    end.
+handle_out(Time, L, State) ->
+    handle(handle_out, Time, L, State).
 
-handle_out(Time, L, #state{codel=Codel} = State) ->
-    {Drops, NCodel} = squeue_codel_statem:handle_out(Time, L, Codel),
-    {Drops, State#state{codel=NCodel}}.
+handle(Fun, Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
+    {Drops, NTimeout} = squeue_timeout_statem:Fun(Time, L, Timeout),
+    {_, NL} = lists:split(Drops, L),
+    {Drops2, NCodel} = squeue_codel_statem:Fun(Time, NL, Codel),
+    {Drops + Drops2, State#state{timeout=NTimeout, codel=NCodel}}.
 
 initial_state() ->
     squeue_statem:initial_state(?MODULE).

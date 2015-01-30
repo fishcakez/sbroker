@@ -30,8 +30,7 @@
 
 -export([init/1]).
 -export([handle_timeout/3]).
--export([handle_enqueue/3]).
--export([handle_dequeue/3]).
+-export([handle_out/3]).
 -export([handle_join/3]).
 
 -record(state, {timeout :: pos_integer(),
@@ -70,7 +69,7 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
 
 %% @private
 -ifdef(LEGACY_TYPES).
--spec handle_enqueue(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue(),
       State :: #state{},
@@ -78,7 +77,7 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
       NQ :: queue(),
       NState :: #state{}.
 -else.
--spec handle_enqueue(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: non_neg_integer(),
       Q :: queue:queue(Item),
       State :: #state{},
@@ -86,28 +85,7 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
       NQ :: queue:queue(Item),
       NState :: #state{}.
 -endif.
-handle_enqueue(Time, Q, State) ->
-    handle_timeout(Time, Q, State).
-
-%% @private
--ifdef(LEGACY_TYPES).
--spec handle_dequeue(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: non_neg_integer(),
-      Q :: queue(),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
-      NState :: #state{}.
--else.
--spec handle_dequeue(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: non_neg_integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
-handle_dequeue(Time, Q, State) ->
+handle_out(Time, Q, State) ->
     handle_timeout(Time, Q, State).
 
 %% @private
@@ -131,6 +109,8 @@ handle_join(_Time, Q, State) ->
         false ->
             {[], Q, State}
     end.
+
+%% Internal
 
 timeout(empty, _MinStart, Time, Q, #state{timeout=Timeout} = State, Drops) ->
     %% If an item is added immediately the first time it (or any item) could be

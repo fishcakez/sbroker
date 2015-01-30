@@ -92,13 +92,57 @@ module() ->
     squeue_codel.
 
 args() ->
-    {choose(1, 3), choose(1, 3)}.
+    {choose(1, 3), choose(0, 3)}.
 
 init({Target, Interval}) ->
     #state{target=Target, interval=Interval}.
 
-handle_timeout(_Time, _L, State) ->
-    {0, State}.
+%% To ensure following the reference codel implementationas closely as possible
+%% use the full dequeue approach and "undo" the following:
+%% * Changing first_above_time to 0
+%% * Changing from dropping true to false
+%% This means that a slow queue is detected and items can be dropped but a
+%% real dequeue is required to stop the first (or consecutive) slow intervals.
+handle_timeout(Time, L, #state{first_above_time=0} = State) ->
+    handle_out(Time, L, State);
+handle_timeout(Time, L, #state{dropping=true, target=Target,
+                               first_above_time=FirstAbove} = State) ->
+    {N, NState} = handle_out(Time, L, State),
+    case lists:split(N, L) of
+        {[], _} ->
+            %% No items dropped so state does not change.
+            {0, State};
+        {_, [Sojourn | _]} when Sojourn >= Target ->
+            %% Next item is slow and was not dropped so still dropping.
+            {N, NState};
+        {Dropped, _} ->
+            %% Next item is not below target or queue is empty, so dropping may
+            %% have been set to false. Reverse any state changes that occured by
+            %% observing this.
+            case handle_out(Time, Dropped ++ [Target], State) of
+                {N, NState2} ->
+                    {N, NState2};
+                _ ->
+                    NState2 = NState#state{count=NState#state.count+1,
+                                           dropping=true,
+                                           first_above_time=FirstAbove},
+                    NState3 = control_law(NState#state.drop_next, NState2),
+                    {N, NState3}
+            end
+    end;
+handle_timeout(Time, L, #state{dropping=false,
+                               first_above_time=FirstAbove} = State) ->
+    case handle_out(Time, L, State) of
+        {0, NState} ->
+            %% Head might be below target, or empty queue, maintain previous
+            %% first_above_time.
+            {0, NState#state{first_above_time=FirstAbove}};
+        {1, NState} ->
+            %% End of first interval resulted in drop. If new head is below
+            %% target, or empty queue, first_above_time is reset, maintain
+            %% previous. Dropping is always true after first drop.
+            {1, NState#state{first_above_time=FirstAbove}}
+    end.
 
 handle_out(Time, L, State) ->
     {Item, NL, NState} = do_dequeue(L, State#state{now=Time}),

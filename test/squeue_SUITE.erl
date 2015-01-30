@@ -136,6 +136,7 @@ codel_timeout(Config) ->
             ct:log("Counter Example:~n~p", [CounterExample]),
             error(counterexample)
     end.
+
 %% Custom log format.
 log(".", []) ->
     ok;

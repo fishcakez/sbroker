@@ -76,8 +76,8 @@ handle_timeout(_Time, L, Timeout) ->
     Drop = fun(SojournTime) -> SojournTime >= Timeout end,
     {length(lists:takewhile(Drop, L)), Timeout}.
 
-handle_out(_Time, _L, Timeout) ->
-    {0, Timeout}.
+handle_out(Time, L, Timeout) ->
+    handle_timeout(Time, L, Timeout).
 
 initial_state() ->
     squeue_statem:initial_state(?MODULE).

@@ -171,8 +171,7 @@ out_next(#state{time=Time} = State, Value, [S]) ->
     out_next(State, Value, [Time, S]);
 out_next(State, Value, [Time, _S]) ->
     VS = {call, erlang, element, [3, Value]},
-    NState = advance_time_state(State, Time),
-    case prepare_out_state(NState) of
+    case prepare_out_state(State, Time) of
         #state{list=[]} = NState2 ->
             NState2#state{squeue=VS};
         #state{list=[_Out | NL]} = NState2 ->
@@ -182,13 +181,11 @@ out_next(State, Value, [Time, _S]) ->
 out_post(#state{time=Time} = State, [S], Result) ->
     out_post(State, [Time, S], Result);
 out_post(State, [Time, _S], {Result, Drops, NS}) ->
-    {Drops2, NState} = advance_time(State, Time),
-    case prepare_out(NState) of
-        {Drops3, #state{list=[]}} ->
-            Result =:= empty andalso Drops2 ++ Drops3 =:= Drops andalso
+    case prepare_out(State, Time) of
+        {Drops, #state{list=[]}} ->
+            Result =:= empty andalso squeue:is_queue(NS);
+        {Drops, #state{list=[Result|_]}} ->
             squeue:is_queue(NS);
-        {Drops3, #state{list=[Result|_]}} ->
-            Drops2 ++ Drops3 =:= Drops andalso squeue:is_queue(NS);
         _ ->
             false
     end.
@@ -203,8 +200,7 @@ out_r_next(#state{time=Time} = State, Value, [S]) ->
     out_r_next(State, Value, [Time, S]);
 out_r_next(State, Value, [Time, _S]) ->
     VS = {call, erlang, element, [3, Value]},
-    NState = advance_time_state(State, Time),
-    case prepare_out_state(NState) of
+    case advance_time_state(State, Time) of
         #state{list=[]} = NState2 ->
             NState2#state{squeue=VS};
         #state{list=L} = NState2 ->
@@ -214,14 +210,13 @@ out_r_next(State, Value, [Time, _S]) ->
 out_r_post(#state{time=Time} = State, [S], Result) ->
     out_r_post(State, [Time, S], Result);
 out_r_post(State, [Time, _S], {Result, Drops, NS}) ->
-    {Drops2, NState} = advance_time(State, Time),
-    case prepare_out(NState) of
-        {Drops3, #state{list=[]}} ->
-            Result =:= empty andalso Drops2 ++ Drops3 =:= Drops andalso
-            squeue:is_queue(NS);
-        {Drops3, #state{list=L}} ->
-            Result =:= lists:last(L) andalso Drops2 ++ Drops3 =:= Drops andalso
-            squeue:is_queue(NS)
+    case advance_time(State, Time) of
+        {Drops, #state{list=[]}} ->
+            Result =:= empty andalso squeue:is_queue(NS);
+        {Drops, #state{list=L}} ->
+            Result =:= lists:last(L) andalso squeue:is_queue(NS);
+        _ ->
+            false
     end.
 
 join(S1, {Time2, StartList, Module, Args}) ->
@@ -307,29 +302,25 @@ filter_next(#state{time=Time} = State, Value, [Action, Item, S]) ->
     filter_next(State, Value, [Time, Action, Item, S]);
 filter_next(State, Value, [Time, duplicate, Item, _S]) ->
     VS = {call, erlang, element, [2, Value]},
-    NState = advance_time_state(State, Time),
-    #state{list=L} = NState2 = prepare_out_state(NState),
+    #state{list=L} = NState = advance_time_state(State, Time),
     Duplicate = fun({_, Item2} = Elem) when Item2 =:= Item ->
                         [Elem, Elem];
                    (Other) ->
                         [Other]
                 end,
     NL = lists:flatmap(Duplicate, L),
-    NState2#state{list=NL, squeue=VS};
+    NState#state{list=NL, squeue=VS};
 filter_next(State, Value, [Time, filter, Item, _S]) ->
     VS = {call, erlang, element, [2, Value]},
-    NState = advance_time_state(State, Time),
-    #state{list=L} = NState2 = prepare_out_state(NState),
+    #state{list=L} = NState = advance_time_state(State, Time),
     Filter = fun({_, Item2} ) -> Item2 =:= Item end,
     NL = lists:filter(Filter, L),
-    NState2#state{list=NL, squeue=VS}.
+    NState#state{list=NL, squeue=VS}.
 
 filter_post(#state{time=Time} = State, [Action, Item, S], Result) ->
     filter_post(State, [Time, Action, Item, S], Result);
 filter_post(State, [Time, _Action, _Item, _S], {Drops, NS}) ->
-    {Drops2, NState} = advance_time(State, Time),
-    Drops3 = prepare_out_drops(NState),
-    Drops2 ++ Drops3 =:= Drops andalso squeue:is_queue(NS).
+    advance_time_drops(State, Time) =:= Drops andalso squeue:is_queue(NS).
 
 time_args(#state{squeue=S}) ->
     [S].
@@ -401,19 +392,20 @@ advance_time(#state{mod=Mod, mod_state=ModState, time=Time, list=L} = State,
     {Drops, NL2} = lists:split(DropCount, NL),
     {Drops, State#state{time=NTime, list=NL2, mod_state=NModState}}.
 
-prepare_out_state(State) ->
-    {_, NState} = prepare_out(State),
+prepare_out_state(State, Time) ->
+    {_, NState} = prepare_out(State, Time),
     NState.
 
-prepare_out_drops(State) ->
-    {Drops, _} = prepare_out(State),
-    Drops.
-
-prepare_out(#state{mod=Mod, mod_state=ModState, time=Time, list=L} = State) ->
-    {SojournTimes, _} = lists:unzip(L),
-    {DropCount, NModState} = Mod:handle_out(Time, SojournTimes, ModState),
-    {Drops, NL} = lists:split(DropCount, L),
-    {Drops, State#state{list=NL, mod_state=NModState}}.
+prepare_out(#state{time=Time} = State, NTime) when Time > NTime ->
+    prepare_out(State, Time);
+prepare_out(#state{mod=Mod, mod_state=ModState, time=Time, list=L} = State,
+            NTime) ->
+    Diff = NTime - Time,
+    NL = [{SojournTime + Diff, Item} || {SojournTime, Item} <- L],
+    {SojournTimes, _} = lists:unzip(NL),
+    {DropCount, NModState} = Mod:handle_out(NTime, SojournTimes, ModState),
+    {Drops, NL2} = lists:split(DropCount, NL),
+    {Drops, State#state{time=NTime, list=NL2, mod_state=NModState}}.
 
 droplast(List) ->
     [_ | Rest] = lists:reverse(List),
