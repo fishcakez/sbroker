@@ -51,16 +51,18 @@
 %% common_test api
 
 all() ->
-    [{group, via}].
+    [{group, whereis},
+     {group, send}].
 
 suite() ->
     [{ct_hooks, [cth_surefire]},
      {timetrap, {seconds, 120}}].
 
 groups() ->
-    [{via, [parallel], [whereis_pid, whereis_local, whereis_global, whereis_via,
-                        whereis_empty, send_pid, send_local, send_global,
-                        send_via, send_empty]}].
+    [{whereis, [parallel], [whereis_pid, whereis_local, whereis_global,
+                            whereis_via, whereis_empty]},
+     {send, [parallel], [send_pid, send_local, send_global, send_via,
+                         send_empty]}].
 
 init_per_suite(Config) ->
     Config.
@@ -120,7 +122,7 @@ whereis_local(_) ->
 
 whereis_global(_) ->
     Self = self(),
-    global:register_name({?MODULE, global}, Self),
+    yes = global:register_name({?MODULE, global}, Self),
     Name = {global, {?MODULE, global}},
 
     Self = sscheduler:whereis_name({Name}),
@@ -135,7 +137,7 @@ whereis_global(_) ->
 
 whereis_via(_) ->
     Self = self(),
-    global:register_name({?MODULE, via}, Self),
+    yes = global:register_name({?MODULE, via}, Self),
     Name = {via, global, {?MODULE, via}},
 
     Self = sscheduler:whereis_name({Name}),
@@ -226,7 +228,7 @@ send_local(_) ->
     ok.
 
 send_global(_) ->
-    global:register_name({?MODULE, global}, self()),
+    yes = global:register_name({?MODULE, global}, self()),
     Name = {global, {?MODULE, global}},
     Ref = make_ref(),
 
@@ -257,7 +259,7 @@ send_global(_) ->
     ok.
 
 send_via(_) ->
-    global:register_name({?MODULE, via}, self()),
+    yes = global:register_name({?MODULE, via}, self()),
     Name = {via, global, {?MODULE, via}},
     Ref = make_ref(),
 
