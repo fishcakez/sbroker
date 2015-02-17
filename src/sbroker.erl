@@ -352,7 +352,7 @@ bidding({bid, Bid}, State) ->
 bidding({ask, Ask}, State) ->
     bidding_ask(Ask, State);
 bidding({timeout, TRef, sbroker_timer}, State) when is_reference(TRef) ->
-    {next_state, bidding, bidding_timeout(State)}.
+    {next_state, bidding, bidding_timeout(TRef, State)}.
 
 %% @private
 bidding(bid, Bid, State) ->
@@ -374,7 +374,7 @@ asking({bid, Bid}, State) ->
 asking({ask, Ask}, State) ->
     asking_ask(Ask, State);
 asking({timeout, TRef, sbroker_timer}, State) when is_reference(TRef) ->
-    {next_state, asking, asking_timeout(State)}.
+    {next_state, asking, asking_timeout(TRef, State)}.
 
 %% @private
 asking(bid, Bid, State) ->
@@ -398,9 +398,6 @@ handle_event(Event, _, State) ->
 handle_sync_event(change_config, _, StateName, State) ->
     {Reply, NState} = safe_config_change(State),
     {reply, Reply, StateName, NState};
-handle_sync_event(force_timeout, _, StateName, State) ->
-    gen_fsm:send_event(self(), {timeout, make_ref(), sbroker_timer}),
-    {reply, ok, StateName, State};
 handle_sync_event(Event, _, _, State) ->
     {stop, {bad_event, Event}, State}.
 
@@ -426,7 +423,7 @@ terminate(_Reason, _StateName, _State) ->
 
 %% @hidden
 force_timeout(Broker) ->
-    gen_fsm:sync_send_all_state_event(Broker, force_timeout).
+    gen_fsm:send_event(Broker, {timeout, make_ref(), sbroker_timer}).
 
 %% Internal
 
@@ -524,13 +521,13 @@ asking_cancel(Tag, #state{timer=Timer, asking=A} = State) ->
             {ok, NState}
     end.
 
-bidding_timeout(#state{timer=Timer, bidding=B} = State) ->
-    {Time, NTimer} = sbroker_timer:restart(Timer),
+bidding_timeout(TRef, #state{timer=Timer, bidding=B} = State) ->
+    {Time, NTimer} = sbroker_timer:timeout(TRef, Timer),
     NB = sbroker_queue:timeout(Time, B),
     State#state{timer=NTimer, bidding=NB}.
 
-asking_timeout(#state{timer=Timer, asking=A} = State) ->
-    {Time, NTimer} = sbroker_timer:restart(Timer),
+asking_timeout(TRef, #state{timer=Timer, asking=A} = State) ->
+    {Time, NTimer} = sbroker_timer:timeout(TRef, Timer),
     NA = sbroker_queue:timeout(Time, A),
     State#state{timer=NTimer, asking=NA}.
 

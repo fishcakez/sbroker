@@ -24,7 +24,7 @@
 
 -export([start/1]).
 -export([read/1]).
--export([restart/1]).
+-export([timeout/2]).
 -export([config_change/2]).
 
 %% types
@@ -58,13 +58,15 @@ read(#timer{ref=TRef, next_timeout=NextTimeout} = Timer) ->
             {NextTimeout-Rem, Timer}
     end.
 
--spec restart(Timer) -> {Time, NTimer} when
+-spec timeout(TRef, Timer) -> {Time, NTimer} when
+      TRef :: reference(),
       Timer :: timer(),
       Time :: non_neg_integer(),
       NTimer :: timer().
-restart(#timer{interval=Interval, next_timeout=Now} = Timer) ->
-    TRef = gen_fsm:start_timer(Interval, ?MODULE) ,
-    {Now, Timer#timer{next_timeout=Now+Interval, ref=TRef}}.
+timeout(TRef, #timer{ref=TRef} = Timer) ->
+    restart(Timer);
+timeout(_, Timer) ->
+    read(Timer).
 
 -spec config_change(Interval, Timer) -> {Time, NTimer} when
       Interval :: pos_integer(),
@@ -86,3 +88,9 @@ config_change(Interval, #timer{interval=Interval, next_timeout=NextTimeout,
         Rem ->
             {NextTimeout - Rem, Timer}
     end.
+
+%% Internal
+
+restart(#timer{interval=Interval, next_timeout=Now} = Timer) ->
+    TRef = gen_fsm:start_timer(Interval, ?MODULE) ,
+    {Now, Timer#timer{next_timeout=Now+Interval, ref=TRef}}.
