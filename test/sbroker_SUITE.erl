@@ -41,21 +41,12 @@
 -export([await_timeout/1]).
 -export([await_down/1]).
 -export([statem/1]).
--export([ask_whereis_name/1]).
--export([ask_send/1]).
--export([nb_ask_whereis_name/1]).
--export([nb_ask_send/1]).
--export([ask_r_whereis_name/1]).
--export([ask_r_send/1]).
--export([nb_ask_r_whereis_name/1]).
--export([nb_ask_r_send/1]).
 
 %% common_test api
 
 all() ->
     [{group, simple},
-     {group, property},
-     {group, via}].
+     {group, property}].
 
 suite() ->
     [{ct_hooks, [cth_surefire]},
@@ -63,10 +54,7 @@ suite() ->
 
 groups() ->
     [{simple, [ask, ask_r, await_timeout, await_down]},
-     {property, [statem]},
-     {via, [parallel], [ask_whereis_name, ask_send, nb_ask_whereis_name,
-                        nb_ask_send, ask_r_whereis_name, ask_r_send,
-                        nb_ask_r_whereis_name, nb_ask_r_send]}].
+     {property, [statem]}].
 
 init_per_suite(Config) ->
     QcOpts = [{numtests, 300}, long_result, {on_output, fun log/2}],
@@ -153,138 +141,6 @@ statem(Config) ->
             ct:log("Counter Example:~n~p", [CounterExample]),
             error(counterexample)
     end.
-
-ask_whereis_name(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
-    Self = sbroker_ask:whereis_name(Broker),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-
-    undefined = sbroker_ask:whereis_name(Broker),
-
-    ok.
-
-ask_send(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
-    ok = sbroker_ask:send(Broker, hello),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-    receive hello -> ok after 100 -> exit(timeout) end,
-
-    try sbroker_ask:send(Broker, hello) of
-        ok ->
-            exit(no_exit)
-    catch
-        exit:{noproc, {sbroker_ask, send, [Broker, hello]}} ->
-            ok
-    end,
-
-    ok.
-
-nb_ask_whereis_name(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
-    Self = sbroker_nb_ask:whereis_name(Broker),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-
-    undefined = sbroker_nb_ask:whereis_name(Broker),
-
-    ok.
-
-nb_ask_send(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
-    ok = sbroker_nb_ask:send(Broker, hello),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-    receive hello -> ok after 100 -> exit(timeout) end,
-
-    try sbroker_nb_ask:send(Broker, hello) of
-        ok ->
-            exit(no_exit)
-    catch
-        exit:{noproc, {sbroker_nb_ask, send, [Broker, hello]}} ->
-            ok
-    end,
-
-    ok.
-
-ask_r_whereis_name(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
-    Self = sbroker_ask_r:whereis_name(Broker),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-
-    undefined = sbroker_ask_r:whereis_name(Broker),
-
-    ok.
-
-ask_r_send(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
-    ok = sbroker_ask_r:send(Broker, hello),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-    receive hello -> ok after 100 -> exit(timeout) end,
-
-    try sbroker_ask_r:send(Broker, hello) of
-        ok ->
-            exit(no_exit)
-    catch
-        exit:{noproc, {sbroker_ask_r, send, [Broker, hello]}} ->
-            ok
-    end,
-
-    ok.
-
-nb_ask_r_whereis_name(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
-    Self = sbroker_nb_ask_r:whereis_name(Broker),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-
-    undefined = sbroker_nb_ask_r:whereis_name(Broker),
-
-    ok.
-
-nb_ask_r_send(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-
-    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
-    ok = sbroker_nb_ask_r:send(Broker, hello),
-    receive {Ref, {go, _, Self, _}} -> ok after 100 -> exit(timeout) end,
-    receive hello -> ok after 100 -> exit(timeout) end,
-
-    try sbroker_nb_ask_r:send(Broker, hello) of
-        ok ->
-            exit(no_exit)
-    catch
-        exit:{noproc, {sbroker_nb_ask_r, send, [Broker, hello]}} ->
-            ok
-    end,
-
-    ok.
 
 %% Custom log format.
 log(".", []) ->
