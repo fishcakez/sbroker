@@ -408,20 +408,22 @@ cancel_next(#state{bids=[], cancels=Cancels} = State, _, [Client]) ->
     NState = #state{asks=Asks} = ask_drop_state(State),
     after_next(NState#state{asks=Asks--[Client], cancels=Cancels++[Client]}).
 
-cancel_post(#state{asks=[], bids=Bids} = State, [Client], ok) ->
+cancel_post(#state{asks=[], bids=Bids} = State, [Client], 1) ->
     {Drops, NState} = bid_drop(State),
     drops_post(Drops) andalso after_post(NState#state{bids=Bids--[Client]});
-cancel_post(#state{bids=[], asks=Asks} = State, [Client], ok) ->
+cancel_post(#state{bids=[], asks=Asks} = State, [Client], 1) ->
     {Drops, NState} = ask_drop(State),
     drops_post(Drops) andalso after_post(NState#state{asks=Asks--[Client]});
-cancel_post(#state{asks=[]} = State, [Client], {error, not_found}) ->
+cancel_post(#state{asks=[]} = State, [Client], false) ->
     {Drops, NState} = bid_drop(State),
     drops_post(Drops) andalso lists:member(Client, Drops) andalso
     after_post(NState);
-cancel_post(#state{bids=[]} = State, [Client], {error, not_found}) ->
+cancel_post(#state{bids=[]} = State, [Client], false) ->
     {Drops, NState} = ask_drop(State),
     drops_post(Drops) andalso lists:member(Client, Drops) andalso
-    after_post(NState).
+    after_post(NState);
+cancel_post(_, _, _) ->
+    false.
 
 bad_cancel_args(#state{sbroker=Broker}) ->
     [Broker, make_ref()].
@@ -434,10 +436,10 @@ bad_cancel_next(#state{asks=[]} = State, _, _) ->
 bad_cancel_next(#state{bids=[]} = State, _, _) ->
     after_next(ask_drop_state(State)).
 
-bad_cancel_post(#state{asks=[]} = State, _, {error, not_found}) ->
+bad_cancel_post(#state{asks=[]} = State, _, false) ->
     {Drops, NState} = bid_drop(State),
     drops_post(Drops) andalso after_post(NState);
-bad_cancel_post(#state{bids=[]} = State, _, {error, not_found}) ->
+bad_cancel_post(#state{bids=[]} = State, _, false) ->
     {Drops, NState} = ask_drop(State),
     drops_post(Drops) andalso after_post(NState);
 bad_cancel_post(_, _, _) ->
@@ -648,11 +650,11 @@ client_loop(MRef, Broker, ARef, State, Froms) ->
             exit(normal);
         {MRef, From, cancel} ->
             case sbroker:cancel(Broker, ARef) of
-                ok ->
-                    gen:reply(From, ok),
+                N when is_integer(N) ->
+                    gen:reply(From, N),
                     client_loop(MRef, Broker, ARef, cancelled, Froms);
-                Error ->
-                    gen:reply(From, Error),
+                false ->
+                    gen:reply(From, false),
                     client_loop(MRef, Broker, ARef, State, Froms)
             end;
         {MRef, From, result} when State =:= queued ->

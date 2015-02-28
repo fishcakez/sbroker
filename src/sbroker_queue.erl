@@ -97,7 +97,7 @@ out(Time, #drop_queue{out=Out, len=Len, squeue=S} = Q) ->
       Time :: non_neg_integer(),
       Tag :: tag(),
       Q :: drop_queue(),
-      Cancelled :: non_neg_integer(),
+      Cancelled :: pos_integer() | false,
       NQ :: drop_queue().
 cancel(Time, Tag, #drop_queue{len=Len, squeue=S} = Q) ->
     Cancel = fun({Ref, {_, Tag2}}) when Tag2 =:= Tag ->
@@ -109,8 +109,13 @@ cancel(Time, Tag, #drop_queue{len=Len, squeue=S} = Q) ->
     {Drops, NS} = squeue:filter(Time, Cancel, S),
     Dropped = drops(Drops),
     NLen = squeue:len(NS),
-    Cancelled = Len - Dropped - NLen,
-    {Cancelled, maybe_drop(Q#drop_queue{len=NLen, squeue=NS})}.
+    NQ = maybe_drop(Q#drop_queue{len=NLen, squeue=NS}),
+    case Len - Dropped - NLen of
+        0 ->
+            {false, NQ};
+        N ->
+            {N, NQ}
+    end.
 
 -spec down(Time, Ref, Q) -> NQ when
       Time :: non_neg_integer(),

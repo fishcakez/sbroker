@@ -261,15 +261,16 @@ async_ask_r(Broker, Tag) ->
             {await, Tag, Broker2}
     end.
 
-%% @doc Cancels an asynchronous request. Returns `ok' on success and
-%% `{error, not_found}' if the request does not exist. In the later case a
-%% caller may wish to check its message queue for an existing reply.
+%% @doc Cancels an asynchronous request. Returns the number of cancelled
+%% requests or `false' if no requests exist. In the later case a caller may wish
+%% to check its message queue for an existing reply.
 %%
 %% @see async_ask/1
 %% @see async_ask_r/1
--spec cancel(Broker, Tag) -> ok | {error, not_found} when
+-spec cancel(Broker, Tag) -> Count | false when
       Broker :: broker(),
-      Tag :: any().
+      Tag :: any(),
+      Count :: pos_integer().
 cancel(Broker, Tag) ->
     gen_fsm:sync_send_event(Broker, {cancel, Tag}).
 
@@ -501,25 +502,13 @@ retry(From) ->
 
 bidding_cancel(Tag, #state{timer=Timer, bidding=B} = State) ->
     {Time, NTimer} = sbroker_timer:read(Timer),
-    {Cancelled, NB} = sbroker_queue:cancel(Time, Tag, B),
-    NState = State#state{timer=NTimer, bidding=NB},
-    case Cancelled of
-        0 ->
-            {{error, not_found}, NState};
-        _ ->
-            {ok, NState}
-    end.
+    {Reply, NB} = sbroker_queue:cancel(Time, Tag, B),
+    {Reply, State#state{timer=NTimer, bidding=NB}}.
 
 asking_cancel(Tag, #state{timer=Timer, asking=A} = State) ->
     {Time, NTimer} = sbroker_timer:read(Timer),
-    {Cancelled, NA} = sbroker_queue:cancel(Time, Tag, A),
-    NState = State#state{timer=NTimer, asking=NA},
-    case Cancelled of
-        0 ->
-            {{error, not_found}, NState};
-        _ ->
-            {ok, NState}
-    end.
+    {Reply, NA} = sbroker_queue:cancel(Time, Tag, A),
+    {Reply, State#state{timer=NTimer, asking=NA}}.
 
 bidding_timeout(TRef, #state{timer=Timer, bidding=B} = State) ->
     {Time, NTimer} = sbroker_timer:timeout(TRef, Timer),
