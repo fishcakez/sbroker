@@ -52,6 +52,7 @@
 -export([async_ask/2]).
 -export([async_ask_r/1]).
 -export([async_ask_r/2]).
+-export([await/2]).
 -export([cancel/2]).
 -export([change_config/2]).
 
@@ -259,6 +260,35 @@ async_ask_r(Broker, Tag) ->
         Broker2 ->
             gen_fsm:send_event(Broker2, {bid, {self(), Tag}}),
             {await, Tag, Broker2}
+    end.
+
+%% @doc Await the response to an asynchronous request identified by `Tag'.
+%%
+%% Exits if a response is not received after `Timeout' milliseconds.
+%%
+%% Exits if a `DOWN' message is received with the reference `Tag'.
+%%
+%% @see async_ask/2
+%% @see async_ask_r/2
+-spec await(Tag, Timeout) -> Go | Drop when
+      Tag :: any(),
+      Timeout :: timeout(),
+      Go :: {go, Ref, Pid, SojournTime},
+      Ref :: reference(),
+      Pid :: pid(),
+      SojournTime :: non_neg_integer(),
+      Drop :: {drop, SojournTime}.
+await(Tag, Timeout) ->
+    receive
+        {Tag, {go, _, _, _} = Reply} ->
+            Reply;
+        {Tag, {drop, _} = Reply} ->
+            Reply;
+        {'DOWN', Tag, _, _, Reason} when is_reference(Tag) ->
+            exit({Reason, {?MODULE, await, [Tag, Timeout]}})
+    after
+        Timeout ->
+            exit({timeout, {?MODULE, await, [Tag, Timeout]}})
     end.
 
 %% @doc Cancels an asynchronous request. Returns the number of cancelled

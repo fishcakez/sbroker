@@ -36,6 +36,10 @@
 
 %% test cases
 
+-export([ask/1]).
+-export([ask_r/1]).
+-export([await_timeout/1]).
+-export([await_down/1]).
 -export([statem/1]).
 -export([ask_whereis_name/1]).
 -export([ask_send/1]).
@@ -49,7 +53,8 @@
 %% common_test api
 
 all() ->
-    [{group, property},
+    [{group, simple},
+     {group, property},
      {group, via}].
 
 suite() ->
@@ -57,7 +62,8 @@ suite() ->
      {timetrap, {seconds, 120}}].
 
 groups() ->
-    [{property, [statem]},
+    [{simple, [ask, ask_r, await_timeout, await_down]},
+     {property, [statem]},
      {via, [parallel], [ask_whereis_name, ask_send, nb_ask_whereis_name,
                         nb_ask_send, ask_r_whereis_name, ask_r_send,
                         nb_ask_r_whereis_name, nb_ask_r_send]}].
@@ -97,6 +103,44 @@ end_per_testcase(_TestCase, _Config) ->
     ok.
 
 %% test cases
+
+ask(_) ->
+    {ok, Broker} = sbroker_test:start_link(),
+    Ref = make_ref(),
+    Self = self(),
+    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
+    {go, Ref2, Self, 0} = sbroker:ask(Broker),
+    {go, Ref2, Self, _} = sbroker:await(Ref, 100),
+    ok.
+
+ask_r(_) ->
+    {ok, Broker} = sbroker_test:start_link(),
+    Ref = make_ref(),
+    Self = self(),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
+    {go, Ref2, Self, 0} = sbroker:ask_r(Broker),
+    {go, Ref2, Self, _} = sbroker:await(Ref, 100),
+    ok.
+
+await_timeout(_) ->
+    {ok, Broker} = sbroker_test:start_link(),
+    Ref = make_ref(),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
+    {'EXIT',
+     {timeout, {sbroker, await, [Ref, 0]}}} = (catch sbroker:await(Ref, 0)),
+    ok.
+
+await_down(_) ->
+    Trap = process_flag(trap_exit, true),
+    {ok, Broker} = sbroker_test:start_link(),
+    {await, Ref, Broker} = sbroker:async_ask(Broker),
+    exit(Broker, shutdown),
+    receive {'EXIT', Broker, shutdown} -> ok end,
+    _ = process_flag(trap_exit, Trap),
+    {'EXIT',
+     {shutdown,
+      {sbroker, await, [Ref, 100]}}} = (catch sbroker:await(Ref, 100)),
+    ok.
 
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
