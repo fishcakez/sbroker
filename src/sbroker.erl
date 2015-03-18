@@ -19,7 +19,7 @@
 %%-------------------------------------------------------------------
 %% @doc
 %% This module provides a process match making service. A process joins one of
-%% two queues and is matches with a process in the other queue. The queues can
+%% two queues and is matcheid with a process in the other queue. The queues can
 %% be actively managed using an `squeue' callback module, and passively managed
 %% using head or tail drop. A different strategy can be used for both queues.
 %% Processes that die while in a queue are automatically removed to prevent
@@ -38,6 +38,55 @@
 %% Similarly processes calling `ask_r/1' try to match with/dequeue a process
 %% in the `ask' queue. If no process exists they are queued in the `ask_r' queue
 %% and await a process to call `ask/1'.
+%%
+%% A broker requires a callback module. The callback modules implements one
+%% callback, `init/1', with single argument `Args'. `init/1' should return
+%% `{ok, {AskQueueSpec, AskRQueueSpec, Interval})' or `ignore'. `AskQueuSpec' is
+%% the queue specification for the `ask' queue and `AskRQueueSpec' is the queue
+%% specification for the `ask_r' queue. `Interval' is the internval in
+%% milliseconds that the active queue is polled. This ensures that the active
+%% queue management strategy is applied even if no processes are
+%% enqueued/dequeued. In the case of `ignore' the broker is not started and
+%% `start_link' returns `ignore'.
+%%
+%% A queue specifcation takes the following form:
+%% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
+%% and `Args' are its arguments. The queue is created using
+%% `squeue:new(Module, Arg)'. `Out' defines the method of dequeuing, it is
+%% either the atom `out' (dequeue items from the head, i.e. FIFO), or the
+%% atom `out_r' (dequeue items from the tail, i.e. LIFO). `Size' is the maximum
+%% size of the queue, it is either a `non_neg_integer()' or `infinity'. `Drop'
+%% defines the strategy to take when the maximum size, `Size', of the queue is
+%% exceeded. It is either the atom `drop' (drop from the head of the queue, i.e.
+%% head drop) or `drop_r' (drop from the tail of the queue, i.e. tail drop)
+%%
+%% For example:
+%%
+%% ```
+%% -module(sbroker_example).
+%%
+%% -behaviour(sbroker).
+%%
+%% -export([start_link/0]).
+%% -export([ask/0]).
+%% -export([ask_r/1]).
+%% -export([init/1]).
+%%
+%% start_link() ->
+%%     sbroker:start_link({local, ?MODULE}, ?MODULE, []).
+%%
+%% ask() ->
+%%     sbroker:ask(?MODULE).
+%%
+%% ask_r() ->
+%%     sbroker:ask_r(?MODULE).
+%%
+%% init([]) ->
+%%     AskQueueSpec = {squeue_codel, {5, 100}, out, 64, drop},
+%%     AskRQueueSpec = {squeue_timeout, 5000, out_r, infinity, drop},
+%%     Interval = 200,
+%%     {ok, {AskQueueSpec, AskRQueueSpec, Interval}}.
+%% '''
 -module(sbroker).
 
 -behaviour(gen_fsm).
@@ -82,7 +131,7 @@
 -type broker() :: pid() | atom() | {atom(), node()} | {global, any()}
     | {via, module(), any()}.
 -type name() :: {local, atom()} | {global, any()} | {via, module(), any()}.
--type start_return() :: {ok, pid()} | {error, any()}.
+-type start_return() :: {ok, pid()} | ignore | {error, any()}.
 -type queue_spec() :: {module(), any(), out | out_r,
                        non_neg_integer() | infinity, drop | drop_r}.
 
@@ -302,15 +351,13 @@ await(Tag, Timeout) ->
       Tag :: any(),
       Count :: pos_integer().
 cancel(Broker, Tag) ->
-    gen_fsm:sync_send_event(Broker, {cancel, Tag}).
+    gen_fsm:sync_send_event(Broker, {cancel, Tag}, infinity).
 
 %% @doc Change the configuration of the broker. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason', is the reason for failure.
 %%
 %% Broker calls the `init/1' callback to get the new configuration. If `init/1'
 %% returns `ignore' the config does not change.
-%%
-%% @see start_link/2
 -spec change_config(Broker, Timeout) -> ok | {error, Reason} when
       Broker :: broker(),
       Timeout :: timeout(),
@@ -319,27 +366,6 @@ change_config(Broker, Timeout) ->
     gen_fsm:sync_send_all_state_event(Broker, change_config, Timeout).
 
 %% @doc Starts a broker with callback module `Module' and argument `Args'.
-%%
-%% The callback modules implements one callback, `init/1', with single argument
-%% `Args'. `init/1' should return
-%% `{ok, {AskQueueSpec, AskRQueueSpec, Interval})' or `ignore'. `AskQueuSpec' is
-%% the queue specification for the `ask' queue and `AskRQueueSpec' is the queue
-%% specification for the `ask_r' queue. `Interval' is the internval in
-%% milliseconds that the active queue is polled. This ensures that the active
-%% queue management strategy is applied even if no processes are
-%% enqueued/dequeued. In the case of `ignore' the broker is not started and
-%% `start_link' returns `ignore'.
-%%
-%% A queue specifcation takes the following form:
-%% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
-%% and `Args' are its arguments. The queue is created using
-%% `squeue:new(Module, Arg)'. `Out' defines the method of dequeuing, it is
-%% either the atom `out' (dequeue items from the head, i.e. FIFO), or the
-%% atom `out_r' (dequeue items from the tail, i.e. LIFO). `Size' is the maximum
-%% size of the queue, it is either a `non_neg_integer()' or `infinity'. `Drop'
-%% defines the strategy to take when the maximum size, `Size', of the queue is
-%% exceeded. It is either the atom `drop' (drop from the head of the queue, i.e.
-%% head drop) or `drop_r' (drop from the tail of the queue, i.e. tail drop)
 -spec start_link(Module, Args) -> StartReturn when
       Module :: module(),
       Args :: any(),
@@ -349,8 +375,6 @@ start_link(Module, Args) ->
 
 %% @doc Starts a broker with name `Name', callback module `Module' and argument
 %% `Args'.
-%%
-%% @see start_link/2
 -spec start_link(Name, Module, Args) -> StartReturn when
       Name :: name(),
       Module :: module(),
