@@ -27,6 +27,7 @@
 -export([out/2]).
 -export([cancel/3]).
 -export([down/3]).
+-export([len/1]).
 -export([config_change/2]).
 -export([timeout/2]).
 
@@ -127,6 +128,11 @@ down(Time, Ref, #drop_queue{squeue=S} = Q) ->
     _ = drops(Drops),
     maybe_drop(Q#drop_queue{len=squeue:len(NS), squeue=NS}).
 
+-spec len(Q) -> Len when
+      Q :: drop_queue(),
+      Len :: non_neg_integer().
+len(#drop_queue{len=Len}) ->
+    Len.
 
 -spec config_change(Spec, Q) -> NQ when
       Spec :: spec(),

@@ -20,6 +20,7 @@
 -module(sbroker_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
+-define(TIMEOUT, 5000).
 
 %% common_test api
 
@@ -97,8 +98,11 @@ ask(_) ->
     Ref = make_ref(),
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
+    1 = sbroker:len_r(Broker, ?TIMEOUT),
     {go, Ref2, Self, 0} = sbroker:ask(Broker),
-    {go, Ref2, Self, _} = sbroker:await(Ref, 100),
+    0 = sbroker:len(Broker, ?TIMEOUT),
+    0 = sbroker:len_r(Broker, ?TIMEOUT),
+    {go, Ref2, Self, _} = sbroker:await(Ref, ?TIMEOUT),
     ok.
 
 ask_r(_) ->
@@ -106,8 +110,11 @@ ask_r(_) ->
     Ref = make_ref(),
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
+    1 = sbroker:len(Broker, ?TIMEOUT),
     {go, Ref2, Self, 0} = sbroker:ask_r(Broker),
-    {go, Ref2, Self, _} = sbroker:await(Ref, 100),
+    0 = sbroker:len(Broker, ?TIMEOUT),
+    0 = sbroker:len_r(Broker, ?TIMEOUT),
+    {go, Ref2, Self, _} = sbroker:await(Ref, ?TIMEOUT),
     ok.
 
 await_timeout(_) ->
@@ -127,7 +134,8 @@ await_down(_) ->
     _ = process_flag(trap_exit, Trap),
     {'EXIT',
      {shutdown,
-      {sbroker, await, [Ref, 100]}}} = (catch sbroker:await(Ref, 100)),
+      {sbroker, await,
+       [Ref, ?TIMEOUT]}}} = (catch sbroker:await(Ref, ?TIMEOUT)),
     ok.
 
 statem(Config) ->

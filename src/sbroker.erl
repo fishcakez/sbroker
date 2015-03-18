@@ -104,10 +104,10 @@
 -export([await/2]).
 -export([cancel/2]).
 -export([change_config/2]).
-
+-export([len/2]).
+-export([len_r/2]).
 -export([start_link/2]).
 -export([start_link/3]).
-
 
 %% gen_fsm api
 
@@ -365,6 +365,22 @@ cancel(Broker, Tag) ->
 change_config(Broker, Timeout) ->
     gen_fsm:sync_send_all_state_event(Broker, change_config, Timeout).
 
+%% @doc Get the length of the `ask' queue in the broker, `Broker'.
+-spec len(Broker, Timeout) -> Length when
+      Broker :: broker(),
+      Timeout :: timeout(),
+      Length :: non_neg_integer().
+len(Broker, Timeout) ->
+    gen_fsm:sync_send_all_state_event(Broker, ask_len, Timeout).
+
+%% @doc Get the length of the `ask_r' queue in the broker, `Broker'.
+-spec len_r(Broker, Timeout) -> Length when
+      Broker :: broker(),
+      Timeout :: timeout(),
+      Length :: non_neg_integer().
+len_r(Broker, Timeout) ->
+    gen_fsm:sync_send_all_state_event(Broker, bid_len, Timeout).
+
 %% @doc Starts a broker with callback module `Module' and argument `Args'.
 -spec start_link(Module, Args) -> StartReturn when
       Module :: module(),
@@ -453,6 +469,12 @@ handle_event(Event, _, State) ->
 handle_sync_event(change_config, _, StateName, State) ->
     {Reply, NState} = safe_config_change(State),
     {reply, Reply, StateName, NState};
+handle_sync_event(ask_len, _, StateName, #state{asking=A} = State) ->
+    Len = sbroker_queue:len(A),
+    {reply, Len, StateName, State};
+handle_sync_event(bid_len, _, StateName, #state{bidding=B} = State) ->
+    Len = sbroker_queue:len(B),
+    {reply, Len, StateName, State};
 handle_sync_event(Event, _, _, State) ->
     {stop, {bad_event, Event}, State}.
 
