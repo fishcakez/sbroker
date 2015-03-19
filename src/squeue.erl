@@ -126,9 +126,8 @@
 new() ->
     new(squeue_naive, undefined).
 
-%% @doc Returns a tuple containing an empty list of dropped items, `Drops', and
-%% an empty queue, `S', with the `squeue_naive' management algorithm, and time
-%% of `Time'.
+%% @doc Returns an empty queue, `S', with the `squeue_naive' management
+%% algorithm, and time of `Time'.
 -spec new(Time) -> S when
       Time :: non_neg_integer(),
       S :: squeue().
@@ -144,9 +143,8 @@ new(Time) ->
 new(Module, Args) ->
     #squeue{module=Module, state=Module:init(Args)}.
 
-%% @doc Returns a tuple containing an empty list of dropped items, `Drops', and
-%% an empty queue, `S', with the `Module' management algorithm started with
-%% arguments `Args' and time of `Time'.
+%% @doc Returns an empty queue, `S', with the `Module' management algorithm
+%% started with arguments `Args' and time of `Time'.
 -spec new(Time, Module, Args) -> S when
       Time :: non_neg_integer(),
       Module :: module(),
@@ -186,9 +184,10 @@ in(Item, #squeue{module=Module, state=State, time=Time, queue=Q} = S) ->
     NS = S#squeue{queue=queue:in({Time, Item}, NQ), state=NState},
     {sojourn_drops(Time, Drops), NS}.
 
-%% @doc Advances the queue, `S', to time `Time' and drops item, then inserts
-%% the item, `Item', at the tail of queue, `S'. Returns a tuple containing the
-%% dropped items and their sojourn times, `Drops', and resulting queue, `NS'.
+%% @doc Advances the queue, `S', to time `Time' and drops items, `Drops',
+%% then inserts the item, `Item', at the tail of queue, `S'. Returns a tuple
+%% containing the dropped items and their sojourn times, `Drops', and
+%% resulting queue, `NS'.
 %%
 %% If `Time' is less than the current time of the queue time, the current time
 %% is used instead.
