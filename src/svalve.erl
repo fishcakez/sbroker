@@ -313,10 +313,10 @@ to_list(#svalve{squeue=S}) ->
 %% @doc Joins two queues, `V1' and `V2', into one queue, `VS', with the items in
 %% `V1' at the head and the items in `V2' at the tail.
 %%
-%% This function raises the error `badtime' if any item in queue `V1' was added
+%% This function raises the error `badarg' if any item in queue `V1' was added
 %% after any item in queue `V2'.
 %%
-%% This function raises the error `badtime' if the current time of the queues,
+%% This function raises the error `badarg' if the current time of the queues,
 %% `V1' and `V2', are not the same.
 -spec join(V1, V2) -> NV when
       V1 :: svalve(Item),
@@ -327,7 +327,7 @@ join(#svalve{time=Time, squeue=S1} = V1, #svalve{time=Time, squeue=S2}) ->
     NS = squeue:join(S1, S2),
     V1#svalve{squeue=NS};
 join(#svalve{} = V1, #svalve{} = V2) ->
-    error(badtime, [V1, V2]).
+    error(badarg, [V1, V2]).
 
 %% @doc Applys a fun, `Filter', to all items in the queue, `V', and returns the
 %% resulting queue, `NV'.
@@ -415,7 +415,7 @@ squeue(#svalve{squeue=S}) ->
 
 %% @doc Replace the internal `squeue' inside the queue, `V'.
 %%
-%% This function raises the error `badtime' if the current time of the new
+%% This function raises the error `badarg' if the current time of the new
 %% squeue, `S', does not have the same time as the queue, `V'.
 -spec squeue(S, V) -> NV when
       S :: squeue:squeue(Item),
@@ -426,7 +426,7 @@ squeue(S, #svalve{time=Time} = V) ->
         Time ->
             V#svalve{squeue=S};
         _ ->
-            error(badtime, [S, V])
+            error(badarg, [S, V])
     end.
 
 -spec open(V) -> NV when

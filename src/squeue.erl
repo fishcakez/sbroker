@@ -341,10 +341,10 @@ to_list(#squeue{queue=Q}) ->
 %% @doc Joins two queues, `S1' and `S2', into one queue, `NS', with the items in
 %% `S1' at the head and the items in `S2' at the tail.
 %%
-%% This function raises the error `badtime' if any item in queue `S1' was added
+%% This function raises the error `badarg' if any item in queue `S1' was added
 %% after any item in queue `S2'.
 %%
-%% This function raises the error `badtime' if the current time of the queues,
+%% This function raises the error `badarg' if the current time of the queues,
 %% `S1' and `S2', are not the same.
 -spec join(S1, S2) -> NS when
       S1 :: squeue(Item),
@@ -357,7 +357,7 @@ join(#squeue{module=Module1, time=Time, queue=Q1, state=State1} = S1,
         {{value, {TailStart1, _}}, {value, {HeadStart2, _}}}
           when TailStart1 > HeadStart2 ->
             %% queues contain overlapping start times.
-            error(badtime, [S1, S2]);
+            error(badarg, [S1, S2]);
         _ ->
             {[], NQ1, NState1} = Module1:handle_join(Time, Q1, State1),
             NQ = queue:join(NQ1, Q2),
@@ -367,7 +367,7 @@ join(#squeue{module=Module1, time=Time, queue=Q1, state=State1} = S1,
             S1#squeue{queue=NQ, state=NState1}
     end;
 join(#squeue{} = S1, #squeue{} = S2) ->
-    error(badtime, [S1, S2]).
+    error(badarg, [S1, S2]).
 
 %% @doc Applys a fun, `Filter', to all items in the queue, `S', and returns the
 %% resulting queue, `NS'.
