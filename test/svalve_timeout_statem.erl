@@ -73,7 +73,7 @@ handle_sojourn_r(Time, SojournTime, Q, Manager, ManState, Timeout)
     {DropCount, NManState} = Manager:handle_timeout(Time, Q, ManState),
     {closed, DropCount, NManState, Timeout};
 handle_sojourn_r(Time, _, Q, Manager, ManState, Timeout) ->
-    {DropCount, NManState} = Manager:handle_timeout(Time, Q, ManState),
+    {DropCount, NManState} = Manager:handle_out_r(Time, Q, ManState),
     {open, DropCount, NManState, Timeout}.
 
 handle_sojourn_closed(Time, _, Q, Manager, ManState, Timeout) ->

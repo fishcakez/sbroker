@@ -65,7 +65,7 @@ handle_sojourn(Time, _, Q, Manager, ManState, undefined) ->
     {open, DropCount, NManState, undefined}.
 
 handle_sojourn_r(Time, _, Q, Manager, ManState, undefined) ->
-    {DropCount, NManState} = Manager:handle_timeout(Time, Q, ManState),
+    {DropCount, NManState} = Manager:handle_out_r(Time, Q, ManState),
     {open, DropCount, NManState, undefined}.
 
 handle_sojourn_closed(Time, _, Q, Manager, ManState, undefined) ->

@@ -24,6 +24,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 -export([handle_join/3]).
 
 
@@ -43,6 +44,9 @@ handle_timeout(_, Q, State) ->
     handle(Q, State).
 
 handle_out(_, Q, State) ->
+    handle(Q, State).
+
+handle_out_r(_, Q, State) ->
     handle(Q, State).
 
 handle_join(_, Q, State) ->

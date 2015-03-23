@@ -31,6 +31,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -77,6 +78,9 @@ handle_timeout(_Time, L, Timeout) ->
     {length(lists:takewhile(Drop, L)), Timeout}.
 
 handle_out(Time, L, Timeout) ->
+    handle_timeout(Time, L, Timeout).
+
+handle_out_r(Time, L, Timeout) ->
     handle_timeout(Time, L, Timeout).
 
 initial_state() ->

@@ -282,7 +282,7 @@ out(Time, S) when is_integer(Time) andalso Time >= 0 ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
+    {Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
     {Result, NQ2} = queue:out_r(NQ),
     NS = S#squeue{time=Time, queue=NQ2, state=NState},
@@ -315,7 +315,7 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       NS :: squeue(Item).
 out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time >= PrevTime ->
-    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
+    {Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
     {Result, NQ2} = queue:out_r(NQ),
     NS = S#squeue{time=Time, queue=NQ2, state=NState},

@@ -31,6 +31,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -76,6 +77,9 @@ handle_timeout(_Time, _L, State) ->
     {0, State}.
 
 handle_out(_Time, _L, State) ->
+    {0, State}.
+
+handle_out_r(_Time, _L, State) ->
     {0, State}.
 
 initial_state() ->

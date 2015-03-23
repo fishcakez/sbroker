@@ -80,10 +80,10 @@ handle_sojourn_r(Time, SojournTime, Q, Manager, ManState, State) ->
     {Status, NState2} = do_compare(SojournTime, NState),
     case NState2#state.dequeuing of
         true ->
-            handle_dequeuing(Status, handle_timeout, Q, Manager, ManState,
+            handle_dequeuing(Status, handle_out_r, Q, Manager, ManState,
                              NState2);
         false ->
-            handle_not_dequeuing(Status, handle_timeout, Q, Manager, ManState,
+            handle_not_dequeuing(Status, handle_out_r, Q, Manager, ManState,
                                  NState2)
     end.
 

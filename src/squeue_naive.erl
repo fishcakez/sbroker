@@ -29,6 +29,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 -export([handle_join/3]).
 
 %% @private
@@ -61,6 +62,19 @@ handle_timeout(_Time, Q, undefined) ->
       Q :: queue:queue().
 -endif.
 handle_out(_Time, Q, undefined) ->
+    {[], Q, undefined}.
+
+%% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_out_r(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue().
+-else.
+-spec handle_out_r(Time, Q, undefined) -> {[], Q, undefined} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue().
+-endif.
+handle_out_r(_Time, Q, undefined) ->
     {[], Q, undefined}.
 
 %% @private

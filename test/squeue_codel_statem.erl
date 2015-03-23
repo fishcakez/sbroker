@@ -53,6 +53,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -151,6 +152,14 @@ handle_out(Time, L, State) ->
             dequeue_dropping(Item, NL, NState);
         false ->
             dequeue_not_dropping(Item, NL, NState)
+    end.
+
+handle_out_r(Time, L, State) ->
+    case handle_timeout(Time, L, State) of
+        {Drops, NState} when Drops =:= length(L) ->
+            {Drops, NState#state{first_above_time=0}};
+        {Drops, NState} ->
+            {Drops, NState}
     end.
 
 dequeue_dropping({nodrop, _} = Item, L, State) ->

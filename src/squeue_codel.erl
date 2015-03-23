@@ -28,14 +28,14 @@
 %%
 %% This implementation differs from the reference as enqueue and other functions
 %% can detect a slow queue and drop items. However once a slow item has been
-%% detected only `out' can detect the queue becoming fast again - even if the
-%% queue is empty. This means that it is possible to drop items without
-%% calling `out' but it is not possible to stop dropping unless an `out'
-%% dequeues an item below target sojourn time or attempts a dequeue on an empty
-%% queue. Therefore if `out' is not called for an extended period the queue will
-%% converge to dropping all items above the target sojourn time (once a single
-%% item has a sojourn time above target). Whereas with the reference
-%% implementation no items would be dropped.
+%% detected only `out' can detect the queue becoming fast again - unless `out_r'
+%% is used on an empty queue. This means that it is possible to drop items
+%% without calling `out' but it is not possible to stop dropping unless an `out'
+%% dequeues an item below target sojourn time or a dequeue attempt is
+%% made on an empty queue. Therefore if `out' is not called for an extended
+%% period the queue will converge to dropping all items above the target sojourn
+%% time (once a single item has a sojourn time above target). Whereas with the
+%% reference implementation no items would be dropped.
 %%
 %% @reference Kathleen Nichols and Van Jacobson, Controlling Queue Delay,
 %% ACM Queue, 6th May 2012.
@@ -46,6 +46,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 -export([handle_join/3]).
 
 -record(state, {target :: pos_integer(),
@@ -115,6 +116,32 @@ handle_out(Time, Q, #state{peek_next=PeekNext} = State) when Time < PeekNext ->
     {[], Q, State};
 handle_out(Time, Q, #state{target=Target} = State) ->
     out_peek(queue:peek(Q), Time - Target, Time, Q, State).
+
+%% @private
+-ifdef(LEGACY_TYPES).
+-spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue(),
+      State :: state(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
+      NQ :: queue(),
+      NState :: state().
+-else.
+-spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
+      Time :: non_neg_integer(),
+      Q :: queue:queue(Item),
+      State :: state(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
+      NQ :: queue:queue(Item),
+      NState :: state().
+-endif.
+handle_out_r(Time, Q, State) ->
+    case handle_timeout(Time, Q, State) of
+        {_, _, #state{drop_first=infinity}} = Result ->
+            Result;
+        {Drops, NQ, NState} ->
+            {Drops, NQ, out_r_peek(Time, NQ, NState)}
+    end.
 
 %% @private
 -ifdef(LEGACY_TYPES).
@@ -251,6 +278,15 @@ out_drops({value, Item}, MinStart, Time, Q,
             NQ = queue:drop(Q),
             NDrops = [Item | Drops],
             out_drops(queue:peek(NQ), MinStart, Time, NQ, NState, NDrops)
+    end.
+
+out_r_peek(Time, Q, #state{target=Target} = State) ->
+    case queue:is_empty(Q) of
+        true ->
+            %% Dequeue attempt on empty queue means nolonger slow.
+            State#state{drop_first=infinity, peek_next=Time+Target};
+        false ->
+            State
     end.
 
 %% If first "slow" item in "slow" interval was "soon" after switching from

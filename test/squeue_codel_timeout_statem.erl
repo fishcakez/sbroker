@@ -31,6 +31,7 @@
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
+-export([handle_out_r/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -82,6 +83,9 @@ handle_timeout(Time, L, State) ->
 
 handle_out(Time, L, State) ->
     handle(handle_out, Time, L, State).
+
+handle_out_r(Time, L, State) ->
+    handle(handle_out_r, Time, L, State).
 
 handle(Fun, Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
     {Drops, NTimeout} = squeue_timeout_statem:Fun(Time, L, Timeout),

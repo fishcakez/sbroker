@@ -294,7 +294,7 @@ out_r_next(#state{time=Time} = State, Value, [Q]) ->
     out_r_next(State, Value, [Time, Q]);
 out_r_next(State, Value, [Time, _Q]) ->
     VQ = {call, erlang, element, [3, Value]},
-    case advance_time_state(State, Time) of
+    case prepare_out_r_state(State, Time) of
         #state{list=[]} = NState ->
             NState#state{queue=VQ};
         #state{list=L} = NState ->
@@ -304,7 +304,7 @@ out_r_next(State, Value, [Time, _Q]) ->
 out_r_post(#state{time=Time} = State, [Q], Result) ->
     out_r_post(State, [Time, Q], Result);
 out_r_post(#state{mod=Mod} = State, [Time, _Q], {Result, Drops, NQ}) ->
-    case prepare_out(State, Time) of
+    case prepare_out_r(State, Time) of
         {Drops, #state{list=[]}} ->
             Result =:= empty andalso Mod:is_queue(NQ);
         {Drops, #state{list=L}} ->
@@ -645,30 +645,31 @@ advance_time_drops(State, Time) ->
     {Drops, _} = advance_time(State, Time),
     Drops.
 
-advance_time(#state{time=Time} = State, NTime) when Time > NTime ->
-    advance_time(State, Time);
-advance_time(#state{manager=Manager, manager_state=ManState, time=Time,
-                    list=L} = State, NTime) ->
-    Diff = NTime - Time,
-    NL = [{SojournTime + Diff, Item} || {SojournTime, Item} <- L],
-    {SojournTimes, _} = lists:unzip(NL),
-    {DropCount, NManState} = Manager:handle_timeout(NTime, SojournTimes,
-                                                    ManState),
-    {Drops, NL2} = lists:split(DropCount, NL),
-    {Drops, State#state{time=NTime, list=NL2, manager_state=NManState}}.
+advance_time(State, Time) ->
+    prepare(State, handle_timeout, Time).
 
 prepare_out_state(State, Time) ->
     {_, NState} = prepare_out(State, Time),
     NState.
 
-prepare_out(#state{time=Time} = State, NTime) when Time > NTime ->
-    prepare_out(State, Time);
-prepare_out(#state{manager=Manager, manager_state=ManState, time=Time,
-                   list=L} = State, NTime) ->
+prepare_out(State, Time) ->
+    prepare(State, handle_out, Time).
+
+prepare_out_r_state(State, Time) ->
+    {_, NState} = prepare_out_r(State, Time),
+    NState.
+
+prepare_out_r(State, Time) ->
+    prepare(State, handle_out_r, Time).
+
+prepare(#state{time=Time} = State, Fun, NTime) when Time > NTime ->
+    prepare(State, Fun, Time);
+prepare(#state{manager=Manager, manager_state=ManState, time=Time,
+               list=L} = State, Fun, NTime) ->
     Diff = NTime - Time,
     NL = [{SojournTime + Diff, Item} || {SojournTime, Item} <- L],
     {SojournTimes, _} = lists:unzip(NL),
-    {DropCount, NManState} = Manager:handle_out(NTime, SojournTimes, ManState),
+    {DropCount, NManState} = Manager:Fun(NTime, SojournTimes, ManState),
     {Drops, NL2} = lists:split(DropCount, NL),
     {Drops, State#state{time=NTime, list=NL2, manager_state=NManState}}.
 
