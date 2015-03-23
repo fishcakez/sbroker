@@ -82,7 +82,13 @@ init({Target, Interval})
       State :: state().
 -endif.
 handle_timeout(Time, Q, #state{peek_next=PeekNext} = State)
-  when Time < PeekNext ->
+  when PeekNext > Time->
+    {[], Q, State};
+handle_timeout(Time, Q, #state{drop_first=dropping, drop_next=DropNext} = State)
+  when DropNext > Time ->
+    {[], Q, State};
+handle_timeout(Time, Q, #state{drop_first=DropFirst} = State)
+  when is_integer(DropFirst) andalso DropFirst > Time ->
     {[], Q, State};
 handle_timeout(Time, Q, #state{target=Target} = State) ->
     timeout_peek(queue:peek(Q), Time - Target, Time, Q, State).
@@ -149,10 +155,7 @@ timeout_peek({value, {Start, _}}, MinStart, _Time, Q, State)
 timeout_peek(_Result, _MinStart, Time, Q,
              #state{drop_first=infinity, interval=Interval} = State) ->
     {[], Q, State#state{drop_first=Time+Interval}};
-timeout_peek(_Result, _MinStart, Time, Q,
-             #state{drop_first=dropping, drop_next=DropNext} = State)
-  when DropNext > Time ->
-    {[], Q, State};
+%% Queue is slow and next/first drop is due.
 timeout_peek({value, Item}, MinStart, Time, Q,
              #state{drop_first=dropping, count=C,
                     drop_next=DropNext} = State) ->
@@ -163,11 +166,8 @@ timeout_peek({value, Item}, MinStart, Time, Q,
         NState ->
             timeout_drops(queue:peek(NQ), MinStart, Time, NQ, NState, [Item])
     end;
-timeout_peek(_Result, _MinStart, Time, Q,
-             #state{drop_first=DropFirst} = State)
-  when DropFirst > Time ->
-    {[], Q, State};
-timeout_peek({value, Item}, _MinStart, Time, Q, State) ->
+timeout_peek({value, Item}, _MinStart, Time, Q,
+             #state{drop_first=DropFirst} = State) when is_integer(DropFirst) ->
     NQ = queue:drop(Q),
     NState = drop_control(Time, State),
     {[Item], NQ, NState}.
