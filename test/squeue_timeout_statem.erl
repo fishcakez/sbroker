@@ -68,7 +68,7 @@ module() ->
     squeue_timeout.
 
 args() ->
-    choose(1, 3).
+    choose(0, 3).
 
 init(Timeout) ->
     Timeout.

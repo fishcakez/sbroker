@@ -71,7 +71,7 @@ module() ->
 
 args() ->
     ?SUCHTHAT({Target, _Interval, Timeout},
-              {choose(1, 3), choose(1, 3), choose(1, 4)},
+              {choose(0, 3), choose(1, 3), choose(1, 4)},
               Timeout > Target).
 
 init({Target, Interval, Timeout}) ->

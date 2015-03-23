@@ -22,9 +22,9 @@
 %%
 %% `squeue_codel' can be used as the active queue management module in a
 %% `squeue' queue. It's arguments are of the form `{Target, Interval}', with
-%% `Target', `pos_integer()', the target sojourn time of an item in the queue
-%% and `Interval', `pos_integer()', the initial interval between drops once the
-%% queue becomes slow.
+%% `Target', `non_neg_integer()', the target sojourn time of an item in the
+%% queue and `Interval', `pos_integer()', the initial interval between drops
+%% once the queue becomes slow.
 %%
 %% This implementation differs from the reference as enqueue and other functions
 %% can detect a slow queue and drop items. However once a slow item has been
@@ -49,8 +49,8 @@
 -export([handle_out_r/3]).
 -export([handle_join/3]).
 
--record(state, {target :: pos_integer(),
-                interval :: non_neg_integer(),
+-record(state, {target :: non_neg_integer(),
+                interval :: pos_integer(),
                 count=0 :: non_neg_integer(),
                 drop_next=0 :: non_neg_integer(),
                 drop_first=infinity :: non_neg_integer() | infinity | dropping,
@@ -62,12 +62,12 @@
 
 %% @private
 -spec init({Target, Interval}) -> State when
-      Target :: pos_integer(),
+      Target :: non_neg_integer(),
       Interval :: pos_integer(),
       State :: state().
 init({Target, Interval})
-  when is_integer(Target) andalso Target > 0 andalso
-       is_integer(Interval) andalso Interval >= 0 ->
+  when is_integer(Target) andalso Target >= 0 andalso
+       is_integer(Interval) andalso Interval > 0 ->
     #state{target=Target, interval=Interval}.
 
 %% @private

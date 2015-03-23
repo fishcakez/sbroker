@@ -93,7 +93,7 @@ module() ->
     squeue_codel.
 
 args() ->
-    {choose(1, 3), choose(0, 3)}.
+    {choose(0, 3), choose(1, 3)}.
 
 init({Target, Interval}) ->
     #state{target=Target, interval=Interval}.

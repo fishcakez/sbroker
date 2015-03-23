@@ -21,7 +21,7 @@
 %% once their sojourn time is greater than a timeout value.
 %%
 %% `squeue_timeout' can be used as the active queue management module in a
-%% `squeue' queue. It's argument is a `pos_integer()', which is the timeout
+%% `squeue' queue. It's argument is a `non_neg_integer()', which is the timeout
 %% value, i.e. the minimum sojourn time at which items are dropped from the
 %% queue.
 -module(squeue_timeout).
@@ -34,14 +34,14 @@
 -export([handle_out_r/3]).
 -export([handle_join/3]).
 
--record(state, {timeout :: pos_integer(),
+-record(state, {timeout :: non_neg_integer(),
                 timeout_next = 0 :: non_neg_integer()}).
 
 %% @private
 -spec init(Timeout) -> State when
-      Timeout :: pos_integer(),
+      Timeout ::non_neg_integer(),
       State :: #state{}.
-init(Timeout) when is_integer(Timeout) andalso Timeout > 0 ->
+init(Timeout) when is_integer(Timeout) andalso Timeout >= 0 ->
     #state{timeout=Timeout}.
 
 %% @private

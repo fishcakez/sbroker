@@ -23,7 +23,7 @@
 %%
 %% `squeue_codel' can be used as the active queue management module in a
 %% `squeue' queue. It's arguments are of the form `{Target, Interval, Timeout}',
-%% with `Target', `pos_integer()', the target sojourn time of an item in the
+%% with `Target', `non_neg_integer()', the target sojourn time of an item in the
 %% queue; `Interval', `pos_integer()', the initial interval between drops once
 %% the queue becomes slow; `Timeout', `pos_integer()', the timeout value, i.e.
 %% the minimum sojourn time at which items are dropped from the queue due to a
@@ -47,7 +47,7 @@
 
 %% @private
 -spec init({Target, Interval, Timeout}) -> State when
-      Target :: pos_integer(),
+      Target :: non_neg_integer(),
       Interval :: pos_integer(),
       Timeout :: pos_integer(),
       State :: #state{}.
