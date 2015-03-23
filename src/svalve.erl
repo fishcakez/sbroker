@@ -429,12 +429,14 @@ squeue(S, #svalve{time=Time} = V) ->
             error(badarg, [S, V])
     end.
 
+%% @doc Enable the feedback loop to dequeue items from queue, `V'.
 -spec open(V) -> NV when
       V :: svalve(Item),
       NV :: svalve(Item).
 open(V) ->
     V#svalve{status=open}.
 
+%% @doc Disable the feedback loop from dequeuing items from queue, `V'.
 -spec close(V) -> NV when
       V :: svalve(Item),
       NV :: svalve(Item).
