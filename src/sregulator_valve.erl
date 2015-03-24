@@ -35,6 +35,7 @@
 -export([close/1]).
 -export([sojourn/3]).
 -export([dropped/2]).
+-export([dropped/1]).
 
 %% types
 
@@ -241,6 +242,28 @@ dropped(Time, #drop_valve{out=out, len=Len, svalve=V} = Q) ->
     end;
 dropped(Time, #drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
     case svalve:dropped_r(Time, V) of
+        {{_, _} = Item, Drops, NV} ->
+            {Item, maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV})};
+        {Result, Drops, NV} ->
+            {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
+    end.
+
+-spec dropped(Q) -> {Result, NQ} when
+      Q :: drop_valve(),
+      Result :: closed | empty | {FromSojournTime, {Ref, From}},
+      FromSojournTime :: non_neg_integer(),
+      Ref ::  reference(),
+      From :: {pid(), tag()},
+      NQ :: drop_valve().
+dropped(#drop_valve{out=out, len=Len, svalve=V} = Q) ->
+    case svalve:dropped(V) of
+        {{_, _} = Item, Drops, NV} ->
+            {Item, maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV})};
+        {Result, Drops, NV} ->
+            {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
+    end;
+dropped(#drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
+    case svalve:dropped_r(V) of
         {{_, _} = Item, Drops, NV} ->
             {Item, maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV})};
         {Result, Drops, NV} ->

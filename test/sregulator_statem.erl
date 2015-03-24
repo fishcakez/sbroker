@@ -38,6 +38,7 @@
 -export([spawn_client/2]).
 -export([update/3]).
 -export([done/2]).
+-export([ensure_dropped/2]).
 -export([cancel/2]).
 -export([shutdown_client/2]).
 -export([change_config/2]).
@@ -84,6 +85,7 @@ command(State) ->
                {10, {call, ?MODULE, spawn_client,
                      spawn_client_args(State)}},
                {6, {call, ?MODULE, done, done_args(State)}},
+               {4, {call, ?MODULE, ensure_dropped, ensure_dropped_args(State)}},
                {4, {call, ?MODULE, cancel, cancel_args(State)}},
                {4, {call, ?MODULE, shutdown_client,
                     shutdown_client_args(State)}},
@@ -106,6 +108,8 @@ next_state(State, Value, {call, _, update, Args}) ->
     update_next(State, Value, Args);
 next_state(State, Value, {call, _, done, Args}) ->
     done_next(State, Value, Args);
+next_state(State, Value, {call, _, ensure_dropped, Args}) ->
+    ensure_dropped_next(State, Value, Args);
 next_state(State, Value, {call, _, cancel, Args}) ->
     cancel_next(State, Value, Args);
 next_state(State, Value, {call, _, shutdown_client, Args}) ->
@@ -123,6 +127,8 @@ postcondition(State, {call, _, update, Args}, Result) ->
     update_post(State, Args, Result);
 postcondition(State, {call, _, done, Args}, Result) ->
     done_post(State, Args, Result);
+postcondition(State, {call, _, ensure_dropped, Args}, Result) ->
+    ensure_dropped_post(State, Args, Result);
 postcondition(State, {call, _, cancel, Args}, Result) ->
     cancel_post(State, Args, Result);
 postcondition(State, {call, _, shutdown_client, Args}, Result) ->
@@ -370,6 +376,38 @@ done_post(#state{active=Active, done=Done} = State, [_, Client], Result) ->
         true ->
             NState = State#state{active=Active--[Client], done=Done++[Client]},
             Result =:= ok andalso ask_out_post(NState);
+        false ->
+            Result =:= {error, not_found} andalso dequeue_post(State)
+    end.
+
+ensure_dropped_args(#state{sregulator=Regulator, asks=Asks, active=Active,
+                           done=Done, cancels=Cancels}) ->
+    case Asks ++ Active ++ Done ++ Cancels of
+        [] ->
+            [Regulator, undefined];
+        Clients ->
+            [Regulator, frequency([{9, elements(Clients)},
+                                   {1, undefined}])]
+    end.
+
+ensure_dropped(Regulator, undefined) ->
+    sregulator:ensure_dropped(Regulator, make_ref());
+ensure_dropped(_, Client) ->
+    client_call(Client, ensure_dropped).
+
+ensure_dropped_next(#state{active=Active} = State, _, [_, Client]) ->
+    case lists:member(Client, Active) of
+        true ->
+            update_next(State#state{active=Active--[Client]});
+        false ->
+            dequeue_next(State)
+    end.
+
+ensure_dropped_post(#state{active=Active} = State, [_, Client], Result) ->
+    case lists:member(Client, Active) of
+        true ->
+            NState = State#state{active=Active--[Client]},
+            Result =:= ok andalso update_post(NState);
         false ->
             Result =:= {error, not_found} andalso dequeue_post(State)
     end.
@@ -709,16 +747,20 @@ dequeue_post(#state{asks=[_ | _], active=Active, min=Min,
 dequeue_post(_) ->
     true.
 
-valve_status(#state{active=Active, min=Min} = State) when length(Active) < Min ->
+valve_status(#state{asks=[], active=Active, min=Min} = State)
+  when length(Active) < Min ->
     {closed, State};
 valve_status(#state{active=Active, max=Max} = State)
   when length(Active) >= Max ->
     {closed, State};
-valve_status(#state{valve_state=[], valve_status=[]} = State) ->
+valve_status(State) ->
+    valve_pop(State).
+
+valve_pop(#state{valve_state=[], valve_status=[]} = State) ->
     {closed, State};
-valve_status(#state{valve_state=[], valve_status=ValveStatus} = State) ->
-    valve_status(State#state{valve_state=ValveStatus});
-valve_status(#state{valve_state=[Status | NValveState]} = State) ->
+valve_pop(#state{valve_state=[], valve_status=ValveStatus} = State) ->
+    valve_pop(State#state{valve_state=ValveStatus});
+valve_pop(#state{valve_state=[Status | NValveState]} = State) ->
     {Status, State#state{valve_state=NValveState}}.
 
 %% client
@@ -771,6 +813,15 @@ client_loop(MRef, Regulator, Tag, Ref, State, Froms) ->
                 ok ->
                     gen:reply(From, ok),
                     client_loop(MRef, Regulator, Tag, Ref, done, Froms);
+                Error ->
+                    gen:reply(From, Error),
+                    client_loop(MRef, Regulator, Tag, Ref, State, Froms)
+            end;
+        {MRef, From, ensure_dropped} ->
+            case sregulator:ensure_dropped(Regulator, Ref) of
+                ok ->
+                    gen:reply(From, ok),
+                    client_loop(MRef, Regulator, Tag, Ref, dropped, Froms);
                 Error ->
                     gen:reply(From, Error),
                     client_loop(MRef, Regulator, Tag, Ref, State, Froms)

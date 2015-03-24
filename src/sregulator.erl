@@ -139,6 +139,7 @@
 -export([done/2]).
 -export([update/3]).
 -export([drop/2]).
+-export([ensure_dropped/2]).
 -export([change_config/2]).
 -export([len/2]).
 -export([size/2]).
@@ -401,6 +402,20 @@ update(_, _, {retry, _} = Response) ->
 drop(Regulator, Ref) ->
     gen_fsm:sync_send_event(Regulator, {drop, Ref}, infinity).
 
+%% @doc Signal a drop and release the lock. Returns `ok' if the lock is
+%% released and `{error, not_found}' if the lock does not exist on the
+%% regulator.
+%%
+%% Unlike `drop/2' the lock is always released if it exists.
+%%
+%% @see ask/1
+%% @see drop/2
+-spec ensure_dropped(Regulator, Ref) -> ok | {error, not_found} when
+      Regulator :: regulator(),
+      Ref :: reference().
+ensure_dropped(Regulator, Ref) ->
+    gen_fsm:sync_send_event(Regulator, {ensure_dropped, Ref}).
+
 %% @doc Change the configuration of the regulator. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason', is the reason for failure.
 %%
@@ -482,6 +497,13 @@ empty({drop, Ref}, _, #state{active=Active} = State) ->
         false ->
             {reply, {error, not_found}, empty, State}
     end;
+empty({ensure_dropped, Ref}, From, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            empty_ensure_dropped(Ref, From, State);
+        false ->
+            {reply, {error, not_found}, empty, State}
+    end;
 empty(ask, From, State) ->
     empty_ask(From, State);
 empty(nb_ask, From, State) ->
@@ -507,6 +529,13 @@ open({drop, Ref}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
             open_drop(Ref, From, State);
+        false ->
+            {reply, {error, not_found}, open, State}
+    end;
+open({ensure_dropped, Ref}, From, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            open_ensure_dropped(Ref, From, State);
         false ->
             {reply, {error, not_found}, open, State}
     end;
@@ -536,6 +565,13 @@ closed({drop, Ref}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
             closed_drop(Ref, From, State);
+        false ->
+            {reply, {error, not_found}, closed, State}
+    end;
+closed({ensure_dropped, Ref}, From, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            closed_ensure_dropped(Ref, From, State);
         false ->
             {reply, {error, not_found}, closed, State}
     end;
@@ -798,6 +834,77 @@ closed_decreased(#state{min=Min, max=Max, valve=V, active=Active} = State) ->
             {next_state, open, State#state{valve=sregulator_valve:open(V)}};
         _ ->
             {next_state, closed, State}
+    end.
+
+empty_ensure_dropped(Ref, From, State) ->
+    {_, NState} = handle_drop(Ref, From, State),
+    {next_state, empty, NState}.
+
+open_ensure_dropped(Ref, From, #state{active=Active, min=Min} = State) ->
+    case gb_sets:size(Active) of
+        Min ->
+            open_min_dropped(Ref, From, State);
+        _ ->
+            {_, NState} = handle_drop(Ref, From, State),
+            {next_state, open, NState}
+    end.
+
+open_min_dropped(Ref, From, State) ->
+    case handle_replace(Ref, From, State) of
+        {steady, NState} ->
+            open_min_dropped(NState);
+        {empty, #state{valve=NV} = NState} ->
+            NV2 = sregulator_valve:close(NV),
+            {closed, NV3} = sregulator_valve:dropped(NV2),
+            {next_state, empty, NState#state{valve=NV3}}
+    end.
+
+open_min_dropped(#state{valve=V, active=Active} = State) ->
+    case sregulator_valve:dropped(V) of
+        {{SojournTime, {Ref, From}}, NV} ->
+            go(From, Ref, SojournTime),
+            NActive = gb_sets:insert(Ref, Active),
+            open_increased(State#state{valve=NV, active=NActive});
+        {_, NV} ->
+            {next_state, open, State#state{valve=NV}}
+    end.
+
+handle_replace(Ref, From,
+               #state{timer=Timer, valve=V, active=Active} = State) ->
+    demonitor(Ref, [flush]),
+    gen_fsm:reply(From, ok),
+    NActive = gb_sets:delete(Ref, Active),
+    {Time, NTimer} = sbroker_timer:read(Timer),
+    case sregulator_valve:out(Time, V) of
+        {{SojournTime, {Ref2, From2}}, NV} ->
+            go(From2, Ref2, SojournTime),
+            NActive2 = gb_sets:insert(Ref2, NActive),
+            {steady, State#state{timer=NTimer, valve=NV, active=NActive2}};
+        {empty, NV} ->
+            {empty, State#state{timer=NTimer, valve=NV, active=NActive}}
+    end.
+
+closed_ensure_dropped(Ref, From,
+                      #state{min=Min, max=Max, active=Active} = State) ->
+    case gb_sets:size(Active) of
+        Min ->
+            closed_min_dropped(Ref, From, State);
+        Max ->
+            closed_max_drop(Ref, From, State);
+        _ ->
+            {_, NState} = handle_drop(Ref, From, State),
+            {next_state, closed, NState}
+    end.
+
+closed_min_dropped(Ref, From, State) ->
+    {Status, NState} = handle_replace(Ref, From, State),
+    {closed, NV2} = sregulator_valve:dropped(NState#state.valve),
+    NState2 = NState#state{valve=NV2},
+    case Status of
+        steady ->
+            {next_state, closed, NState2};
+        empty ->
+            {next_state, empty, NState2}
     end.
 
 empty_done(Ref, #state{active=Active} = State) ->
