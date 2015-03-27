@@ -1,6 +1,6 @@
 {application, sbroker,
  [{description, "Sojourn-time based active queue management process broker"}
- ,{vsn, "0.5.0-dev"}
+ ,{vsn, "0.5.0"}
  ,{registered, []}
  ,{applications,
     [kernel,stdlib]}
