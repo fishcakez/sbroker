@@ -39,7 +39,99 @@
 %% queue's previous time.
 %%
 %% `squeue' includes 3 queue management algorithms: `squeue_naive',
-%% `squeue_timeout', `squeue_codel'.
+%% `squeue_timeout', `squeue_codel' and `squeue_codel_timeout'
+%%
+%% A custom queue management algorithm must implement the `squeue' behaviour.
+%% The first callback is `init/2':
+%% ```
+%% -callback init(Time :: integer(), Args :: any()) -> State :: any().
+%% '''
+%% `Time' is the time of the queue at creation. It is `0' for `squeue:new/2' and
+%% for `squeue:new/3' it is the `Time' (first) argument. `Time' can be positive
+%% or negative. All other callbacks will receive the current time of the queue
+%% as the first argument. It is monotically increasing, so subsequent calls will
+%% use the same or a greater time.
+%%
+%% `Args' is the last argument passed to `new/2' or `new/3'. It can be any term.
+%%
+%% The queue management callback module is called before any `squeue' function
+%% alters an internal queue. Before `squeue:in/2,3' and `squeue:filter/2,3' the
+%% callback function is `handle_timeout/3':
+%% ```
+%% -callback handle_timeout(Time ::integer(), Q :: internal_queue(Item),
+%%                          State :: any()) ->
+%%     {Drops :: [{InTime :: integer(), Item}], NQ :: internal_queue(Item),
+%%      NState :: any()}.
+%% '''
+%% `Q' is the internal representation of the queue. It is a `queue' with 2-tuple
+%% items of the form `{InTime, Item}'. `InTime' is the time the item was
+%% inserted into the queue. The insertion time may lag behind the current time
+%% of the queue. `Item' is the item itself. The order of items in the queue is
+%% such that an item has a `InTime' less than or equal to the `InTime'  of all
+%% items behind it in the queue. `NQ' is the queue after dropping any items.
+%%
+%% `State' is the state of the callback module, and `NState' is the new state
+%% after applying the queue management.
+%%
+%% `Drops' is a list of dropped items. The items must be ordered with item
+%% nearest the tail of queue nearest the head of the list. For example:
+%% ```
+%% {DropQ, NQ} = queue:split(N, Q),
+%% Drops = lists:reverse(queue:to_list(DropQ)),
+%% {Drops, NQ, NState}.
+%% '''
+%% `squeue' will set the sojourn times and reverse the list before returning the
+%% drops. All items from `Q' must either be in `Drops' or `NQ', but not both.
+%%
+%% When an item is dequeued from the head of queue with `squeue:out/1,2', the
+%% callback function `handle_out/3' is called to dequeue the item:
+%% ```
+%% -callback handle_out(Time ::integer(), Q :: internal_queue(Item),
+%%                     State :: any()) ->
+%%    {empty | {InTime :: integer(), Item},
+%%     Drops :: [{InTime2 :: integer(), Item}],
+%%     NQ :: internal_queue(Item), NState :: any()}.
+%% '''
+%% `Time', `Q' and `State' represent the current time, the internal queue and
+%% the state of the callback module, respectively.
+%%
+%% The first element of the returned 3-tuple is `empty' if `NQ' is empty.
+%% Otherwise it is `{InTime, Item}', the item at the head of the queue after
+%% dropping `Drops'. `NQ' is the queue after dequeuing drops and the head of the
+%% queue. For example:
+%% ```
+%% case queue:out(Q) of
+%%     {empty, NQ} ->
+%%         {empty, Drops, NQ, NState};
+%%     {{value, {InTime, Item}}, NQ} ->
+%%         {{InTime, Item}, Drops, NQ, NState}
+%% end.
+%% '''
+%%
+%% Similarly when an item is dequeued from the tail of the queue with
+%% `squeue:out_r/1,2', the callback function `handle_out_r/3':
+%% ```
+%% -callback handle_out_r(Time ::integer(), Q :: internal_queue(Item),
+%%                        State :: any()) ->
+%%     {empty | {InTime :: integer(), Item},
+%%      Drops :: [{InTime2 :: integer(), Item}],
+%%      NQ :: internal_queue(Item), NState :: any()}.
+%% '''
+%% This callback is the same as `handle_out/3', except the item is dequeued from
+%% the tail.
+%%
+%% Before joining a queue to the tail of the queue with `squeue:join/2', the
+%% callback function `handle_join/3' is called:
+%% ```
+%% -callback handle_join(Time ::integer(), Q :: internal_queue(Item :: any()),
+%%                       State :: any()) ->
+%%    NState :: any().
+%% '''
+%% This callback can update the state but not drop items or change the internal
+%% queue.
+%% @see squeue_naive
+%% @see squeue_timeout
+%% @see squeue_codel
 -module(squeue).
 
 %% Original API
@@ -76,55 +168,51 @@
 -export([from_start_list/5]).
 
 -ifdef(LEGACY_TYPES).
+-type internal_queue(_Any) :: queue().
+
 -record(squeue, {module :: module(),
                  state :: any(),
                  time = 0 :: integer(),
                  tail_time = 0 :: integer(),
-                 queue = queue:new() :: queue()}).
+                 queue = queue:new() :: internal_queue(any())}).
+
 -type squeue() :: squeue(any()).
--opaque squeue(_Item) :: #squeue{queue :: queue()}.
-
--export_type([squeue/0]).
--export_type([squeue/1]).
-
--callback init(Time :: integer(), Args :: any()) -> State :: any().
--callback handle_timeout(Time ::integer(), Q :: queue(),
-                      State :: any()) ->
-    {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-     NQ :: queue(), NState :: any()}.
--callback handle_out(Time ::integer(), Q :: queue(),
-                      State :: any()) ->
-    {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-     NQ :: queue(), NState :: any()}.
--callback handle_join(Time ::integer(), Q :: queue(),
-                      State :: any()) ->
-    {Drops :: [], NQ :: queue(), NState :: any()}.
+-type squeue(Item) :: #squeue{queue :: internal_queue(Item)}.
 -else.
+-type internal_queue(Item) :: queue:queue({integer(), Item}).
+
 -record(squeue, {module :: module(),
                  state :: any(),
-                 time = 0 :: non_neg_integer(),
-                 tail_time = 0 :: non_neg_integer(),
-                 queue = queue:new() :: queue:queue({non_neg_integer(), _})}).
--type squeue() :: squeue(_).
--opaque squeue(Item) ::
-    #squeue{queue :: queue:queue({non_neg_integer(), Item})}.
+                 time = 0 :: integer(),
+                 tail_time = 0 :: integer(),
+                 queue = queue:new() :: internal_queue(any())}).
 
+-type squeue() :: squeue(any()).
+-opaque squeue(Item) :: #squeue{queue :: internal_queue(Item)}.
+-endif.
+
+-export_type([internal_queue/1]).
 -export_type([squeue/0]).
 -export_type([squeue/1]).
 
 -callback init(Time :: integer(), Args :: any()) -> State :: any().
--callback handle_timeout(Time ::integer(), Q :: queue:queue(Item),
+-callback handle_timeout(Time ::integer(), Q :: internal_queue(Item),
+                         State :: any()) ->
+    {Drops :: [{InTime :: integer(), Item}], NQ :: internal_queue(Item),
+     NState :: any()}.
+-callback handle_out(Time ::integer(), Q :: internal_queue(Item),
+                     State :: any()) ->
+    {empty | {InTime :: integer(), Item},
+     Drops :: [{InTime2 :: integer(), Item}],
+     NQ :: internal_queue(Item), NState :: any()}.
+-callback handle_out_r(Time ::integer(), Q :: internal_queue(Item),
+                       State :: any()) ->
+    {empty | {InTime :: integer(), Item},
+     Drops :: [{InTime2 :: integer(), Item}],
+     NQ :: internal_queue(Item), NState :: any()}.
+-callback handle_join(Time ::integer(), Q :: internal_queue(Item :: any()),
                       State :: any()) ->
-    {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-     NQ :: queue:queue(Item), NState :: any()}.
--callback handle_out(Time ::integer(), Q :: queue:queue(Item),
-                      State :: any()) ->
-    {Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-     NQ :: queue:queue(Item), NState :: any()}.
--callback handle_join(Time ::integer(), Q :: queue:queue(Item),
-                      State :: any()) ->
-    {Drops :: [], NQ :: queue:queue(Item), NState :: any()}.
--endif.
+    NState :: any().
 
 %% Original API
 
@@ -256,14 +344,13 @@ in(Time, InTime, Item, S)
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    {Drops, NQ, NState} = Module:handle_out(Time, Q, State),
+    {Result, Drops, NQ, NState} = Module:handle_out(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
-    {Result, NQ2} = queue:out(NQ),
-    NS = S#squeue{time=Time, queue=NQ2, state=NState},
+    NS = S#squeue{queue=NQ, state=NState},
     case Result of
         empty ->
             {empty, Drops2, NS};
-        {value, Item} ->
+        Item ->
             {sojourn_time(Time, Item), Drops2, NS}
     end.
 
@@ -289,14 +376,13 @@ out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       NS :: squeue(Item).
 out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
-    {Drops, NQ, NState} = Module:handle_out(Time, Q, State),
+    {Result, Drops, NQ, NState} = Module:handle_out(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
-    {Result, NQ2} = queue:out(NQ),
-    NS = S#squeue{time=Time, queue=NQ2, state=NState},
+    NS = S#squeue{time=Time, queue=NQ, state=NState},
     case Result of
         empty ->
             {empty, Drops2, NS};
-        {value, Item} ->
+        Item ->
             {sojourn_time(Time, Item), Drops2, NS}
     end;
 out(Time, S) when is_integer(Time) ->
@@ -318,14 +404,13 @@ out(Time, S) when is_integer(Time) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    {Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
+    {Result, Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
-    {Result, NQ2} = queue:out_r(NQ),
-    NS = S#squeue{time=Time, queue=NQ2, state=NState},
+    NS = S#squeue{queue=NQ, state=NState},
     case Result of
         empty ->
             {empty, Drops2, NS};
-        {value, Item} ->
+        Item ->
             {sojourn_time(Time, Item), Drops2, NS}
     end.
 
@@ -351,14 +436,13 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       NS :: squeue(Item).
 out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time > PrevTime ->
-    {Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
+    {Result, Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
-    {Result, NQ2} = queue:out_r(NQ),
-    NS = S#squeue{time=Time, queue=NQ2, state=NState},
+    NS = S#squeue{time=Time, queue=NQ, state=NState},
     case Result of
         empty ->
             {empty, Drops2, NS};
-        {value, Item} ->
+        Item ->
             {sojourn_time(Time, Item), Drops2, NS}
     end;
 out_r(Time, S) when is_integer(Time) ->
@@ -533,8 +617,8 @@ join(#squeue{module=Module1, time=Time, tail_time=TailTime1, queue=Q1,
             error(badarg, [S1, S2]);
         _ ->
             NTailTime = max(TailTime1, TailTime2),
-            {[], NQ1, NState1} = Module1:handle_join(Time, Q1, State1),
-            NQ = queue:join(NQ1, Q2),
+            NState1 = Module1:handle_join(Time, Q1, State1),
+            NQ = queue:join(Q1, Q2),
             %% handle_join/1 is required to notify the queue manager that the
             %% max sojourn time of the queue may have increased (though only if
             %% the head queue was empty).
@@ -615,7 +699,7 @@ time(#squeue{time=Time}) ->
       Time :: integer(),
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
-      NS :: squeue().
+      NS :: squeue(Item).
 timeout(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),

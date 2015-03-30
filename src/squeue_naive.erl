@@ -40,53 +40,45 @@ init(_Time, _Args) ->
     undefined.
 
 %% @private
--ifdef(LEGACY_TYPES).
 -spec handle_timeout(Time, Q, undefined) -> {[], Q, undefined} when
       Time :: integer(),
-      Q :: queue().
--else.
--spec handle_timeout(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: integer(),
-      Q :: queue:queue().
--endif.
+      Q :: squeue:internal_queue(any()).
 handle_timeout(_Time, Q, undefined) ->
     {[], Q, undefined}.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_out(Time, Q, undefined) -> {[], Q, undefined} when
+-spec handle_out(Time, Q, undefined) ->
+    {empty | {SojournTime, Item}, [], NQ, undefined} when
       Time :: integer(),
-      Q :: queue().
--else.
--spec handle_out(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: integer(),
-      Q :: queue:queue().
--endif.
+      Q :: squeue:internal_queue(Item),
+      SojournTime :: non_neg_integer(),
+      NQ :: squeue:internal_queue(Item).
 handle_out(_Time, Q, undefined) ->
-    {[], Q, undefined}.
+    case queue:out(Q) of
+        {empty, NQ} ->
+            {empty, [], NQ, undefined};
+        {{value, Item}, NQ} ->
+            {Item, [], NQ, undefined}
+    end.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_out_r(Time, Q, undefined) -> {[], Q, undefined} when
+-spec handle_out_r(Time, Q, undefined) ->
+    {empty | {SojournTime, Item}, [], NQ, undefined} when
       Time :: integer(),
-      Q :: queue().
--else.
--spec handle_out_r(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: integer(),
-      Q :: queue:queue().
--endif.
+      Q :: squeue:internal_queue(Item),
+      SojournTime :: non_neg_integer(),
+      NQ :: squeue:internal_queue(Item).
 handle_out_r(_Time, Q, undefined) ->
-    {[], Q, undefined}.
+    case queue:out_r(Q) of
+        {empty, NQ} ->
+            {empty, [], NQ, undefined};
+        {{value, Item}, NQ} ->
+            {Item, [], NQ, undefined}
+    end.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_join(Time, Q, undefined) -> {[], Q, undefined} when
+-spec handle_join(Time, Q, undefined) -> undefined when
       Time :: integer(),
-      Q :: queue().
--else.
--spec handle_join(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: integer(),
-      Q :: queue:queue().
--endif.
-handle_join(_Time, Q, undefined) ->
-    {[], Q, undefined}.
+      Q :: squeue:internal_queue(any()).
+handle_join(_Time, _Q, undefined) ->
+    undefined.

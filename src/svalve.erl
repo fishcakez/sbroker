@@ -35,6 +35,10 @@
 %% `sojourn_r/3', `dropped_r/1' and `dropped_r/2' are used to dequeue from the
 %% tail.
 %%
+%% To close the valve, and prevent `sojourn/2,3' and `dropped/2,3' from
+%% dequeuing items, `close/1'. To open the valve `open/1'.
+%%
+%%
 %% All other functions are equivalent to `squeue'.
 %% @see svalve_naive
 %% @see svalve_timeout
@@ -88,11 +92,15 @@
 -record(svalve, {module :: module(),
                  state :: any(),
                  status = open :: open | closed,
-                 time = 0 :: non_neg_integer(),
-                 squeue = squeue:new() :: squeue:squeue(any())}).
+                 time = 0 :: integer(),
+                 squeue :: squeue:squeue()}).
 
 -type svalve() :: svalve(any()).
+-ifdef(LEGACY_TYPES).
+-type svalve(Item) :: #svalve{squeue :: squeue:squeue(Item)}.
+-else.
 -opaque svalve(Item) :: #svalve{squeue :: squeue:squeue(Item)}.
+-endif.
 
 -export_type([svalve/0]).
 -export_type([svalve/1]).
@@ -522,7 +530,7 @@ time(#svalve{time=Time}) ->
       Time :: integer(),
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
-      NV :: svalve().
+      NV :: svalve(Item).
 timeout(Time, #svalve{time=PrevTime, squeue=S} = V)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NS} = squeue:timeout(Time, S),

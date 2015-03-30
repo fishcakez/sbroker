@@ -46,23 +46,13 @@ init(Time, Timeout) when is_integer(Timeout) andalso Timeout >= 0 ->
     #state{timeout=Timeout, timeout_next=Time+Timeout}.
 
 %% @private
--ifdef(LEGACY_TYPES).
 -spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
--else.
--spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
 handle_timeout(Time, Q, #state{timeout_next=TimeoutNext} = State)
   when Time < TimeoutNext ->
     {[], Q, State};
@@ -70,67 +60,55 @@ handle_timeout(Time, Q, #state{timeout=Timeout} = State) ->
     timeout(queue:peek(Q), Time - Timeout, Time, Q, State, []).
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out(Time, Q, State) ->
+    {empty | {SojournTime, Item}, Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      SojournTime :: non_neg_integer(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
--else.
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
 handle_out(Time, Q, State) ->
-    handle_timeout(Time, Q, State).
+    {Drops, NQ, NState} = handle_timeout(Time, Q, State),
+    case queue:out(NQ) of
+        {empty, NQ2} ->
+            {empty, Drops, NQ2, NState};
+        {{value, Item}, NQ2} ->
+            {Item, Drops, NQ2, NState}
+    end.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out_r(Time, Q, State) ->
+    {empty | {SojournTime, Item}, Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      SojournTime :: non_neg_integer(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
--else.
--spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
 handle_out_r(Time, Q, State) ->
-    handle_timeout(Time, Q, State).
+    {Drops, NQ, NState} = handle_timeout(Time, Q, State),
+    case queue:out_r(NQ) of
+        {empty, NQ2} ->
+            {empty, Drops, NQ2, NState};
+        {{value, Item}, NQ2} ->
+            {Item, Drops, NQ2, NState}
+    end.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_join(Time, Q, State) -> {[], Q, NState} when
+-spec handle_join(Time, Q, State) -> NState when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(any()),
       State :: #state{},
       NState :: #state{}.
--else.
--spec handle_join(Time, Q, State) -> {[], Q, NState} when
-      Time :: integer(),
-      Q :: queue:queue(),
-      State :: #state{},
-      NState :: #state{}.
--endif.
 handle_join(Time, Q, State) ->
     case queue:is_empty(Q) of
         true ->
-            {[], Q, State#state{timeout_next=Time}};
+            State#state{timeout_next=Time};
         false ->
-            {[], Q, State}
+            State
     end.
 
 %% Internal

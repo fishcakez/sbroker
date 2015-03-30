@@ -58,7 +58,7 @@ init(Time, {Target, Interval}) ->
 %% @private
 -spec handle_sojourn(Time, SojournTime, S, State) ->
     {Result, Drops, NS, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       S :: squeue:squeue(Item),
       State :: #state{},
@@ -72,7 +72,7 @@ handle_sojourn(Time, SojournTime, S, State) ->
 %% @private
 -spec handle_sojourn_r(Time, SojournTime, S, State) ->
     {Result, Drops, NS, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       S :: squeue:squeue(Item),
       State :: #state{},
@@ -86,7 +86,7 @@ handle_sojourn_r(Time, SojournTime, S, State) ->
 %% @private
 -spec handle_sojourn_closed(Time, SojournTime, S, State) ->
     {closed, Drops, NS, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       S :: squeue:squeue(Item),
       State :: #state{},
@@ -99,7 +99,7 @@ handle_sojourn_closed(Time, SojournTime, S, State) ->
 %% @private
 -spec handle_dropped(Time, S, State) ->
     {closed, Drops, NS, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       S :: squeue:squeue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
@@ -112,7 +112,7 @@ handle_dropped(Time, S, State) ->
 %% @private
 -spec handle_dropped_r(Time, S, State) ->
     {closed, Drops, NS, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       S :: squeue:squeue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
@@ -124,7 +124,7 @@ handle_dropped_r(Time, S, State) ->
 %% @private
 -spec handle_dropped_closed(Time, S, State) ->
     {closed, Drops, NS, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       S :: squeue:squeue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],

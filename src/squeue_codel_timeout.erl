@@ -57,103 +57,75 @@ init(Time, {Target, Interval, Timeout}) when Target < Timeout ->
            timeout_next=Time}.
 
 %% @private
--ifdef(LEGACY_TYPES).
 -spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
--else.
--spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
 handle_timeout(Time, Q, State) ->
    handle(Time, handle_timeout, Q, State).
 
 %% @private
--ifdef(LEGACY_TYPES).
 -spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
--else.
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
 handle_out(Time, Q, State) ->
     handle(Time, handle_out, Q, State).
 
 %% @private
--ifdef(LEGACY_TYPES).
 -spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: #state{},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
--else.
--spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: #state{},
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: #state{}.
--endif.
 handle_out_r(Time, Q, State) ->
     handle(Time, handle_out_r, Q, State).
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_join(Time, Q, State) -> {[], Q, NState} when
+-spec handle_join(Time, Q, State) -> NState when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(any()),
       State :: #state{},
       NState :: #state{}.
--else.
--spec handle_join(Time, Q, State) -> {[], Q, NState} when
-      Time :: integer(),
-      Q :: queue:queue(),
-      State :: #state{},
-      NState :: #state{}.
--endif.
 handle_join(Time, Q, #state{codel=Codel} = State) ->
-    {[], NQ, NCodel} = squeue_codel:handle_join(Time, Q, Codel),
-    case queue:is_empty(NQ) of
+    NCodel = squeue_codel:handle_join(Time, Q, Codel),
+    case queue:is_empty(Q) of
         true ->
-            {[], NQ, State#state{codel=NCodel, timeout_next=Time}};
+            State#state{codel=NCodel, timeout_next=Time};
         false ->
-            {[], NQ, State#state{codel=NCodel}}
+            State#state{codel=NCodel}
     end.
 
 %% Internal
 
 handle(Time, Fun, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
   when Time < TimeoutNext ->
-    {Drops, NQ, NCodel} = squeue_codel:Fun(Time, Q, Codel),
-    {Drops, NQ, State#state{codel=NCodel}};
+    case squeue_codel:Fun(Time, Q, Codel) of
+        {Drops, NQ, NCodel} ->
+            {Drops, NQ, State#state{codel=NCodel}};
+        {Result, Drops, NQ, NCodel} ->
+            {Result, Drops, NQ, State#state{codel=NCodel}}
+    end;
 handle(Time, Fun, Q, #state{timeout=Timeout, codel=Codel} = State) ->
-    Result = queue:peek(Q),
+    Peek = queue:peek(Q),
     MinStart = Time - Timeout,
-    {Drops, NQ, TimeoutNext} = timeout(Result, MinStart, Time, Q, Timeout, []),
-    {Drops2, NQ2, NCodel} = squeue_codel:Fun(Time, NQ, Codel),
-    {Drops2 ++ Drops, NQ2, State#state{timeout_next=TimeoutNext, codel=NCodel}}.
+    {Drops, NQ, TimeoutNext} = timeout(Peek, MinStart, Time, Q, Timeout, []),
+    case squeue_codel:Fun(Time, NQ, Codel) of
+        {Drops2, NQ2, NCodel} ->
+            NState = State#state{codel=NCodel, timeout_next=TimeoutNext},
+            {Drops2 ++ Drops, NQ2, NState};
+        {Result, Drops2, NQ2, NCodel} ->
+            NState = State#state{codel=NCodel, timeout_next=TimeoutNext},
+            {Result, Drops2 ++ Drops, NQ2, NState}
+    end.
 
 timeout(empty, _MinStart, Time, Q, _Timeout, Drops) ->
     %% The tail_time of the squeue is unknown (an item could be added in the

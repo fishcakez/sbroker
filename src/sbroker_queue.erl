@@ -39,7 +39,7 @@
                      drop :: drop | drop_r,
                      size :: non_neg_integer() | infinity,
                      len = 0 :: non_neg_integer(),
-                     squeue :: squeue:squeue()}).
+                     squeue :: squeue:squeue({reference(), {pid(), any()}})}).
 
 -type tag() :: any().
 -type spec() :: {module(), any(), out | out_r, non_neg_integer() | infinity,

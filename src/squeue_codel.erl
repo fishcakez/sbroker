@@ -72,17 +72,13 @@ init(Time, {Target, Interval})
     #state{target=Target, interval=Interval, drop_next=Time, peek_next=Time}.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_timeout(Time, Q, State) -> {[], Q, State} when
+-spec handle_timeout(Time, Q, State) -> {Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
-      State :: state().
--else.
--spec handle_timeout(Time, Q, State) -> {[], Q, State} when
-      Time :: integer(),
-      Q :: queue:queue(),
-      State :: state().
--endif.
+      Q :: squeue:internal_queue(Item),
+      State :: state(),
+      Drops :: [{SojournTime :: non_neg_integer(), Item}],
+      NQ :: squeue:internal_queue(Item),
+      NState :: state().
 handle_timeout(Time, Q, #state{peek_next=PeekNext} = State)
   when PeekNext > Time->
     {[], Q, State};
@@ -96,74 +92,56 @@ handle_timeout(Time, Q, #state{target=Target} = State) ->
     timeout_peek(queue:peek(Q), Time - Target, Time, Q, State).
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out(Time, Q, State) ->
+    {empty | {SojournTime, Item}, Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: state(),
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      SojournTime :: non_neg_integer(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NQ :: squeue:internal_queue(Item),
       NState :: state().
--else.
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: state(),
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: state().
--endif.
 handle_out(Time, Q, #state{peek_next=PeekNext} = State) when Time < PeekNext ->
-    {[], Q, State};
+    case queue:out(Q) of
+        {empty, NQ} ->
+            {empty, [], NQ, State};
+        {{value, Item}, NQ} ->
+            {Item, [], NQ, State}
+    end;
 handle_out(Time, Q, #state{target=Target} = State) ->
-    out_peek(queue:peek(Q), Time - Target, Time, Q, State).
+    out_peek(queue:out(Q), Time - Target, Time, State).
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out_r(Time, Q, State) ->
+    {empty | {SojournTime, Item}, Drops, NQ, NState} when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(Item),
       State :: state(),
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue(),
+      SojournTime :: non_neg_integer(),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NQ :: squeue:internal_queue(Item),
       NState :: state().
--else.
--spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: integer(),
-      Q :: queue:queue(Item),
-      State :: state(),
-      Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
-      NQ :: queue:queue(Item),
-      NState :: state().
--endif.
 handle_out_r(Time, Q, State) ->
-    case handle_timeout(Time, Q, State) of
-        {_, _, #state{drop_first=infinity}} = Result ->
-            Result;
-        {Drops, NQ, NState} ->
-            {Drops, NQ, out_r_peek(Time, NQ, NState)}
+    {Drops, NQ, NState} = handle_timeout(Time, Q, State),
+    case queue:out_r(NQ) of
+        {empty, NQ2} ->
+            {empty, Drops, NQ2, NState#state{drop_first=infinity}};
+        {{value, Item}, NQ2} ->
+            {Item, Drops, NQ2, NState}
     end.
 
 %% @private
--ifdef(LEGACY_TYPES).
--spec handle_join(Time, Q, State) -> {[], Q, NState} when
+-spec handle_join(Time, Q, State) -> NState when
       Time :: integer(),
-      Q :: queue(),
+      Q :: squeue:internal_queue(any()),
       State :: state(),
       NState :: state().
--else.
--spec handle_join(Time, Q, State) -> {[], Q, NState} when
-      Time :: integer(),
-      Q :: queue:queue(),
-      State :: state(),
-      NState :: state().
--endif.
 handle_join(Time, Q, State) ->
     case queue:is_empty(Q) of
         true ->
-            {[], Q, State#state{peek_next=Time}};
+            State#state{peek_next=Time};
         false ->
-            {[], Q, State}
+            State
     end.
 
 %% Internal
@@ -216,76 +194,65 @@ timeout_drops({value, Item}, MinStart, Time, Q,
     end.
 
 %% Empty queue so reset drop_first
-out_peek(empty,  _MinStart, _Time, Q, State) ->
+out_peek({empty, Q}, _MinStart, _Time, State) ->
     %% The tail time is unknown so the sojourn time of the next item could be
     %% above target.
-    {[], Q, State#state{drop_first=infinity}};
+    {empty, [], Q, State#state{drop_first=infinity}};
 %% Item below target sojourn time and getting dequeued
-out_peek({value, {Start, _}}, MinStart, _Time, Q, #state{target=Target} = State)
-  when Start > MinStart ->
+out_peek({{value, {Start, _} = Item}, Q}, MinStart, _Time,
+         #state{target=Target} = State) when Start > MinStart ->
     %% First time state can change is if the next item has the same start time
     %% and remains for the target sojourn time.
-    {[], Q, State#state{drop_first=infinity, peek_next=Start+Target}};
+    NState = State#state{drop_first=infinity, peek_next=Start+Target},
+    {Item, [], Q, NState};
 %% Item is first above target sojourn time, begin first interval.
-out_peek(_Result, _MinStart, Time, Q,
+out_peek({{value, Item}, Q}, _MinStart, Time,
          #state{drop_first=infinity, interval=Interval} = State) ->
-    {[], Q, State#state{drop_first=Time + Interval}};
+    {Item, [], Q, State#state{drop_first=Time + Interval}};
 %% Item above target sojourn time during a consecutive "slow" interval.
-out_peek(_Result, _MinStart, Time, Q,
+out_peek({{value, Item}, Q}, _MinStart, Time,
           #state{drop_first=dropping, drop_next=DropNext} = State)
   when DropNext > Time ->
-    {[], Q, State};
+    {Item, [], Q, State};
 %% Item above target sojourn time and is the last in a consecutive "slow"
 %% interval.
-out_peek({value, Item}, MinStart, Time, Q,
+out_peek({{value, Item}, Q}, MinStart, Time,
      #state{drop_first=dropping} = State) ->
-    NQ = queue:drop(Q),
-    out_drops(queue:peek(NQ), MinStart, Time, NQ, State, [Item]);
+    out_drops(queue:out(Q), MinStart, Time, State, [Item]);
 %% Item above target sojourn time during the first "slow" interval.
-out_peek(_Result, _MinStart, Time, Q, #state{drop_first=DropFirst} = State)
-  when DropFirst > Time ->
-    {[], Q, State};
+out_peek({{value, Item}, Q}, _MinStart, Time,
+         #state{drop_first=DropFirst} = State) when DropFirst > Time ->
+    {Item, [], Q, State};
 %% Item above target sojourn time and is the last item in the first "slow"
 %% interval so drop it.
-out_peek({value, Item}, MinStart, Time, Q, State) ->
-    NQ = queue:drop(Q),
+out_peek({{value, Item}, Q}, MinStart, Time, State) ->
     NState = drop_control(Time, State),
-    case queue:peek(NQ) of
-        empty ->
-            {[Item], NQ, NState#state{drop_first=infinity}};
-        {value, {Start, _}} when Start > MinStart ->
-            {[Item], NQ, NState#state{drop_first=infinity}};
-        _ ->
-            {[Item], NQ, NState}
+    case queue:out(Q) of
+        {empty, NQ} ->
+            {empty, [Item], NQ, NState#state{drop_first=infinity}};
+        {{value, {Start, _} = Item2}, NQ} when Start > MinStart ->
+            {Item2, [Item], NQ, NState#state{drop_first=infinity}};
+        {{value, Item2}, NQ} ->
+            {Item2, [Item], NQ, NState}
     end.
 
-out_drops(empty, _MinStart, _Time, Q, State, Drops) ->
-    {Drops, Q, State#state{drop_first=infinity}};
-out_drops({value, {Start, _}}, MinStart, _Time, Q,
+out_drops({empty, Q}, _MinStart, _Time, State, Drops) ->
+    {empty, Drops, Q, State#state{drop_first=infinity}};
+out_drops({{value, {Start, _} = Item}, Q}, MinStart, _Time,
       #state{target=Target} = State, Drops) when Start > MinStart ->
-    {Drops, Q, State#state{drop_first=infinity, peek_next=Start+Target}};
-out_drops({value, {Start, _}}, MinStart, _Time, Q,
+    {Item, Drops, Q, State#state{drop_first=infinity, peek_next=Start+Target}};
+out_drops({{value, {Start, _} = Item}, Q}, MinStart, _Time,
           #state{count=C, drop_next=DropNext} = State, Drops)
   when Start > MinStart ->
     NState = drop_control(C+1, DropNext, State),
-    {Drops, Q, NState};
-out_drops({value, Item}, MinStart, Time, Q,
+    {Item, Drops, Q, NState};
+out_drops({{value, Item}, Q}, MinStart, Time,
       #state{count=C, drop_next=DropNext} = State, Drops) ->
     case drop_control(C+1, DropNext, State) of
         #state{drop_next=NDropNext} = NState when NDropNext > Time ->
-            {Drops, Q, NState};
+            {Item, Drops, Q, NState};
         NState ->
-            NQ = queue:drop(Q),
-            NDrops = [Item | Drops],
-            out_drops(queue:peek(NQ), MinStart, Time, NQ, NState, NDrops)
-    end.
-
-out_r_peek(_Time, Q, State) ->
-    case queue:is_empty(Q) of
-        true ->
-            State#state{drop_first=infinity};
-        false ->
-            State
+            out_drops(queue:out(Q), MinStart, Time, NState, [Item | Drops])
     end.
 
 %% If first "slow" item in "slow" interval was "soon" after switching from

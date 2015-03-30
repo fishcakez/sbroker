@@ -44,7 +44,7 @@ init(_Time, _Args) ->
 %% @private
 -spec handle_sojourn(Time, SojournTime, S, undefined) ->
     {Result, Drops, NS, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       S :: squeue:squeue(Item),
       Result :: empty | {ItemSojournTime, Item},
@@ -59,7 +59,7 @@ handle_sojourn(Time, _, S, undefined) ->
 %% @private
 -spec handle_sojourn_r(Time, SojournTime, S, undefined) ->
     {Result, Drops, NS, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       S :: squeue:squeue(Item),
       Result :: empty | {ItemSojournTime, Item},
@@ -74,7 +74,7 @@ handle_sojourn_r(Time, _, S, undefined) ->
 %% @private
 -spec handle_sojourn_closed(Time, SojournTime, S, undefined) ->
     {closed, Drops, NS, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       S :: squeue:squeue(Item),
       Drops :: [{DropSojournTime, Item}],
@@ -87,7 +87,7 @@ handle_sojourn_closed(Time, _, S, undefined) ->
 %% @private
 -spec handle_dropped(Time, S, undefined) ->
     {closed, Drops, NS, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       S :: squeue:squeue(Item),
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
@@ -99,7 +99,7 @@ handle_dropped(Time, S, undefined) ->
 %% @private
 -spec handle_dropped_r(Time, S, undefined) ->
     {closed, Drops, NS, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       S :: squeue:squeue(Item),
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
@@ -110,7 +110,7 @@ handle_dropped_r(Time, S, undefined) ->
 %% @private
 -spec handle_dropped_closed(Time, S, undefined) ->
     {closed, Drops, NS, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       S :: squeue:squeue(Item),
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),

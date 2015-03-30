@@ -47,7 +47,7 @@
                      drop :: drop | drop_r,
                      size :: non_neg_integer() | infinity,
                      len = 0 :: non_neg_integer(),
-                     svalve = svalve:new() :: svalve:svalve()}).
+                     svalve :: svalve:svalve({reference(), {pid(), any()}})}).
 
 -type tag() :: any().
 -type queue_spec() ::

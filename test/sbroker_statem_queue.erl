@@ -44,13 +44,25 @@ handle_timeout(_, Q, State) ->
     handle(Q, State).
 
 handle_out(_, Q, State) ->
-    handle(Q, State).
+    {Drops, NQ, NState} = handle(Q, State),
+    case queue:out(NQ) of
+        {empty, NQ2} ->
+            {empty, Drops, NQ2, NState};
+        {{value, Item}, NQ2} ->
+            {Item, Drops, NQ2, NState}
+    end.
 
 handle_out_r(_, Q, State) ->
-    handle(Q, State).
+    {Drops, NQ, NState} = handle(Q, State),
+    case queue:out_r(NQ) of
+        {empty, NQ2} ->
+            {empty, Drops, NQ2, NState};
+        {{value, Item}, NQ2} ->
+            {Item, Drops, NQ2, NState}
+    end.
 
-handle_join(_, Q, State) ->
-    {[], Q, State}.
+handle_join(_, _, State) ->
+    State.
 
 %% If queue is empty don't change state.
 handle(Q, State) ->
