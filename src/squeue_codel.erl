@@ -43,7 +43,7 @@
 
 -behaviour(squeue).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
 -export([handle_out_r/3]).
@@ -52,33 +52,34 @@
 -record(state, {target :: non_neg_integer(),
                 interval :: pos_integer(),
                 count=0 :: non_neg_integer(),
-                drop_next=0 :: non_neg_integer(),
-                drop_first=infinity :: non_neg_integer() | infinity | dropping,
-                peek_next=0 :: non_neg_integer()}).
+                drop_next :: integer(),
+                drop_first=infinity :: integer() | infinity | dropping,
+                peek_next :: integer()}).
 
 -opaque state() :: #state{}.
 
 -export_type([state/0]).
 
 %% @private
--spec init({Target, Interval}) -> State when
+-spec init(Time, {Target, Interval}) -> State when
+      Time :: integer(),
       Target :: non_neg_integer(),
       Interval :: pos_integer(),
       State :: state().
-init({Target, Interval})
+init(Time, {Target, Interval})
   when is_integer(Target) andalso Target >= 0 andalso
        is_integer(Interval) andalso Interval > 0 ->
-    #state{target=Target, interval=Interval}.
+    #state{target=Target, interval=Interval, drop_next=Time, peek_next=Time}.
 
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_timeout(Time, Q, State) -> {[], Q, State} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue(),
       State :: state().
 -else.
 -spec handle_timeout(Time, Q, State) -> {[], Q, State} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue(),
       State :: state().
 -endif.
@@ -97,7 +98,7 @@ handle_timeout(Time, Q, #state{target=Target} = State) ->
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue(),
       State :: state(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
@@ -105,7 +106,7 @@ handle_timeout(Time, Q, #state{target=Target} = State) ->
       NState :: state().
 -else.
 -spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue(Item),
       State :: state(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
@@ -120,7 +121,7 @@ handle_out(Time, Q, #state{target=Target} = State) ->
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue(),
       State :: state(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
@@ -128,7 +129,7 @@ handle_out(Time, Q, #state{target=Target} = State) ->
       NState :: state().
 -else.
 -spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue(Item),
       State :: state(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
@@ -146,21 +147,21 @@ handle_out_r(Time, Q, State) ->
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_join(Time, Q, State) -> {[], Q, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue(),
       State :: state(),
       NState :: state().
 -else.
 -spec handle_join(Time, Q, State) -> {[], Q, NState} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue(),
       State :: state(),
       NState :: state().
 -endif.
-handle_join(_Time, Q, State) ->
+handle_join(Time, Q, State) ->
     case queue:is_empty(Q) of
         true ->
-            {[], Q, State#state{peek_next=0}};
+            {[], Q, State#state{peek_next=Time}};
         false ->
             {[], Q, State}
     end.

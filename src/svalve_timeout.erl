@@ -27,7 +27,7 @@
 
 -behaviour(svalve).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_sojourn/4]).
 -export([handle_sojourn_r/4]).
 -export([handle_sojourn_closed/4]).
@@ -36,9 +36,10 @@
 -export([handle_dropped_closed/3]).
 
 %% @private
--spec init(Timeout) -> Timeout when
+-spec init(Time, Timeout) -> Timeout when
+      Time :: integer(),
       Timeout :: timeout().
-init(Timeout) ->
+init(_Time, Timeout) ->
     Timeout.
 
 %% @private

@@ -2,7 +2,7 @@
 
 -behaviour(svalve).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_sojourn/4]).
 -export([handle_sojourn_r/4]).
 -export([handle_sojourn_closed/4]).
@@ -10,7 +10,7 @@
 -export([handle_dropped_r/3]).
 -export([handle_dropped_closed/3]).
 
-init(Sequence) ->
+init(_, Sequence) ->
     {Sequence, Sequence}.
 
 handle_sojourn(Time, _, S, State) ->

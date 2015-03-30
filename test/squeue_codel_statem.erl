@@ -61,8 +61,8 @@
 -export([next_state/3]).
 -export([postcondition/3]).
 
--record(state, {target, interval, first_above_time=0, drop_next=0, count=0,
-                dropping=false, now=0}).
+-record(state, {target, interval, first_above_time=undefined,
+                drop_next=undefined, count=0, dropping=false, now=undefined}).
 
 quickcheck() ->
     quickcheck([]).
@@ -100,11 +100,11 @@ init({Target, Interval}) ->
 
 %% To ensure following the reference codel implementationas closely as possible
 %% use the full dequeue approach and "undo" the following:
-%% * Changing first_above_time to 0
+%% * Changing first_above_time to undefined
 %% * Changing from dropping true to false
 %% This means that a slow queue is detected and items can be dropped but a
 %% real dequeue is required to stop the first (or consecutive) slow intervals.
-handle_timeout(Time, L, #state{first_above_time=0} = State) ->
+handle_timeout(Time, L, #state{first_above_time=undefined} = State) ->
     handle_out(Time, L, State);
 handle_timeout(Time, L, #state{dropping=true, target=Target,
                                first_above_time=FirstAbove} = State) ->
@@ -157,7 +157,7 @@ handle_out(Time, L, State) ->
 handle_out_r(Time, L, State) ->
     case handle_timeout(Time, L, State) of
         {Drops, NState} when Drops =:= length(L) ->
-            {Drops, NState#state{first_above_time=0}};
+            {Drops, NState#state{first_above_time=undefined}};
         {Drops, NState} ->
             {Drops, NState}
     end.
@@ -202,12 +202,12 @@ control_law(Start, #state{interval=Interval, count=Count} = State) ->
     State#state{drop_next=DropNext}.
 
 do_dequeue([], State) ->
-    {{nodrop, empty}, [], State#state{first_above_time=0}};
+    {{nodrop, empty}, [], State#state{first_above_time=undefined}};
 do_dequeue([SojournTime | L], #state{target=Target} = State)
   when SojournTime < Target ->
-    {{nodrop, SojournTime}, L, State#state{first_above_time=0}};
-do_dequeue([SojournTime | L], #state{interval=Interval, first_above_time=0,
-                                     now=Now} = State) ->
+    {{nodrop, SojournTime}, L, State#state{first_above_time=undefined}};
+do_dequeue([SojournTime | L], #state{interval=Interval, now=Now,
+                                     first_above_time=undefined} = State) ->
     FirstAbove = Now + Interval,
     {{nodrop, SojournTime}, L, State#state{first_above_time=FirstAbove}};
 do_dequeue([SojournTime | L], #state{first_above_time=FirstAbove,

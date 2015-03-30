@@ -24,8 +24,9 @@
 -export([next_state/3]).
 -export([postcondition/3]).
 
--record(state, {target, interval, first_below_time=0, dequeue_next=0, count=0,
-                dequeuing=false, status=open, now=0}).
+-record(state, {target, interval, first_below_time=undefined,
+                dequeue_next=undefined, count=0, dequeuing=false, status=open,
+                now=undefined}).
 
 quickcheck() ->
     quickcheck([]).
@@ -100,7 +101,7 @@ handle_sojourn_closed(Time, SojournTime, Q, Manager, ManState, State) ->
     end.
 
 handle_dropped(Time, Q, Manager, ManState, #state{count=Count} = State) ->
-    NState = State#state{first_below_time=0, dequeuing=false,
+    NState = State#state{first_below_time=undefined, dequeuing=false,
                          count=max(0, Count-1), status=open, now=Time},
     handle_not_dequeuing(closed, undefined, Q, Manager, ManState, NState).
 
@@ -109,7 +110,7 @@ handle_dropped_r(Time, Q, Manager, ManState, State) ->
 
 handle_dropped_closed(Time, Q, Manager, ManState,
                       #state{count=Count} = State) ->
-    NState = State#state{first_below_time=0, dequeuing=false,
+    NState = State#state{first_below_time=undefined, dequeuing=false,
                          count=max(0, Count-1), status=closed, now=Time},
     handle_not_dequeuing(closed, undefined, Q, Manager, ManState, NState).
 
@@ -160,8 +161,10 @@ handle_not_dequeuing(closed, _Fun, Q, Manager, ManState,
 
 do_compare(SojournTime, #state{target=Target} = State)
   when SojournTime > Target ->
-    {closed, State#state{first_below_time=0}};
-do_compare(_, #state{interval=Interval, first_below_time=0, now=Now} = State) ->
+    {closed, State#state{first_below_time=undefined}};
+do_compare(_,
+           #state{interval=Interval, first_below_time=undefined,
+                  now=Now} = State) ->
     FirstBelow = Now + Interval,
     {closed, State#state{first_below_time=FirstBelow}};
 do_compare(_, #state{first_below_time=FirstBelow,

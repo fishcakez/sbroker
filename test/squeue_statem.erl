@@ -200,14 +200,14 @@ postcondition(State, {call, _, close, Args}, Result) ->
     close_post(State, Args, Result).
 
 time() ->
-    choose(0, 10).
+    choose(-10, 10).
 
 item() ->
     oneof([a, b, c]).
 
 time(Time) ->
     frequency([{10, ?LET(Incr, choose(0, 3), Time + Incr)},
-               {1, choose(0, Time)}]).
+               {1, choose(-10, Time)}]).
 
 new(Mod, Manager, Args) ->
     Mod:new(Manager, Args).
@@ -466,25 +466,18 @@ join_item(MinStart, MaxStart) ->
     {choose(MinStart, MaxStart), item()}.
 
 join_queue(Time, MinStart, Manager) ->
-    ?SUCHTHAT({_Time, TailTime, JoinList, _Module, _Args},
-              do_join_queue(Time, MinStart, Manager),
-              case lists:reverse(JoinList) of
-                  [] ->
-                      true;
-                  [{MaxItemTime, _} | _] ->
-                      MaxItemTime =< TailTime
-              end).
-
-do_join_queue(Time, MinStart, Manager) ->
-    ?LET({TailTime, JoinList, Args},
-         {choose(MinStart, Time), join_list(MinStart, Time), Manager:args()},
-         {Time, TailTime, JoinList, Manager:module(), Args}).
+    ?LET({JoinList, Args}, {join_list(MinStart, Time), Manager:args()},
+         begin
+             {MaxItemTime, _} = lists:last([{-10, a} | JoinList]),
+             TailTime = choose(MaxItemTime, Time),
+             {Time, TailTime, JoinList, Manager:module(), Args}
+         end).
 
 join_args(#state{mod=Mod, manager=Manager, feedback=Feedback, list=L, time=Time,
                  queue=Q}) ->
     %% Add default item that has been in queue whole time so that empty queue
-    %% has MinStart of 0.
-    {SojournTime, _} = lists:last([{Time, a} | L]),
+    %% has MinStart of -10.
+    {SojournTime, _} = lists:last([{Time+10, a} | L]),
     MinStart = Time-SojournTime,
     Args = [Mod, Q, join_queue(Time, MinStart, Manager)],
     case Feedback of

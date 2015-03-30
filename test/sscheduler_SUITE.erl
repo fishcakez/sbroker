@@ -55,8 +55,7 @@ all() ->
      {group, send}].
 
 suite() ->
-    [{ct_hooks, [cth_surefire]},
-     {timetrap, {seconds, 120}}].
+    [{timetrap, {seconds, 120}}].
 
 groups() ->
     [{whereis, [parallel], [whereis_pid, whereis_local, whereis_global,

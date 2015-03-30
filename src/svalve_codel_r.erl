@@ -33,7 +33,7 @@
 
 -behaviour(svalve).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_sojourn/4]).
 -export([handle_sojourn_r/4]).
 -export([handle_sojourn_closed/4]).
@@ -43,17 +43,17 @@
 -record(state, {target :: non_neg_integer(),
                 interval :: non_neg_integer(),
                 count=0 :: non_neg_integer(),
-                dequeue_next=0 :: non_neg_integer(),
-                dequeue_first=infinity :: non_neg_integer() | infinity |
-                    dequeuing}).
+                dequeue_next :: integer(),
+                dequeue_first=infinity :: integer() | infinity | dequeuing}).
 
 %% @private
--spec init({Target, Interval}) -> State when
+-spec init(Time, {Target, Interval}) -> State when
+      Time :: integer(),
       Target :: non_neg_integer(),
       Interval :: non_neg_integer(),
       State :: #state{}.
-init({Target, Interval}) ->
-    #state{target=Target, interval=Interval}.
+init(Time, {Target, Interval}) ->
+    #state{target=Target, interval=Interval, dequeue_next=Time}.
 
 %% @private
 -spec handle_sojourn(Time, SojournTime, S, State) ->

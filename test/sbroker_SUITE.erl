@@ -50,8 +50,7 @@ all() ->
      {group, property}].
 
 suite() ->
-    [{ct_hooks, [cth_surefire]},
-     {timetrap, {seconds, 120}}].
+    [{timetrap, {seconds, 120}}].
 
 groups() ->
     [{simple, [ask, ask_r, await_timeout, await_down]},

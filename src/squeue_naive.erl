@@ -26,26 +26,27 @@
 
 -behaviour(squeue).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
 -export([handle_out_r/3]).
 -export([handle_join/3]).
 
 %% @private
--spec init(Args) -> undefined when
+-spec init(Time, Args) -> undefined when
+      Time :: integer(),
       Args :: any().
-init(_Args) ->
+init(_Time, _Args) ->
     undefined.
 
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_timeout(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue().
 -else.
 -spec handle_timeout(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue().
 -endif.
 handle_timeout(_Time, Q, undefined) ->
@@ -54,11 +55,11 @@ handle_timeout(_Time, Q, undefined) ->
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_out(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue().
 -else.
 -spec handle_out(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue().
 -endif.
 handle_out(_Time, Q, undefined) ->
@@ -67,11 +68,11 @@ handle_out(_Time, Q, undefined) ->
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_out_r(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue().
 -else.
 -spec handle_out_r(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue().
 -endif.
 handle_out_r(_Time, Q, undefined) ->
@@ -80,11 +81,11 @@ handle_out_r(_Time, Q, undefined) ->
 %% @private
 -ifdef(LEGACY_TYPES).
 -spec handle_join(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue().
 -else.
 -spec handle_join(Time, Q, undefined) -> {[], Q, undefined} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: queue:queue().
 -endif.
 handle_join(_Time, Q, undefined) ->

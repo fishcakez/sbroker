@@ -21,7 +21,7 @@
 
 -behaviour(squeue).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
 -export([handle_out_r/3]).
@@ -37,7 +37,7 @@
 %% Timing in `squeue` is tested in squeue_statem where the test controls the
 %% time.
 
-init(Drops) ->
+init(_, Drops) ->
     {Drops, Drops}.
 
 handle_timeout(_, Q, State) ->

@@ -47,7 +47,7 @@ all() ->
     [{group, property}].
 
 suite() ->
-    [{timetrap, {seconds, 30}}].
+    [{timetrap, {seconds, 120}}].
 
 groups() ->
     [{property, [parallel], [naive, timeout, codel, codel_timeout]}].

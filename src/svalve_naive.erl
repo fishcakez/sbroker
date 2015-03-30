@@ -26,7 +26,7 @@
 
 -behaviour(svalve).
 
--export([init/1]).
+-export([init/2]).
 -export([handle_sojourn/4]).
 -export([handle_sojourn_r/4]).
 -export([handle_sojourn_closed/4]).
@@ -35,9 +35,10 @@
 -export([handle_dropped_closed/3]).
 
 %% @private
--spec init(Args) -> undefined when
+-spec init(Time, Args) -> undefined when
+      Time :: integer(),
       Args :: any().
-init(_Args) ->
+init(_Time, _Args) ->
     undefined.
 
 %% @private
