@@ -48,6 +48,7 @@
 -export([len/1]).
 -export([in/2]).
 -export([in/3]).
+-export([in/4]).
 -export([out/1]).
 -export([out/2]).
 -export([out_r/1]).
@@ -195,7 +196,7 @@ in(Item, #svalve{squeue=S} = V) ->
     {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Advances the queue, `V', to time `Time' and drops item, then inserts
-%% the item, `Item', at the tail of queue, `S'. Returns a tuple containing the
+%% the item, `Item', at the tail of queue, `V'. Returns a tuple containing the
 %% dropped items and their sojourn times, `Drops', and resulting queue, `NV'.
 %%
 %% If `Time' is less than the current time of the queue time, the current time
@@ -209,8 +210,37 @@ in(Time, Item, #svalve{time=PrevTime, squeue=S} = V)
   when is_integer(Time) andalso Time > PrevTime ->
     {Drops, NS} = squeue:in(Time, Item, S),
     {Drops, V#svalve{time=Time, squeue=NS}};
-in(Time, Item, V) when is_integer(Time) andalso Time >= 0 ->
-    in(Item, V).
+in(Time, Item, #svalve{squeue=S} = V) when is_integer(Time) andalso Time >= 0 ->
+    {Drops, NS} = squeue:in(Time, Item, S),
+    {Drops, V#svalve{squeue=NS}}.
+
+%% @doc Advances the queue, `V', to time `Time' and drops item, then inserts
+%% the item, `Item', with time `InTime' at the tail of queue, `V'. Returns a
+%% tuple containing the dropped items and their sojourn times, `Drops', and
+%% resulting queue, `NV'.
+%%
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
+%%
+%% If `InTime' is less than the last time an item was inserted at the tail of
+%% the queue, the item is inserted with the same time as the last item. This
+%% time may be before the current time of the queue.
+%%
+%% This function raises the error `badarg' if `InTime' is greater than `Time'.
+-spec in(Time, InTime, Item, V) -> {Drops, NV} when
+      Time :: non_neg_integer(),
+      InTime :: non_neg_integer(),
+      V :: svalve(Item),
+      Drops :: [{SojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+in(Time, InTime, Item, #svalve{time=PrevTime, squeue=S} = V)
+  when is_integer(Time) andalso Time > PrevTime ->
+    {Drops, NS} = squeue:in(Time, InTime, Item, S),
+    {Drops, V#svalve{time=Time, squeue=NS}};
+in(Time, InTime, Item, #svalve{squeue=S} = V)
+  when is_integer(Time) andalso Time >= 0 ->
+    {Drops, NS} = squeue:in(Time, InTime, Item, S),
+    {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Drops items, `Drops', from the queue, `V', and then removes the item,
 %% `Item', from the head of the remaining queue. Returns

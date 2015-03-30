@@ -167,9 +167,8 @@ handle_join(_Time, Q, State) ->
 
 %% Internal
 
-timeout_peek(empty, _MinStart, Time, Q,
-             #state{drop_first=infinity, target=Target} = State) ->
-    {[], Q, State#state{peek_next=Time+Target}};
+timeout_peek(empty, _MinStart, _Time, Q, #state{drop_first=infinity} = State) ->
+    {[], Q, State};
 timeout_peek(empty, _MinStart, _Time, Q, State) ->
     {[], Q, State};
 timeout_peek({value, {Start, _}}, MinStart, _Time, Q,
@@ -216,10 +215,10 @@ timeout_drops({value, Item}, MinStart, Time, Q,
     end.
 
 %% Empty queue so reset drop_first
-out_peek(empty,  _MinStart, Time, Q, #state{target=Target} = State) ->
-    %% The first time state can change is if an item is added immediately and
-    %% remains in the queue for at least the target sojourn time.
-    {[], Q, State#state{drop_first=infinity, peek_next=Time+Target}};
+out_peek(empty,  _MinStart, _Time, Q, State) ->
+    %% The tail time is unknown so the sojourn time of the next item could be
+    %% above target.
+    {[], Q, State#state{drop_first=infinity}};
 %% Item below target sojourn time and getting dequeued
 out_peek({value, {Start, _}}, MinStart, _Time, Q, #state{target=Target} = State)
   when Start > MinStart ->
@@ -259,8 +258,8 @@ out_peek({value, Item}, MinStart, Time, Q, State) ->
             {[Item], NQ, NState}
     end.
 
-out_drops(empty, _MinStart, Time, Q, #state{target=Target} = State, Drops) ->
-    {Drops, Q, State#state{drop_first=infinity, peek_next=Time+Target}};
+out_drops(empty, _MinStart, _Time, Q, State, Drops) ->
+    {Drops, Q, State#state{drop_first=infinity}};
 out_drops({value, {Start, _}}, MinStart, _Time, Q,
       #state{target=Target} = State, Drops) when Start > MinStart ->
     {Drops, Q, State#state{drop_first=infinity, peek_next=Start+Target}};
@@ -280,11 +279,10 @@ out_drops({value, Item}, MinStart, Time, Q,
             out_drops(queue:peek(NQ), MinStart, Time, NQ, NState, NDrops)
     end.
 
-out_r_peek(Time, Q, #state{target=Target} = State) ->
+out_r_peek(_Time, Q, State) ->
     case queue:is_empty(Q) of
         true ->
-            %% Dequeue attempt on empty queue means nolonger slow.
-            State#state{drop_first=infinity, peek_next=Time+Target};
+            State#state{drop_first=infinity};
         false ->
             State
     end.

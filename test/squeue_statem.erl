@@ -37,11 +37,13 @@
 -export([drop/2]).
 -export([drop_r/2]).
 -export([join/3]).
+-export([join/5]).
 -export([filter/4]).
 -export([filter/5]).
 
 -record(state, {mod, managers=[], manager, manager_state, feedback,
-                feedback_state, status=open, time=0, list=[], queue}).
+                feedback_state, status=open, time=0, tail_time=0, list=[],
+                queue}).
 
 initial_state(Mod, Manager) ->
     #state{mod=Mod, manager=Manager}.
@@ -239,13 +241,13 @@ new_pre(#state{queue=Q}, _Args) ->
 new_next(State, Value, [Mod, ManMod, ManArgs]) ->
     new_next(State, Value, [Mod, 0, ManMod, ManArgs]);
 new_next(#state{manager=Manager} = State, VQ, [_Mod, Time, _ManMod, ManArgs]) ->
-    State#state{time=Time, queue=VQ, list=[],
+    State#state{time=Time, tail_time=Time, queue=VQ, list=[],
                 manager_state=Manager:init(ManArgs)};
 new_next(State, Value, [Mod, Manager, ManMod, ManArgs, FbMod, FbArgs]) ->
     new_next(State, Value, [Mod, Manager, 0, ManMod, ManArgs, FbMod, FbArgs]);
 new_next(#state{feedback=Feedback} = State, VQ,
          [_Mod, Manager, Time, _ManMod, ManArgs, _FbMod, FbArgs]) ->
-    State#state{time=Time, queue=VQ, list=[],
+    State#state{time=Time, tail_time=Time, queue=VQ, list=[],
                 manager=Manager,
                 manager_state=Manager:init(ManArgs),
                 feedback_state=Feedback:init(FbArgs)}.
@@ -253,23 +255,41 @@ new_next(#state{feedback=Feedback} = State, VQ,
 new_post(#state{mod=Mod}, _Args, Q) ->
     Mod:is_queue(Q).
 
-in_args(#state{time=Time, queue=Q}) ->
-    oneof([[time(Time), item(), Q],
+in_args(#state{time=Time, queue=Q} = State) ->
+    oneof([in_args_intime(State),
+           [time(Time), item(), Q],
            [item(), Q]]).
 
+in_args_intime(#state{time=PrevTime, queue=Q}) ->
+    ?SUCHTHAT([Time, InTime, _Item, _Q],
+              [time(PrevTime), oneof([time(), time(PrevTime)]), item(), Q],
+              Time >= InTime).
+
+in_pre(_State, [Time, InTime, _Item, _Q]) when InTime > Time ->
+    false;
 in_pre(_State, _Args) ->
     true.
 
 in_next(#state{time=Time} = State, Value, [Item, Q]) ->
     in_next(State, Value, [Time, Item, Q]);
-in_next(State, Value, [Time, Item, _Q]) ->
+in_next(#state{time=PrevTime} = State, Value, [Time, Item, Q]) ->
+    NTime = max(PrevTime, Time),
+    in_next(State, Value, [NTime, NTime, Item, Q]);
+in_next(#state{tail_time=TailTime} = State, Value,
+        [Time, InTime, Item, _Q]) ->
     VQ = {call, erlang, element, [2, Value]},
-    #state{list=L} = NState = advance_time_state(State, Time),
-    NState#state{list=L ++ [{0, Item}], queue=VQ}.
+    #state{time=NTime, list=L} = NState = advance_time_state(State, Time),
+    NTailTime = max(TailTime, InTime),
+    SojournTime = NTime - NTailTime,
+    NState#state{tail_time=NTailTime,  list=L ++ [{SojournTime, Item}],
+                 queue=VQ}.
 
 in_post(#state{time=Time} = State, [Item, Q], Result) ->
     in_post(State, [Time, Item, Q], Result);
-in_post(#state{mod=Mod} = State, [Time, _Item, _Q], {Drops, NQ}) ->
+in_post(#state{time=PrevTime} = State, [Time, Item, Q], Result) ->
+    NTime = max(PrevTime, Time),
+    in_post(State, [NTime, NTime, Item, Q], Result);
+in_post(#state{mod=Mod} = State, [Time, _InTime, _Item, _Q], {Drops, NQ}) ->
     advance_time_drops(State, Time) =:= Drops andalso Mod:is_queue(NQ).
 
 out_args(#state{time=Time, queue=Q}) ->
@@ -426,8 +446,13 @@ drop_r_post(#state{mod=Mod} = State, [_Mod, [Time, _Q]], {Drops, NQ}) ->
             false
     end.
 
-join(Mod, Q1, {Time2, StartList, Module, Args}) ->
-    Q2 = Mod:from_start_list(Time2, StartList, Module, Args),
+join(Mod, Q1, {Time2, TailTime, StartList, Module, Args}) ->
+    Q2 = Mod:from_start_list(Time2, TailTime, StartList, Module, Args),
+    Mod:join(Q1, Q2).
+
+join(Mod, Q1, {Time2, TailTime, StartList, ManMod, ManArgs}, FbMod, FbArgs) ->
+    S = squeue:from_start_list(Time2, TailTime, StartList, ManMod, ManArgs),
+    Q2 = Mod:squeue(S, Mod:new(Time2, FbMod, FbArgs)),
     Mod:join(Q1, Q2).
 
 join_list(MinStart, MaxStart) ->
@@ -441,17 +466,36 @@ join_item(MinStart, MaxStart) ->
     {choose(MinStart, MaxStart), item()}.
 
 join_queue(Time, MinStart, Manager) ->
-    ?LET({JoinList, Args}, {join_list(MinStart, Time), Manager:args()},
-         {Time, JoinList, Manager:module(), Args}).
+    ?SUCHTHAT({_Time, TailTime, JoinList, _Module, _Args},
+              do_join_queue(Time, MinStart, Manager),
+              case lists:reverse(JoinList) of
+                  [] ->
+                      true;
+                  [{MaxItemTime, _} | _] ->
+                      MaxItemTime =< TailTime
+              end).
 
-join_args(#state{mod=Mod, manager=Manager, list=L, time=Time, queue=Q}) ->
+do_join_queue(Time, MinStart, Manager) ->
+    ?LET({TailTime, JoinList, Args},
+         {choose(MinStart, Time), join_list(MinStart, Time), Manager:args()},
+         {Time, TailTime, JoinList, Manager:module(), Args}).
+
+join_args(#state{mod=Mod, manager=Manager, feedback=Feedback, list=L, time=Time,
+                 queue=Q}) ->
     %% Add default item that has been in queue whole time so that empty queue
     %% has MinStart of 0.
     {SojournTime, _} = lists:last([{Time, a} | L]),
     MinStart = Time-SojournTime,
-    [Mod, Q, join_queue(Time, MinStart, Manager)].
+    Args = [Mod, Q, join_queue(Time, MinStart, Manager)],
+    case Feedback of
+        undefined ->
+            Args;
+        _ ->
+            Args ++ [Feedback:module(), Feedback:args()]
+    end.
 
-join_pre(#state{time=Time, list=L1}, [_S1, {Time, StartList, _, _}]) ->
+join_pre(#state{time=Time, list=L1},
+         [_Q1, _, {Time, _, StartList, _, _} | _]) ->
      L2 = [{Time - Start, Item} || {Start, Item} <- StartList],
      do_join_pre(L1, L2);
 join_pre(_State, _Args) ->
@@ -473,12 +517,12 @@ do_join_pre(L1,L2) ->
     end.
 
 
-join_next(#state{time=Time, list=L1} = State, VQ,
-          [_Q1, {Time, StartList, _Module2, _Args2}]) ->
+join_next(#state{time=Time, tail_time=TailTime, list=L1} = State, VQ,
+          [_Mod, _Q1, {Time, TailTime2, StartList, _Module2, _Args2} | _]) ->
     L2 = [{Time - Start, Item} || {Start, Item} <- StartList],
-    State#state{list=L1++L2, queue=VQ}.
+    State#state{tail_time=max(TailTime, TailTime2), list=L1++L2, queue=VQ}.
 
-join_post(#state{mod=Mod}, [_Q1, _Q2], NQ) ->
+join_post(#state{mod=Mod}, _, NQ) ->
     Mod:is_queue(NQ).
 
 filter(Mod, Method, Item, Q) ->

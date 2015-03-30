@@ -50,6 +50,7 @@
 -export([len/1]).
 -export([in/2]).
 -export([in/3]).
+-export([in/4]).
 -export([out/1]).
 -export([out/2]).
 -export([out_r/1]).
@@ -70,12 +71,13 @@
 
 %% Test API
 
--export([from_start_list/4]).
+-export([from_start_list/5]).
 
 -ifdef(LEGACY_TYPES).
 -record(squeue, {module :: module(),
                  state :: any(),
                  time = 0 :: non_neg_integer(),
+                 tail_time = 0 :: non_neg_integer(),
                  queue = queue:new() :: queue()}).
 -type squeue() :: squeue(any()).
 -opaque squeue(_Item) :: #squeue{queue :: queue()}.
@@ -99,6 +101,7 @@
 -record(squeue, {module :: module(),
                  state :: any(),
                  time = 0 :: non_neg_integer(),
+                 tail_time = 0 :: non_neg_integer(),
                  queue = queue:new() :: queue:queue({non_neg_integer(), _})}).
 -type squeue() :: squeue(_).
 -opaque squeue(Item) ::
@@ -156,7 +159,7 @@ new(Module, Args) ->
       S :: squeue().
 new(Time, Module, Args) when is_integer(Time) andalso Time >= 0 ->
     State = Module:init(Args),
-    #squeue{module=Module, time=Time, state=State}.
+    #squeue{module=Module, time=Time, tail_time=Time, state=State}.
 
 %% @doc Tests if a term, `Term', is an `squeue' queue, returns `true' if is,
 %% otherwise `false'.
@@ -183,10 +186,8 @@ len(#squeue{queue=Q}) ->
       S :: squeue(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-in(Item, #squeue{module=Module, state=State, time=Time, queue=Q} = S) ->
-    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    NS = S#squeue{queue=queue:in({Time, Item}, NQ), state=NState},
-    {sojourn_drops(Time, Drops), NS}.
+in(Item, #squeue{time=Time} = S) ->
+    in(Time, Time, Item, S).
 
 %% @doc Advances the queue, `S', to time `Time' and drops items, `Drops',
 %% then inserts the item, `Item', at the tail of queue, `S'. Returns a tuple
@@ -200,13 +201,43 @@ in(Item, #squeue{module=Module, state=State, time=Time, queue=Q} = S) ->
       S :: squeue(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-in(Time, Item, #squeue{module=Module, state=State, time=PrevTime, queue=Q} = S)
-  when is_integer(Time) andalso Time >= PrevTime ->
-    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    NS = S#squeue{time=Time, queue=queue:in({Time, Item}, NQ), state=NState},
-    {sojourn_drops(Time, Drops), NS};
-in(Time, Item, S) when is_integer(Time) andalso Time >= 0 ->
-    in(Item, S).
+in(Time, Item, #squeue{time=PrevTime} = S) when is_integer(Time) ->
+    NTime = max(PrevTime, Time),
+    in(NTime, NTime, Item, S).
+
+%% @doc Advances the queue, `S', to time `Time' and drops items, `Drops',
+%% then inserts the item, `Item', with time `InTime' at the tail of queue, `S'.
+%% Returns a tuple containing the dropped items and their sojourn times,
+%% `Drops', and resulting queue, `NS'.
+%%
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
+%%
+%% If `InTime' is less than the last time an item was inserted at the tail of
+%% the queue, the item is inserted with the same time as the last item. This
+%% time may be before the current time of the queue.
+%%
+%% This function raises the error `badarg' if `InTime' is greater than `Time'.
+-spec in(Time, InTime, Item, S) -> {Drops, NS} when
+      Time :: non_neg_integer(),
+      InTime :: non_neg_integer(),
+      S :: squeue(Item),
+      Drops :: [{SojournTime :: non_neg_integer(), Item}],
+      NS :: squeue(Item).
+in(Time, InTime, Item,
+   #squeue{module=Module, state=State, time=PrevTime, tail_time=TailTime,
+           queue=Q} = S)
+  when is_integer(Time) andalso is_integer(InTime) andalso
+       Time >= InTime andalso InTime >= 0 ->
+    NTime = max(Time, PrevTime),
+    NTailTime = max(InTime, TailTime),
+    {Drops, NQ, NState} = Module:handle_timeout(NTime, Q, State),
+    NS = S#squeue{time=NTime, tail_time=NTailTime,
+                  queue=queue:in({NTailTime, Item}, NQ), state=NState},
+    {sojourn_drops(NTime, Drops), NS};
+in(Time, InTime, Item, S)
+  when is_integer(Time) andalso is_integer(InTime) andalso Time < InTime ->
+    error(badarg, [Time, InTime, Item, S]).
 
 %% @doc Drops items, `Drops', from the queue, `S', and then removes the item,
 %% `Item', from the head of the remaining queue. Returns
@@ -491,20 +522,22 @@ to_list(#squeue{queue=Q}) ->
       S2 :: squeue(Item),
       NS :: squeue(Item).
 %% To merge two queues they must have the same Time.
-join(#squeue{module=Module1, time=Time, queue=Q1, state=State1} = S1,
-     #squeue{time=Time, queue=Q2} = S2) ->
+join(#squeue{module=Module1, time=Time, tail_time=TailTime1, queue=Q1,
+             state=State1} = S1,
+     #squeue{time=Time, tail_time=TailTime2, queue=Q2} = S2) ->
     case {queue:peek_r(Q1), queue:peek(Q2)} of
         {{value, {TailStart1, _}}, {value, {HeadStart2, _}}}
           when TailStart1 > HeadStart2 ->
             %% queues contain overlapping start times.
             error(badarg, [S1, S2]);
         _ ->
+            NTailTime = max(TailTime1, TailTime2),
             {[], NQ1, NState1} = Module1:handle_join(Time, Q1, State1),
             NQ = queue:join(NQ1, Q2),
             %% handle_join/1 is required to notify the queue manager that the
             %% max sojourn time of the queue may have increased (though only if
             %% the head queue was empty).
-            S1#squeue{queue=NQ, state=NState1}
+            S1#squeue{tail_time=NTailTime, queue=NQ, state=NState1}
     end;
 join(#squeue{} = S1, #squeue{} = S2) ->
     error(badarg, [S1, S2]).
@@ -593,9 +626,9 @@ timeout(Time, #squeue{time=PrevTime} = S)
 %% Test API
 
 %% @hidden
-from_start_list(Time, List, Module, Args) ->
+from_start_list(Time, TailTime, List, Module, Args) ->
     S = new(Time, Module, Args),
-    S#squeue{queue=queue:from_list(List)}.
+    S#squeue{tail_time=TailTime, queue=queue:from_list(List)}.
 
 %% Internal
 

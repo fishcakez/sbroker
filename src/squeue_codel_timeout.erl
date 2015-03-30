@@ -153,10 +153,10 @@ handle(Time, Fun, Q, #state{timeout=Timeout, codel=Codel} = State) ->
     {Drops2, NQ2, NCodel} = squeue_codel:Fun(Time, NQ, Codel),
     {Drops2 ++ Drops, NQ2, State#state{timeout_next=TimeoutNext, codel=NCodel}}.
 
-timeout(empty, _MinStart, Time, Q, Timeout, Drops) ->
-    %% If an item is added immediately the first time it (or any item) could be
-    %% dropped is in timeout.
-    {Drops, Q, Time+Timeout};
+timeout(empty, _MinStart, _Time, Q, _Timeout, Drops) ->
+    %% The tail_time of the squeue is unknown (an item could be added in the
+    %% past), so can not set a timeout_next.
+    {Drops, Q, 0};
 timeout({value, {Start, _}}, MinStart, _Time, Q, Timeout, Drops)
   when Start > MinStart ->
     %% Item is below sojourn timeout, it is the first item that can be

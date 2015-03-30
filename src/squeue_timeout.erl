@@ -134,10 +134,10 @@ handle_join(_Time, Q, State) ->
 
 %% Internal
 
-timeout(empty, _MinStart, Time, Q, #state{timeout=Timeout} = State, Drops) ->
-    %% If an item is added immediately the first time it (or any item) could be
-    %% dropped is in timeout.
-    {Drops, Q, State#state{timeout_next=Time+Timeout}};
+timeout(empty, _MinStart, _Time, Q, State, Drops) ->
+    %% The tail_time of the squeue is unknown (an item could be added in the
+    %% past), so can not set a timeout_next.
+    {Drops, Q, State};
 timeout({value, {Start, _}}, MinStart, _Time, Q,
         #state{timeout=Timeout} = State, Drops) when Start > MinStart ->
     %% Item is below sojourn timeout, it is the first item that can be
