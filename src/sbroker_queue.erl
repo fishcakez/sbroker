@@ -36,7 +36,7 @@
 -record(drop_queue, {module :: module(),
                      args :: any(),
                      out :: out | out_r,
-                     drop_out :: out | out_r,
+                     drop :: drop | drop_r,
                      size :: non_neg_integer() | infinity,
                      len = 0 :: non_neg_integer(),
                      squeue :: squeue:squeue()}).
@@ -57,8 +57,9 @@
       Q :: drop_queue().
 new(Time, {Mod, Args, Out, Size, Drop})
   when (Out =:= out orelse Out =:= out_r) andalso
+       (Drop =:= drop orelse Drop =:= drop_r) andalso
        ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
-    #drop_queue{module=Mod, args=Args, out=Out, drop_out=drop_out(Drop),
+    #drop_queue{module=Mod, args=Args, out=Out, drop=Drop,
                 size=Size, squeue=squeue:new(Time, Mod, Args)}.
 
 -spec in(Time, From, Q) -> NQ when
@@ -66,13 +67,16 @@ new(Time, {Mod, Args, Out, Size, Drop})
       From :: {pid(), tag()},
       Q :: drop_queue(),
       NQ :: drop_queue().
+in(_Time, From, #drop_queue{size=0, len=0} = Q) ->
+    gen_fsm:reply(From, {drop, 0}),
+    Q;
 in(Time, {Pid, _} = From,
-   #drop_queue{drop_out=DropOut, size=Size, len=Len, squeue=S} = Q) ->
+   #drop_queue{drop=Drop, size=Size, len=Len, squeue=S} = Q) ->
     Ref = monitor(process, Pid),
     {Drops, NS} = squeue:in(Time, {Ref, From}, S),
     case Len - drops(Drops) + 1 of
         NLen when NLen > Size ->
-            {Dropped, NS2} = drop_out(DropOut, NLen - Size, NS),
+            {Dropped, NS2} = drop_loop(Drop, NLen - Size, NS),
             Q#drop_queue{len=NLen-Dropped, squeue=NS2};
         NLen ->
             Q#drop_queue{len=NLen, squeue=NS}
@@ -139,8 +143,11 @@ len(#drop_queue{len=Len}) ->
       Q :: drop_queue(),
       NQ :: drop_queue().
 config_change({Mod, Args, Out, Size, Drop},
-              #drop_queue{module=Mod, args=Args} = Q) ->
-    Q#drop_queue{out=Out, size=Size, drop_out=drop_out(Drop)};
+              #drop_queue{module=Mod, args=Args} = Q)
+  when (Out =:= out orelse Out =:= out_r) andalso
+       (Drop =:= drop orelse Drop =:= drop_r) andalso
+       ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
+    Q#drop_queue{out=Out, size=Size, drop=Drop};
 config_change(Spec, #drop_queue{len=Len, squeue=S}) ->
     Time = squeue:time(S),
     #drop_queue{squeue=NS} = NQ = new(Time, Spec),
@@ -156,19 +163,13 @@ timeout(Time, #drop_queue{len=Len, squeue=S} = Q) ->
 
 %% Internal
 
-drop_out(drop) -> out;
-drop_out(drop_r) -> out_r.
+drop_loop(Drop, ToDrop, S) ->
+    drop_loop(squeue:Drop(S), Drop, ToDrop, 0).
 
-drop_out(DropOut, ToDrop, S) ->
-    drop_loop(squeue:DropOut(S), DropOut, ToDrop, 0).
-
-drop_loop({empty, Drops, S}, _, _, Dropped) ->
-    {Dropped + drops(Drops), S};
-drop_loop({Item, Drops, S}, DropOut, ToDrop, Dropped) ->
-    drop(Item),
-    case Dropped + 1 + drops(Drops) of
+drop_loop({Drops, S}, Drop, ToDrop, Dropped) ->
+    case Dropped + drops(Drops) of
         NDropped when NDropped < ToDrop ->
-            drop_loop(squeue:DropOut(S), DropOut, ToDrop, NDropped);
+            drop_loop(squeue:Drop(S), Drop, ToDrop, NDropped);
         NDropped ->
             {NDropped, S}
     end.
@@ -186,9 +187,9 @@ drop({SojournTime, {Ref, From}}) ->
     demonitor(Ref, [flush]),
     gen_fsm:reply(From, {drop, SojournTime}).
 
-maybe_drop(#drop_queue{size=Size, len=Len, drop_out=DropOut, squeue=S} = Q)
+maybe_drop(#drop_queue{size=Size, len=Len, drop=Drop, squeue=S} = Q)
   when Len > Size ->
-    {Dropped, NS} = drop_out(DropOut, Len - Size, S),
+    {Dropped, NS} = drop_loop(Drop, Len - Size, S),
     Q#drop_queue{len=Len-Dropped, squeue=NS};
 maybe_drop(Q) ->
     Q.

@@ -34,6 +34,8 @@
 -export([new/4]).
 -export([new/6]).
 -export([new/7]).
+-export([drop/2]).
+-export([drop_r/2]).
 -export([join/3]).
 -export([filter/4]).
 -export([filter/5]).
@@ -53,6 +55,8 @@ command(#state{mod=Mod, feedback=undefined} = State) ->
     frequency([{20, {call, Mod, in, in_args(State)}},
                {10, {call, Mod, out, out_args(State)}},
                {10, {call, Mod, out_r, out_r_args(State)}},
+               {6, {call, ?MODULE, drop, drop_args(State)}},
+               {6, {call, ?MODULE, drop_r, drop_r_args(State)}},
                {6, {call, ?MODULE, join, join_args(State)}},
                {4, {call, ?MODULE, filter, filter_args(State)}},
                {1, {call, Mod, time, time_args(State)}},
@@ -65,6 +69,8 @@ command(#state{mod=Mod} = State) ->
                {15, {call, Mod, sojourn_r, sojourn_r_args(State)}},
                {6, {call, Mod, out, out_args(State)}},
                {6, {call, Mod, out_r, out_r_args(State)}},
+               {6, {call, ?MODULE, drop, drop_args(State)}},
+               {6, {call, ?MODULE, drop_r, drop_r_args(State)}},
                {6, {call, ?MODULE, join, join_args(State)}},
                {4, {call, Mod, dropped, dropped_args(State)}},
                {4, {call, Mod, dropped_r, dropped_r_args(State)}},
@@ -86,6 +92,10 @@ precondition(State, {call, _, out, Args}) ->
     out_pre(State, Args);
 precondition(State, {call, _, out_r, Args}) ->
     out_r_pre(State, Args);
+precondition(State, {call, _, drop, Args}) ->
+    drop_pre(State, Args);
+precondition(State, {call, _, drop_r, Args}) ->
+    drop_r_pre(State, Args);
 precondition(State, {call, _, join, Args}) ->
     join_pre(State, Args);
 precondition(State, {call, _, filter, Args}) ->
@@ -121,6 +131,10 @@ next_state(State, Value, {call, _, out, Args}) ->
     out_next(State, Value, Args);
 next_state(State, Value, {call, _, out_r, Args}) ->
     out_r_next(State, Value, Args);
+next_state(State, Value, {call, _, drop, Args}) ->
+    drop_next(State, Value, Args);
+next_state(State, Value, {call, _, drop_r, Args}) ->
+    drop_r_next(State, Value, Args);
 next_state(State, Value, {call, _, join, Args}) ->
     join_next(State, Value, Args);
 next_state(State, Value, {call, _, filter, Args}) ->
@@ -154,6 +168,10 @@ postcondition(State, {call, _, out, Args}, Result) ->
     out_post(State, Args, Result);
 postcondition(State, {call, _, out_r, Args}, Result) ->
     out_r_post(State, Args, Result);
+postcondition(State, {call, _, drop, Args}, Result) ->
+    drop_post(State, Args, Result);
+postcondition(State, {call, _, drop_r, Args}, Result) ->
+    drop_r_post(State, Args, Result);
 postcondition(State, {call, _, join, Args}, Result) ->
     join_post(State, Args, Result);
 postcondition(State, {call, _, filter, Args}, Result) ->
@@ -309,6 +327,101 @@ out_r_post(#state{mod=Mod} = State, [Time, _Q], {Result, Drops, NQ}) ->
             Result =:= empty andalso Mod:is_queue(NQ);
         {Drops, #state{list=L}} ->
             Result =:= lists:last(L) andalso Mod:is_queue(NQ);
+        _ ->
+            false
+    end.
+
+drop(Mod, Args) ->
+    try apply(Mod, drop, Args) of
+        Result ->
+            Result
+    catch
+        Class:Reason ->
+            {Class, Reason, erlang:get_stacktrace()}
+    end.
+
+drop_args(#state{mod=Mod, time=Time, queue=Q}) ->
+    [Mod, oneof([[time(Time), Q],
+                 [Q]])].
+
+drop_pre(#state{mod=Mod}, [Mod2, _]) ->
+    Mod =:= Mod2.
+
+drop_next(#state{list=[]} = State, _Value, _Args) ->
+    State;
+drop_next(#state{time=Time} = State, Value, [Mod, [Q]]) ->
+    drop_next(State, Value, [Mod, [Time, Q]]);
+drop_next(State, Value, [_Mod, [Time, _Q]]) ->
+    VQ = {call, erlang, element, [2, Value]},
+    case advance_time(State, Time) of
+        {[], #state{list=[_|NL]} = NState} ->
+            NState#state{list=NL, queue=VQ};
+        {_, NState} ->
+            NState#state{queue=VQ}
+    end.
+
+drop_post(#state{list=[]}, _, Result) ->
+    case Result of
+       {error, empty, [{squeue, drop, _, _} | _]} ->
+            true;
+        _ ->
+            false
+    end;
+drop_post(#state{time=Time} = State, [Mod, [Q]], Result) ->
+    drop_post(State, [Mod, [Time, Q]], Result);
+drop_post(#state{mod=Mod} = State, [_Mod, [Time, _Q]], {Drops, NQ}) ->
+    case advance_time(State, Time) of
+        {[], #state{list=[Drop|_]}} ->
+            Drops =:= [Drop] andalso Mod:is_queue(NQ);
+        {Drops, _} ->
+            Mod:is_queue(NQ);
+        _ ->
+            false
+    end.
+
+drop_r(Mod, Args) ->
+    try apply(Mod, drop_r, Args) of
+        Result ->
+            Result
+    catch
+        Class:Reason ->
+            {Class, Reason, erlang:get_stacktrace()}
+    end.
+
+drop_r_args(State) ->
+    drop_args(State).
+
+drop_r_pre(State, Args) ->
+    drop_pre(State, Args).
+
+drop_r_next(#state{list=[]} = State, _Value, _Args) ->
+    State;
+drop_r_next(#state{time=Time} = State, Value, [Mod, [Q]]) ->
+    drop_r_next(State, Value, [Mod, [Time, Q]]);
+drop_r_next(State, Value, [_Mod, [Time, _Q]]) ->
+    VQ = {call, erlang, element, [2, Value]},
+    case advance_time(State, Time) of
+        {[], #state{list=NL} = NState} ->
+            NState#state{list=droplast(NL), queue=VQ};
+        {_, NState} ->
+            NState#state{queue=VQ}
+    end.
+
+drop_r_post(#state{list=[]}, _, Result) ->
+    case Result of
+        {error, empty, [{squeue, drop_r, _, _} | _]} ->
+            true;
+        _ ->
+            false
+    end;
+drop_r_post(#state{time=Time} = State, [Mod, [Q]], Result) ->
+    drop_r_post(State, [Mod, [Time, Q]], Result);
+drop_r_post(#state{mod=Mod} = State, [_Mod, [Time, _Q]], {Drops, NQ}) ->
+    case advance_time(State, Time) of
+        {[], #state{list=L}} ->
+            Drops =:= [lists:last(L)] andalso Mod:is_queue(NQ);
+        {Drops, _} ->
+            Mod:is_queue(NQ);
         _ ->
             false
     end.

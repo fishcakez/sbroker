@@ -582,12 +582,14 @@ result(Client) ->
 
 bid_pqm_next(#state{bids=Bids, bid_size=BidSize, bid_drop=BidDrop} = State)
   when length(Bids) > BidSize ->
-    #state{bids=NBids} = NState = bid_aqm_next(State),
-    case BidDrop of
-        drop ->
+    {Drops, #state{bids=NBids} = NState} = bid_aqm(State),
+    case Drops of
+        [] when BidDrop =:= drop ->
             bid_pqm_next(NState#state{bids=dropfirst(NBids)});
-        drop_r ->
-            bid_pqm_next(NState#state{bids=droplast(NBids)})
+        [] when BidDrop =:= drop_r ->
+            bid_pqm_next(NState#state{bids=droplast(NBids)});
+        _ ->
+            bid_pqm_next(NState)
     end;
 bid_pqm_next(State) ->
     State.
@@ -595,25 +597,29 @@ bid_pqm_next(State) ->
 bid_pqm_post(#state{bids=Bids, bid_size=BidSize, bid_drop=BidDrop} = State)
   when length(Bids) > BidSize ->
     {Drops, #state{bids=NBids} = NState} = bid_aqm(State),
-    case BidDrop of
-        drop ->
+    case Drops of
+        [] when BidDrop =:= drop ->
             drops_post(Drops) andalso
             bid_pqm_post(NState#state{bids=dropfirst(NBids)});
-        drop_r ->
+        [] when BidDrop =:= drop_r ->
             drops_post(Drops) andalso
-            bid_pqm_post(NState#state{bids=droplast(NBids)})
+            bid_pqm_post(NState#state{bids=droplast(NBids)});
+        _ ->
+            drops_post(Drops) andalso bid_pqm_post(NState)
     end;
 bid_pqm_post(_) ->
     true.
 
 ask_pqm_next(#state{asks=Asks, ask_size=AskSize, ask_drop=AskDrop} = State)
   when length(Asks) > AskSize ->
-    #state{asks=NAsks} = NState = ask_aqm_next(State),
-    case AskDrop of
-        drop ->
+    {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
+    case Drops of
+        [] when AskDrop =:= drop ->
             ask_pqm_next(NState#state{asks=dropfirst(NAsks)});
-        drop_r ->
-            ask_pqm_next(NState#state{asks=droplast(NAsks)})
+        [] when AskDrop =:= drop_r ->
+            ask_pqm_next(NState#state{asks=droplast(NAsks)});
+        _ ->
+            ask_pqm_next(NState)
     end;
 ask_pqm_next(State) ->
     State.
@@ -621,13 +627,15 @@ ask_pqm_next(State) ->
 ask_pqm_post(#state{asks=Asks, ask_size=AskSize, ask_drop=AskDrop} = State)
   when length(Asks) > AskSize ->
     {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
-    case AskDrop of
-        drop ->
+    case Drops of
+        [] when AskDrop =:= drop ->
             drops_post(Drops) andalso
             ask_pqm_post(NState#state{asks=dropfirst(NAsks)});
-        drop_r ->
+        [] when AskDrop =:= drop_r ->
             drops_post(Drops) andalso
-            ask_pqm_post(NState#state{asks=droplast(NAsks)})
+            ask_pqm_post(NState#state{asks=droplast(NAsks)});
+        _ ->
+            drops_post(Drops) andalso ask_pqm_post(NState)
     end;
 ask_pqm_post(_) ->
     true.

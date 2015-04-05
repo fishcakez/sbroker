@@ -81,7 +81,7 @@ initial_state() ->
 command(#state{sregulator=undefined} = State) ->
     {call, ?MODULE, start_link, start_link_args(State)};
 command(State) ->
-    frequency([{15, {call, ?MODULE, update, update_args(State)}},
+    frequency([{25, {call, ?MODULE, update, update_args(State)}},
                {10, {call, ?MODULE, spawn_client,
                      spawn_client_args(State)}},
                {6, {call, ?MODULE, done, done_args(State)}},
@@ -630,12 +630,14 @@ ask_aqm(#state{asks=Asks, ask_state=[AskDrop | NAskState],
 
 ask_pqm_next(#state{asks=Asks, ask_size=AskSize, ask_drop=AskDrop} = State)
   when length(Asks) > AskSize ->
-    #state{asks=NAsks} = NState = ask_aqm_next(State),
-    case AskDrop of
-        drop ->
+    {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
+    case Drops of
+        [] when AskDrop =:= drop ->
             ask_pqm_next(NState#state{asks=dropfirst(NAsks)});
-        drop_r ->
-            ask_pqm_next(NState#state{asks=droplast(NAsks)})
+        [] when AskDrop =:= drop_r ->
+            ask_pqm_next(NState#state{asks=droplast(NAsks)});
+        [_ | _] ->
+            ask_pqm_next(NState)
     end;
 ask_pqm_next(State) ->
     State.
@@ -643,13 +645,15 @@ ask_pqm_next(State) ->
 ask_pqm_post(#state{asks=Asks, ask_size=AskSize, ask_drop=AskDrop} = State)
   when length(Asks) > AskSize ->
     {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
-    case AskDrop of
-        drop ->
+    case Drops of
+        [] when AskDrop =:= drop ->
             drops_post(Drops) andalso
             ask_pqm_post(NState#state{asks=dropfirst(NAsks)});
-        drop_r ->
+        [] when AskDrop =:= drop_r ->
             drops_post(Drops) andalso
-            ask_pqm_post(NState#state{asks=droplast(NAsks)})
+            ask_pqm_post(NState#state{asks=droplast(NAsks)});
+        [_ | _] ->
+            ask_pqm_post(NState)
     end;
 ask_pqm_post(_) ->
     true.

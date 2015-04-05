@@ -44,7 +44,7 @@
                      squeue_module :: module(),
                      squeue_args :: any(),
                      out :: out | out_r,
-                     drop_out :: out | out_r,
+                     drop :: drop | drop_r,
                      size :: non_neg_integer() | infinity,
                      len = 0 :: non_neg_integer(),
                      svalve = svalve:new() :: svalve:svalve()}).
@@ -66,25 +66,29 @@
       Q :: drop_valve().
 new(Time, {Mod, Args, {SMod, SArgs, Out, Size, Drop}})
   when (Out =:= out orelse Out =:= out_r) andalso
+       (Drop =:= drop orelse Drop =:= drop_r) andalso
        ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
     V = svalve:new(Time, Mod, Args),
     S = squeue:new(Time, SMod, SArgs),
     NV = svalve:squeue(S, V),
     #drop_valve{module=Mod, args=Args, squeue_module=SMod, squeue_args=SArgs,
-                out=Out, drop_out=drop_out(Drop), size=Size, svalve=NV}.
+                out=Out, drop=Drop, size=Size, svalve=NV}.
 
 -spec in(Time, From, Q) -> NQ when
       Time :: non_neg_integer(),
       From :: {pid(), tag()},
       Q :: drop_valve(),
       NQ :: drop_valve().
+in(_Time, From, #drop_valve{size=0, len=0} = Q) ->
+    gen_fsm:reply(From, {drop, 0}),
+    Q;
 in(Time, {Pid, _} = From,
-   #drop_valve{drop_out=DropOut, size=Size, len=Len, svalve=V} = Q) ->
+   #drop_valve{drop=Drop, size=Size, len=Len, svalve=V} = Q) ->
     Ref = monitor(process, Pid),
     {Drops, NV} = svalve:in(Time, {Ref, From}, V),
     case Len - drops(Drops) + 1 of
         NLen when NLen > Size ->
-            {Dropped, NV2} = drop_out(DropOut, NLen - Size, NV),
+            {Dropped, NV2} = drop_loop(Drop, NLen - Size, NV),
             Q#drop_valve{len=NLen-Dropped, svalve=NV2};
         NLen ->
             Q#drop_valve{len=NLen, svalve=NV}
@@ -166,8 +170,11 @@ len(#drop_valve{len=Len}) ->
       Q :: drop_valve(),
       NQ :: drop_valve().
 config_change({Mod, Args, {SMod, SArgs, Out, Size, Drop}},
-              #drop_valve{module=Mod, args=Args} = Q) ->
-    NQ = Q#drop_valve{out=Out, size=Size, drop_out=drop_out(Drop)},
+              #drop_valve{module=Mod, args=Args} = Q)
+  when (Out =:= out orelse Out =:= out_r) andalso
+       (Drop =:= drop orelse Drop =:= drop_r) andalso
+       ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
+    NQ = Q#drop_valve{out=Out, size=Size, drop=Drop},
     config_change_squeue(SMod, SArgs, NQ);
 config_change({_, _, {NSMod, NSArgs, _, _, _}} = Spec,
               #drop_valve{squeue_module=SMod, squeue_args=SArgs,
@@ -272,19 +279,13 @@ dropped(#drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
 
 %% Internal
 
-drop_out(drop) -> out;
-drop_out(drop_r) -> out_r.
+drop_loop(Drop, ToDrop, S) ->
+    drop_loop(svalve:Drop(S), Drop, ToDrop, 0).
 
-drop_out(DropOut, ToDrop, S) ->
-    drop_loop(svalve:DropOut(S), DropOut, ToDrop, 0).
-
-drop_loop({empty, Drops, S}, _, _, Dropped) ->
-    {Dropped + drops(Drops), S};
-drop_loop({Item, Drops, S}, DropOut, ToDrop, Dropped) ->
-    drop(Item),
-    case Dropped + 1 + drops(Drops) of
+drop_loop({Drops, S}, Drop, ToDrop, Dropped) ->
+    case Dropped + drops(Drops) of
         NDropped when NDropped < ToDrop ->
-            drop_loop(svalve:DropOut(S), DropOut, ToDrop, NDropped);
+            drop_loop(svalve:Drop(S), Drop, ToDrop, NDropped);
         NDropped ->
             {NDropped, S}
     end.
@@ -302,9 +303,9 @@ drop({SojournTime, {Ref, From}}) ->
     demonitor(Ref, [flush]),
     gen_fsm:reply(From, {drop, SojournTime}).
 
-maybe_drop(#drop_valve{size=Size, len=Len, drop_out=DropOut, svalve=V} = Q)
+maybe_drop(#drop_valve{size=Size, len=Len, drop=Drop, svalve=V} = Q)
   when Len > Size ->
-    {Dropped, NV} = drop_out(DropOut, Len - Size, V),
+    {Dropped, NV} = drop_loop(Drop, Len - Size, V),
     Q#drop_valve{len=Len-Dropped, svalve=NV};
 maybe_drop(Q) ->
     Q.

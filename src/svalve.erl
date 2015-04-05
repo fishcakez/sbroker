@@ -52,6 +52,10 @@
 -export([out/2]).
 -export([out_r/1]).
 -export([out_r/2]).
+-export([drop/1]).
+-export([drop/2]).
+-export([drop_r/1]).
+-export([drop_r/2]).
 -export([to_list/1]).
 -export([join/2]).
 -export([filter/2]).
@@ -299,6 +303,98 @@ out_r(Time, #svalve{time=PrevTime, squeue=S} = V)
     {Result, Drops, V#svalve{time=Time, squeue=NS}};
 out_r(Time, V) when is_integer(Time) andalso Time >= 0 ->
     out_r(V).
+
+%% @doc Drops items, `Drops', from the queue, `V'. Returns `{Drops, NV}',
+%% where `Drops' is the list of dropped items and their sojourn times and `NV'
+%% is the resulting queue without `Drops'. If `V' is empty raises an `empty'
+%% error.
+%%
+%% If the active queue management callback module does not drop any items, the
+%% item at the head of the queue is dropped.
+%%
+%% This function is different from `queue:drop/1', as the return value is a
+%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
+%% just the new queue.
+-spec drop(V) -> {Drops, NV} when
+      V :: svalve(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+drop(#svalve{squeue=S} = V) ->
+    {Drops, NS} = squeue:drop(S),
+    {Drops, V#svalve{squeue=NS}}.
+
+%% @doc Advances the queue, `V', to time `Time' and drops items, `Drops', from
+%% the queue. Returns `{Drops, NV}', where `Drops' is the list of dropped items
+%% and their sojourn times, and `NV' is the resulting queue without the dropped
+%% items. If `V' is empty rauses an `empty' error.
+%%
+%% If the active queue management callback module does not drop any items, the
+%% item at the head of the queue is dropped.
+%%
+%% This function is different from `queue:drop/1', as the return value is a
+%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
+%% just the new queue.
+%%
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
+-spec drop(Time, V) -> {Drops, NV} when
+      Time :: non_neg_integer(),
+      V :: svalve(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+drop(Time, #svalve{time=PrevTime, squeue=S} = V)
+  when is_integer(Time) andalso Time > PrevTime ->
+    {Drops, NS} = squeue:drop(Time, S),
+    {Drops, V#svalve{time=Time, squeue=NS}};
+drop(Time, V) when is_integer(Time) andalso Time >= 0 ->
+    drop(V).
+
+%% @doc Drops items, `Drops', from the queue, `V'. Returns `{Drops, NV}',
+%% where `Drops' is the list of dropped items and their sojourn times and `NV'
+%% is the resulting queue without `Drops'. If `V' is empty raises an `empty'
+%% error.
+%%
+%% If the active queue management callback module does not drop any items, the
+%% item at the tail of the queue is dropped.
+%%
+%% This function is different from `queue:drop/1', as the return value is a
+%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
+%% just the new queue. Also the dropped item or items may not be from the tail
+%% of the queue.
+-spec drop_r(V) -> {Drops, NV} when
+      V :: svalve(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+drop_r(#svalve{squeue=S} = V) ->
+    {Drops, NS} = squeue:drop_r(S),
+    {Drops, V#svalve{squeue=NS}}.
+
+%% @doc Advances the queue, `V', to time `Time' and drops items, `Drops', from
+%% the queue. Returns `{Drops, NV}', where `Drops' is the list of dropped items
+%% and their sojourn times, and `NV' is the resulting queue without the dropped
+%% items. If `V' is empty rauses an `empty' error.
+%%
+%% If the active queue management callback module does not drop any items, the
+%% item at the tail the queue is dropped.
+%%
+%% This function is different from `queue:drop_r/1', as the return value is a
+%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
+%% just the new queue. Also the dropped item or items may not be from the tail
+%% of the queue.
+%%
+%% If `Time' is less than the current time of the queue time, the current time
+%% is used instead.
+-spec drop_r(Time, V) -> {Drops, NV} when
+      Time :: non_neg_integer(),
+      V :: svalve(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+drop_r(Time, #svalve{time=PrevTime, squeue=S} = V)
+  when is_integer(Time) andalso Time > PrevTime ->
+    {Drops, NS} = squeue:drop_r(Time, S),
+    {Drops, V#svalve{time=Time, squeue=NS}};
+drop_r(Time, V) when is_integer(Time) andalso Time >= 0 ->
+    drop_r(V).
 
 %% @doc Returns a list of items, `List', in the queue, `V'.
 %%
