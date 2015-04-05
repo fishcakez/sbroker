@@ -61,8 +61,8 @@
 -export([next_state/3]).
 -export([postcondition/3]).
 
--record(state, {target, interval, first_above_time=undefined,
-                drop_next=undefined, count=0, dropping=false, now=undefined}).
+-record(state, {target, interval, count=0, drop_next=undefined,
+                first_above_time=undefined, dropping=false, now=undefined}).
 
 quickcheck() ->
     quickcheck([]).

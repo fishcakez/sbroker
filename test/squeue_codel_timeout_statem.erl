@@ -71,27 +71,76 @@ module() ->
 
 args() ->
     ?SUCHTHAT({Target, _Interval, Timeout},
-              {choose(0, 3), choose(1, 3), choose(1, 4)},
+              {choose(0, 3), choose(1, 4), choose(1, 4)},
               Timeout > Target).
 
 init({Target, Interval, Timeout}) ->
     #state{codel=squeue_codel_statem:init({Target, Interval}),
            timeout=squeue_timeout_statem:init(Timeout)}.
 
-handle_timeout(Time, L, State) ->
-    handle(handle_timeout, Time, L, State).
+handle_timeout(Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
+    {MinDrops, NTimeout} = squeue_timeout_statem:handle_timeout(Time, L,
+                                                                Timeout),
+    case squeue_codel_statem:handle_timeout(Time, L, Codel) of
+        {Drops, NCodel} when Drops >= MinDrops ->
+            {Drops, State#state{timeout=NTimeout, codel=NCodel}};
+        {Drops, NCodel} ->
+            {_, NL} = lists:split(Drops, L),
+            {NDrops, NCodel2} = timeout(Time, NL, NCodel, MinDrops, Drops),
+            {NDrops, State#state{timeout=NTimeout, codel=NCodel2}}
+    end.
 
-handle_out(Time, L, State) ->
-    handle(handle_out, Time, L, State).
+timeout(Time, L, Codel, MinDrops, Drops) ->
+    {Drops2, NCodel} = squeue_codel_statem:handle_timeout(Time, L, Codel),
+%    ct:pal("~p~n~p~n~p", [L, Codel, NCodel]),
+    NDrops = Drops + Drops2,
+    if
+        NDrops >= MinDrops ->
+            {NDrops, NCodel};
+        Drops2 =:= 0 ->
+            timeout(Time, tl(L), NCodel, MinDrops, NDrops + 1);
+        true ->
+            {_, NL} = lists:split(NDrops, L),
+            timeout(Time, NL, NCodel, MinDrops, NDrops)
+    end.
 
-handle_out_r(Time, L, State) ->
-    handle(handle_out_r, Time, L, State).
+handle_out(Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
+    {MinDrops, NTimeout} = squeue_timeout_statem:handle_out(Time, L, Timeout),
+    {Drops, NCodel} = out(Time, L, Codel, MinDrops, 0),
+    {Drops, State#state{timeout=NTimeout, codel=NCodel}}.
 
-handle(Fun, Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
-    {Drops, NTimeout} = squeue_timeout_statem:Fun(Time, L, Timeout),
-    {_, NL} = lists:split(Drops, L),
-    {Drops2, NCodel} = squeue_codel_statem:Fun(Time, NL, Codel),
-    {Drops + Drops2, State#state{timeout=NTimeout, codel=NCodel}}.
+out(Time, L, Codel, MinDrops, Drops) ->
+    {Drops2, NCodel} = squeue_codel_statem:handle_out(Time, L, Codel),
+    NDrops = Drops + Drops2,
+    if
+        NDrops >= MinDrops ->
+            {NDrops, NCodel};
+        Drops2 =:= 0 ->
+            out(Time, tl(L), NCodel, MinDrops, NDrops + 1);
+        true ->
+            {_, NL} = lists:split(NDrops + 1, L),
+            out(Time, NL, NCodel, MinDrops, NDrops + 1)
+    end.
+
+handle_out_r(Time, L, #state{timeout=Timeout, codel=Codel} = State) ->
+    {MinDrops, NTimeout} = squeue_timeout_statem:handle_timeout(Time, L,
+                                                                Timeout),
+    case squeue_codel_statem:handle_out_r(Time, L, Codel) of
+        {Drops, NCodel} when length(L) =:= MinDrops ->
+            {MinDrops, NCodel2} = timeout(Time, L, NCodel, MinDrops, Drops),
+            {0, NCodel3} = squeue_codel_statem:handle_out_r(Time, [], NCodel2),
+            {MinDrops, State#state{timeout=NTimeout, codel=NCodel3}};
+        {Drops, NCodel} when Drops >= MinDrops ->
+            {Drops, State#state{timeout=NTimeout, codel=NCodel}};
+        {Drops, NCodel} ->
+            {_, NL} = lists:split(Drops, droplast(L)),
+            {NDrops, NCodel2} = timeout(Time, NL, NCodel, MinDrops, Drops),
+            {NDrops, State#state{timeout=NTimeout, codel=NCodel2}}
+    end.
+
+droplast(L) ->
+    [_ | RevL] = lists:reverse(L),
+    lists:reverse(RevL).
 
 initial_state() ->
     squeue_statem:initial_state(squeue, ?MODULE).

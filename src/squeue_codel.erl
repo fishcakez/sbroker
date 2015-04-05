@@ -261,11 +261,11 @@ out_drops({{value, Item}, Q}, MinStart, Time,
 drop_control(Time, #state{interval=Interval, count=C,
                           drop_next=DropNext} = State)
   when C > 2 andalso Time - DropNext < Interval ->
-    drop_control(C - 2, Time, State);
-drop_control(Time, State) ->
-    drop_control(1, Time, State).
+    drop_control(C - 2, Time, State#state{drop_first=dropping});
+drop_control(Time, #state{interval=Interval} = State) ->
+    State#state{count=1, drop_next=Time+Interval, drop_first=dropping}.
 
 %% Shrink the interval to increase drop rate and reduce sojourn time.
 drop_control(C, Time, #state{interval=Interval} = State) ->
     DropNext = Time + trunc(Interval / math:sqrt(C)),
-    State#state{count=C, drop_next=DropNext, drop_first=dropping}.
+    State#state{count=C, drop_next=DropNext}.

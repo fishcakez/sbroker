@@ -64,30 +64,81 @@ init(Time, {Target, Interval, Timeout}) when Target < Timeout ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
       NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
-handle_timeout(Time, Q, State) ->
-   handle(Time, handle_timeout, Q, State).
+handle_timeout(Time, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
+  when TimeoutNext > Time ->
+    {Drops, NQ, NCodel} = squeue_codel:handle_timeout(Time, Q, Codel),
+    {Drops, NQ, State#state{codel=NCodel}};
+handle_timeout(Time, Q, #state{codel=Codel, timeout=Timeout} = State) ->
+    MinStart = Time - Timeout,
+    case squeue_codel:handle_timeout(Time, Q, Codel) of
+        {[{Start, _} | _] = Drops, NQ, NCodel} when Start > MinStart ->
+            %% Min drop was fast and so no other items need to be dropped.
+            NState = State#state{codel=NCodel, timeout_next=Start+Timeout},
+            {Drops, NQ, NState};
+        {Drops, NQ, NCodel} ->
+            %% Min drop was slow or unknown and so may need to drop more items.
+            timeout_loop(Time, NQ, Drops, MinStart, NCodel, State)
+    end.
 
 %% @private
--spec handle_out(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out(Time, Q, State) ->
+    {empty | {SojournTime, Item}, Drops, NQ, NState} when
       Time :: integer(),
       Q :: squeue:internal_queue(Item),
       State :: #state{},
+      SojournTime :: non_neg_integer(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
       NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
-handle_out(Time, Q, State) ->
-    handle(Time, handle_out, Q, State).
+handle_out(Time, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
+  when TimeoutNext > Time ->
+    {Result, Drops, NQ, NCodel} = squeue_codel:handle_out(Time, Q, Codel),
+    {Result, Drops, NQ, State#state{codel=NCodel}};
+handle_out(Time, Q, #state{timeout=Timeout, codel=Codel} = State) ->
+    MinStart = Time - Timeout,
+    case squeue_codel:handle_out(Time, Q, Codel) of
+        {empty, Drops, NQ, NCodel} ->
+            {empty, Drops, NQ, State#state{codel=NCodel}};
+        {{Start, _} = Item, Drops, NQ, NCodel} when Start > MinStart ->
+            %% Dequeued item was fast and so no other items need to be dropped.
+            NState = State#state{codel=NCodel, timeout_next=Start+Timeout},
+            {Item, Drops, NQ, NState};
+        {Item, Drops, NQ, NCodel} ->
+            %% Dequeued item was slow, drop it and may need to drop more items.
+            out_loop(Time, NQ, [Item | Drops], MinStart, NCodel, State)
+    end.
 
 %% @private
--spec handle_out_r(Time, Q, State) -> {Drops, NQ, NState} when
+-spec handle_out_r(Time, Q, State) ->
+    {empty | {SojournTime, Item}, Drops, NQ, NState} when
       Time :: integer(),
       Q :: squeue:internal_queue(Item),
       State :: #state{},
+      SojournTime :: non_neg_integer(),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item :: any()}],
       NQ :: squeue:internal_queue(Item),
       NState :: #state{}.
-handle_out_r(Time, Q, State) ->
-    handle(Time, handle_out_r, Q, State).
+handle_out_r(Time, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
+  when TimeoutNext > Time ->
+    {Result, Drops, NQ, NCodel} = squeue_codel:handle_out_r(Time, Q, Codel),
+    {Result, Drops, NQ, State#state{codel=NCodel}};
+handle_out_r(Time, Q, #state{codel=Codel, timeout=Timeout} = State) ->
+    MinStart = Time - Timeout,
+    case squeue_codel:handle_out_r(Time, Q, Codel) of
+        {empty, Drops, NQ, NCodel} ->
+            {empty, Drops, NQ, State#state{codel=NCodel}};
+        {{Start, _} = Item, [{Start2, _} | _] = Drops, NQ, NCodel}
+          when Start > MinStart andalso Start2 > MinStart ->
+            %% Min drop was fast and so no other items need to be dropped.
+            NState = State#state{codel=NCodel, timeout_next=Start2+Timeout},
+            {Item, Drops, NQ, NState};
+        {{Start, _} = Item, Drops, NQ, NCodel} when Start > MinStart ->
+            %% Min drop was slow or unknown and so may need to drop more items.
+            out_r_loop(Time, NQ, Item, Drops, MinStart, NCodel, State);
+        {Item, Drops, NQ, NCodel} ->
+            %% Tail item is slow, so whole queue is slow! Drop everything!
+            out_r_drop(Time, NQ, Item, Drops, NCodel, State)
+    end.
 
 %% @private
 -spec handle_join(Time, Q, State) -> NState when
@@ -106,37 +157,44 @@ handle_join(Time, Q, #state{codel=Codel} = State) ->
 
 %% Internal
 
-handle(Time, Fun, Q, #state{timeout_next=TimeoutNext, codel=Codel} = State)
-  when Time < TimeoutNext ->
-    case squeue_codel:Fun(Time, Q, Codel) of
-        {Drops, NQ, NCodel} ->
-            {Drops, NQ, State#state{codel=NCodel}};
-        {Result, Drops, NQ, NCodel} ->
-            {Result, Drops, NQ, State#state{codel=NCodel}}
-    end;
-handle(Time, Fun, Q, #state{timeout=Timeout, codel=Codel} = State) ->
-    Peek = queue:peek(Q),
-    MinStart = Time - Timeout,
-    {Drops, NQ, TimeoutNext} = timeout(Peek, MinStart, Time, Q, Timeout, []),
-    case squeue_codel:Fun(Time, NQ, Codel) of
-        {Drops2, NQ2, NCodel} ->
-            NState = State#state{codel=NCodel, timeout_next=TimeoutNext},
-            {Drops2 ++ Drops, NQ2, NState};
-        {Result, Drops2, NQ2, NCodel} ->
-            NState = State#state{codel=NCodel, timeout_next=TimeoutNext},
-            {Result, Drops2 ++ Drops, NQ2, NState}
-    end.
+timeout_loop(Time, Q, Drops, MinStart, Codel, State) ->
+    {NDrops, NQ, TimeoutNext} = timeout_loop(Q, MinStart, Time, Drops),
+    {NDrops, NQ, State#state{codel=Codel, timeout_next=TimeoutNext}}.
 
-timeout(empty, _MinStart, Time, Q, _Timeout, Drops) ->
-    %% The tail_time of the squeue is unknown (an item could be added in the
-    %% past), so can not set a timeout_next.
+timeout_loop(Q, MinStart, Time, Drops) ->
+    %% Codel won't drop or change state again unless time increases,
+    %% an item is added, out is called on empty/an item below target or
+    %% out_r is called on empty. None of these will occur in this loop as
+    %% Timeout is greater than Target. Therefore do not need to call
+    %% squeue_codel.
+    timeout_loop(queue:peek(Q), Q, MinStart, Time, Drops).
+
+timeout_loop(empty, Q, _, Time, Drops) ->
     {Drops, Q, Time};
-timeout({value, {Start, _}}, MinStart, _Time, Q, Timeout, Drops)
+timeout_loop({value, {Start, _}}, Q, MinStart, Time, Drops)
   when Start > MinStart ->
-    %% Item is below sojourn timeout, it is the first item that can be
-    %% dropped and it can't be dropped until it is above sojourn timeout.
-    {Drops, Q, Start+Timeout};
-timeout({value, Item}, MinStart, Time, Q, Timeout, Drops) ->
-    %% Item is above sojourn timeout so drop it.
+    Timeout = Time - MinStart,
+    {Drops, Q, Start + Timeout};
+timeout_loop({value, Item}, Q, MinStart, Time, Drops) ->
     NQ = queue:drop(Q),
-    timeout(queue:peek(NQ), MinStart, Time, NQ, Timeout, [Item | Drops]).
+    timeout_loop(queue:peek(NQ), NQ, MinStart, Time, [Item | Drops]).
+
+out_loop(Time, Q, Drops, MinStart, Codel, State) ->
+    {NDrops, NQ, TimeoutNext} = timeout_loop(Q, MinStart, Time, Drops),
+    %% Need to call Codel to dequeue as this may update its state. No items are
+    %% dropped as Codel only drops once per time (unless items are enqueued
+    %% after dropping).
+    {Result, [], NQ2, NCodel} = squeue_codel:handle_out(Time, NQ, Codel),
+    {Result, NDrops, NQ2, State#state{codel=NCodel, timeout_next=TimeoutNext}}.
+
+out_r_loop(Time, Q, Item, Drops, MinStart, Codel, State) ->
+    {NDrops, NQ, TimeoutNext} = timeout_loop(Q, MinStart, Time, Drops),
+    {Item, NDrops, NQ, State#state{codel=Codel, timeout_next=TimeoutNext}}.
+
+out_r_drop(Time, Q, Item, Drops, Codel, State) ->
+    Drops2 = queue:to_list(Q),
+    NDrops = [Item | lists:reverse(Drops2, Drops)],
+    NQ = queue:new(),
+    %% Dequeue attempt on empty queue (after drops) stops Codel dropping.
+    {empty, [], NQ2, NCodel} = squeue_codel:handle_out_r(Time, NQ, Codel),
+    {empty, NDrops, NQ2, State#state{codel=NCodel}}.
