@@ -39,5 +39,7 @@ start_link() ->
 %% sbroker api
 
 init(undefined) ->
-    QSpec = {squeue_timeout, 200, out, infinity, drop},
-    {ok, {QSpec, QSpec, 100}}.
+    Timeout = sbroker_time:milli_seconds_to_native(200),
+    QSpec = {squeue_timeout, Timeout, out, infinity, drop},
+    Interval = sbroker_time:milli_seconds_to_native(100),
+    {ok, {QSpec, QSpec, Interval}}.

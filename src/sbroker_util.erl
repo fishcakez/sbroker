@@ -20,11 +20,15 @@
 %% @private
 -module(sbroker_util).
 
+-compile({no_auto_import, whereis/1}).
+
 -export([whereis/1]).
+-export([sync_send_event/2]).
+-export([async_send_event/2]).
+-export([async_send_event/3]).
 
--type process() :: pid()| atom() | {atom(), node()} | {global, any()} |
+-type process() :: pid() | atom() | {atom(), node()} | {global, any()} |
     {via, module(), any()}.
-
 
 -spec whereis(Process) -> Pid | {Name, Node} | undefined when
       Process :: process(),
@@ -43,3 +47,66 @@ whereis({global, Name}) ->
     global:whereis_name(Name);
 whereis({via, Mod, Name}) ->
     Mod:whereis_name(Name).
+
+-spec sync_send_event(Process, Request) -> Response when
+      Process :: process(),
+      Request :: any(),
+      Response :: any().
+sync_send_event(Process, Request) ->
+    MFA = {?MODULE, sync_send_event, [Process, Request]},
+    case whereis(Process) of
+        Pid when is_pid(Pid) andalso node(Pid) =:= node() ->
+            Start = sbroker_time:native(),
+            try
+                gen_fsm:sync_send_event(Process, {Request, Start}, infinity)
+            catch
+                exit:{Reason, {gen_fsm, sync_send_event, _}} ->
+                    exit({Reason, MFA})
+            end;
+        Pid when is_pid(Pid) ->
+            exit({{badnode, node(Pid)}, MFA});
+        {Name, Node} when is_atom(Name) andalso is_atom(Node) ->
+            exit({{badnode, Node}, MFA});
+        undefined ->
+            exit({noproc, MFA})
+    end.
+
+-spec async_send_event(Process, Request) -> {await, MRef, Pid} when
+      Process :: process(),
+      Request :: any(),
+      MRef :: reference(),
+      Pid :: pid().
+async_send_event(Process, Request) ->
+    MFA = {?MODULE, async_send_event, [Process, Request]},
+    case whereis(Process) of
+        Pid when is_pid(Pid) andalso node(Pid) =:= node() ->
+            MRef = monitor(process, Pid),
+            Start = sbroker_time:native(),
+            gen_fsm:send_event(Pid, {Request, Start, {self(), MRef}}),
+            {await, MRef, Pid};
+        Pid when is_pid(Pid) ->
+            exit({{badnode, node(Pid)}, MFA});
+        {Name, Node} when is_atom(Name) andalso is_atom(Node) ->
+            exit({{badnode, Node}, MFA});
+        undefined ->
+            exit({noproc, MFA})
+    end.
+
+-spec async_send_event(Process, Request, Tag) -> {await, Tag, Pid} when
+      Process :: process(),
+      Request :: any(),
+      Pid :: pid().
+async_send_event(Process, Request, Tag) ->
+    MFA = {?MODULE, async_send_event, [Process, Request, Tag]},
+    case whereis(Process) of
+        Pid when is_pid(Pid) andalso node(Pid) =:= node() ->
+            Start = sbroker_time:native(),
+            gen_fsm:send_event(Pid, {Request, Start, {self(), Tag}}),
+            {await, Tag, Pid};
+        Pid when is_pid(Pid) ->
+            exit({{badnode, node(Pid)}, MFA});
+        {Name, Node} when is_atom(Name) andalso is_atom(Node) ->
+            exit({{badnode, Node}, MFA});
+        undefined ->
+            exit({noproc, MFA})
+    end.

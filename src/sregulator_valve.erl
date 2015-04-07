@@ -23,7 +23,7 @@
 %% public api
 
 -export([new/2]).
--export([in/3]).
+-export([in/4]).
 -export([out/1]).
 -export([out/2]).
 -export([cancel/3]).
@@ -61,7 +61,7 @@
 %% public api
 
 -spec new(Time, Spec) -> Q when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Spec :: spec(),
       Q :: drop_valve().
 new(Time, {Mod, Args, {SMod, SArgs, Out, Size, Drop}})
@@ -74,18 +74,19 @@ new(Time, {Mod, Args, {SMod, SArgs, Out, Size, Drop}})
     #drop_valve{module=Mod, args=Args, squeue_module=SMod, squeue_args=SArgs,
                 out=Out, drop=Drop, size=Size, svalve=NV}.
 
--spec in(Time, From, Q) -> NQ when
-      Time :: non_neg_integer(),
+-spec in(Time, InTime, From, Q) -> NQ when
+      Time :: integer(),
+      InTime :: integer(),
       From :: {pid(), tag()},
       Q :: drop_valve(),
       NQ :: drop_valve().
-in(_Time, From, #drop_valve{size=0, len=0} = Q) ->
-    gen_fsm:reply(From, {drop, 0}),
+in(Time, InTime, From, #drop_valve{size=0, len=0} = Q) ->
+    drop(From, Time-InTime),
     Q;
-in(Time, {Pid, _} = From,
+in(Time, InTime, {Pid, _} = From,
    #drop_valve{drop=Drop, size=Size, len=Len, svalve=V} = Q) ->
     Ref = monitor(process, Pid),
-    {Drops, NV} = svalve:in(Time, {Ref, From}, V),
+    {Drops, NV} = svalve:in(Time, InTime, {Ref, From}, V),
     case Len - drops(Drops) + 1 of
         NLen when NLen > Size ->
             {Dropped, NV2} = drop_loop(Drop, NLen - Size, NV),
@@ -110,7 +111,7 @@ out(#drop_valve{out=Out, len=Len, svalve=V} = Q) ->
     end.
 
 -spec out(Time, Q) -> {Result, NQ} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: drop_valve(),
       Result :: empty | {SojournTime, {Ref, From}},
       SojournTime :: non_neg_integer(),
@@ -126,7 +127,7 @@ out(Time, #drop_valve{out=Out, len=Len, svalve=V} = Q) ->
     end.
 
 -spec cancel(Time, Tag, Q) -> {Cancelled, NQ} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Tag :: tag(),
       Q :: drop_valve(),
       Cancelled :: pos_integer() | false,
@@ -150,7 +151,7 @@ cancel(Time, Tag, #drop_valve{len=Len, svalve=V} = Q) ->
     end.
 
 -spec down(Time, Ref, Q) -> NQ when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Ref :: reference(),
       Q :: drop_valve(),
       NQ :: drop_valve().
@@ -188,7 +189,7 @@ config_change({_, _, {NSMod, NSArgs, _, _, _}} = Spec,
     config_change_squeue(NSMod, NSArgs, NQ2).
 
 -spec timeout(Time, Q) -> NQ when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: drop_valve(),
       NQ :: drop_valve().
 timeout(Time, #drop_valve{len=Len, svalve=V} = Q) ->
@@ -209,7 +210,7 @@ close(#drop_valve{svalve=V} = Q) ->
     Q#drop_valve{svalve=svalve:close(V)}.
 
 -spec sojourn(Time, SojournTime, Q) -> {Result, NQ} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       SojournTime :: non_neg_integer(),
       Q :: drop_valve(),
       Result :: closed | empty | {FromSojournTime, {Ref, From}},
@@ -233,7 +234,7 @@ sojourn(Time, SojournTime, #drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
     end.
 
 -spec dropped(Time, Q) -> {Result, NQ} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: drop_valve(),
       Result :: closed | empty | {FromSojournTime, {Ref, From}},
       FromSojournTime :: non_neg_integer(),
@@ -301,6 +302,9 @@ drops([], N) ->
 
 drop({SojournTime, {Ref, From}}) ->
     demonitor(Ref, [flush]),
+    drop(From, SojournTime).
+
+drop(From, SojournTime) ->
     gen_fsm:reply(From, {drop, SojournTime}).
 
 maybe_drop(#drop_valve{size=Size, len=Len, drop=Drop, svalve=V} = Q)

@@ -49,6 +49,8 @@
                 ask_drop, bids=[], bid_out, bid_drops, bid_state=[], bid_size,
                 bid_drop, cancels=[], done=[]}).
 
+-define(TIMEOUT, 5000).
+
 quickcheck() ->
     quickcheck([]).
 
@@ -83,8 +85,7 @@ command(#state{sbroker=undefined} = State) ->
 command(State) ->
     frequency([{10, {call, ?MODULE, spawn_client,
                      spawn_client_args(State)}},
-               {4, {call, sbroker, force_timeout,
-                    force_timeout_args(State)}},
+               {4, {call, sbroker, timeout, timeout_args(State)}},
                {3, {call, ?MODULE, cancel, cancel_args(State)}},
                {2, {call, ?MODULE, change_config,
                     change_config_args(State)}},
@@ -102,8 +103,8 @@ next_state(State, Value, {call, _, start_link, Args}) ->
     start_link_next(State, Value, Args);
 next_state(State, Value, {call, _, spawn_client, Args}) ->
     spawn_client_next(State, Value, Args);
-next_state(State, Value, {call, _, force_timeout, Args}) ->
-    force_timeout_next(State, Value, Args);
+next_state(State, Value, {call, _, timeout, Args}) ->
+    timeout_next(State, Value, Args);
 next_state(State, Value, {call, _, cancel, Args}) ->
     cancel_next(State, Value, Args);
 next_state(State, Value, {call, _, change_config, Args}) ->
@@ -117,8 +118,8 @@ postcondition(State, {call, _, start_link, Args}, Result) ->
     start_link_post(State, Args, Result);
 postcondition(State, {call, _, spawn_client, Args}, Result) ->
     spawn_client_post(State, Args, Result);
-postcondition(State, {call, _, force_timeout, Args}, Result) ->
-    force_timeout_post(State, Args, Result);
+postcondition(State, {call, _, timeout, Args}, Result) ->
+    timeout_post(State, Args, Result);
 postcondition(State, {call, _, cancel, Args}, Result) ->
     cancel_post(State, Args, Result);
 postcondition(State, {call, _, change_config, Args}, Result) ->
@@ -178,7 +179,13 @@ start_link(Init) ->
 
 init([]) ->
     {ok, Result} = application:get_env(sbroker, ?MODULE),
-    Result.
+    case Result of
+        {ok, {AskSpec, AskRSpec, Interval}} ->
+            NInterval = sbroker_time:milli_seconds_to_native(Interval),
+            {ok, {AskSpec, AskRSpec, NInterval}};
+        Other ->
+            Other
+    end.
 
 start_link_pre(#state{sbroker=Broker}, _) ->
     Broker =:= undefined.
@@ -212,6 +219,9 @@ spawn_client(Broker, Fun) ->
     {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Broker, Fun]),
     {Pid, MRef}.
 
+spawn_client_next(#state{asks=[], bids=[], bid_size=0} = State, _,
+                  [_, async_bid]) ->
+    State;
 spawn_client_next(#state{asks=[]} = State, Bid, [_, async_bid]) ->
     bid_next(State,
              fun(#state{bids=NBids} = NState) ->
@@ -231,6 +241,9 @@ spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
                      NState#state{asks=droplast(NAsks),
                                   done=Done++[Bid, lists:last(NAsks)]}
              end);
+spawn_client_next(#state{bids=[], asks=[], ask_size=0} = State, _,
+                  [_, async_ask]) ->
+    State;
 spawn_client_next(#state{bids=[]} = State, Ask, [_, async_ask]) ->
     ask_next(State,
              fun(#state{asks=NAsks} = NState) ->
@@ -251,6 +264,8 @@ spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
                                   done=Done++[Ask, lists:last(NBids)]}
              end).
 
+spawn_client_post(#state{asks=[], bids=[], bid_size=0}, [_, async_bid], Bid) ->
+    drop_post(Bid);
 spawn_client_post(#state{asks=[]} = State, [_, async_bid], Bid) ->
     bid_post(State,
              fun(#state{bids=NBids} = NState) ->
@@ -271,6 +286,8 @@ spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
                      {settled_post(Bid, lists:last(NAsks)),
                       NState#state{asks=droplast(NAsks)}}
              end);
+spawn_client_post(#state{bids=[], asks=[], ask_size=0}, [_, async_ask], Ask) ->
+    drop_post(Ask);
 spawn_client_post(#state{bids=[]} = State, [_, async_ask], Ask) ->
     ask_post(State,
              fun(#state{asks=NAsks} = NState) ->
@@ -292,17 +309,17 @@ spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
                       NState#state{bids=droplast(NBids)}}
              end).
 
-force_timeout_args(#state{sbroker=Broker}) ->
+timeout_args(#state{sbroker=Broker}) ->
     [Broker].
 
-force_timeout_next(#state{asks=[]} = State, _, _) ->
+timeout_next(#state{asks=[]} = State, _, _) ->
     bid_next(State, fun(NState) -> NState end);
-force_timeout_next(#state{bids=[]} = State, _, _) ->
+timeout_next(#state{bids=[]} = State, _, _) ->
     ask_next(State, fun(NState) -> NState end).
 
-force_timeout_post(#state{asks=[]} = State, _, _) ->
+timeout_post(#state{asks=[]} = State, _, _) ->
     bid_post(State, fun(NState) -> {true, NState} end);
-force_timeout_post(#state{bids=[]} = State, _, _) ->
+timeout_post(#state{bids=[]} = State, _, _) ->
     ask_post(State, fun(NState) -> {true, NState} end).
 
 cancel_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
@@ -316,7 +333,7 @@ cancel_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
     end.
 
 cancel(Broker, undefined) ->
-    sbroker:cancel(Broker, make_ref());
+    sbroker:cancel(Broker, make_ref(), ?TIMEOUT);
 cancel(_, Client) ->
     client_call(Client, cancel).
 
@@ -430,12 +447,15 @@ shutdown_client_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancel
 shutdown_client(Broker, undefined) ->
     _ = Broker ! {'DOWN', make_ref(), process, self(), shutdown},
     ok;
-shutdown_client(_, Client) ->
+shutdown_client(Broker, Client) ->
     Pid = client_pid(Client),
     MRef = monitor(process, Pid),
     exit(Pid, shutdown),
     receive
         {'DOWN', MRef, _, _, shutdown} ->
+            %% Sync with broker so that the next command does not arrive before
+            %% the monitor message if broker is behind.
+            _ = sys:get_status(Broker),
             ok;
         {'DOWN', MRef, _, _, Reason} ->
             exit(Reason)
@@ -549,9 +569,12 @@ ask_aqm(#state{asks=Asks, ask_state=[AskDrop | NAskState],
 drops_post([]) ->
     true;
 drops_post([Client | Drops]) ->
+    drop_post(Client) andalso drops_post(Drops).
+
+drop_post(Client) ->
     case result(Client) of
         {drop, _} ->
-            drops_post(Drops);
+            true;
         Other ->
             ct:log("~p Drop: ~p", [Client, Other]),
             false
@@ -561,8 +584,9 @@ settled_post(Client1, Client2) ->
     Pid1 = client_pid(Client1),
     Pid2 = client_pid(Client2),
     case {result(Client1), result(Client2)} of
-        {{go, Ref, Pid2, 0}, {go, Ref, Pid1, _}} ->
-            true;
+        {{go, Ref, Pid2, SojournTime1}, {go, Ref, Pid1, SojournTime2}} ->
+            is_integer(SojournTime1) andalso SojournTime1 >= 0 andalso
+            is_integer(SojournTime2) andalso SojournTime2 >= 0;
         Result ->
             ct:log("Result: ~p", [Result]),
             false
@@ -570,8 +594,8 @@ settled_post(Client1, Client2) ->
 
 retry_post(Client) ->
     case result(Client) of
-        {retry, 0} ->
-            true;
+        {retry, SojournTime} ->
+            is_integer(SojournTime) andalso SojournTime >= 0;
         Result ->
             ct:log("Result ~p", [Result]),
             false
@@ -688,7 +712,7 @@ client_loop(MRef, Broker, ARef, State, Froms) ->
             exit(Broker, {double_result, {self(), MRef}, State, Result}),
             exit(normal);
         {MRef, From, cancel} ->
-            case sbroker:cancel(Broker, ARef) of
+            case sbroker:cancel(Broker, ARef, ?TIMEOUT) of
                 N when is_integer(N) ->
                     gen:reply(From, N),
                     client_loop(MRef, Broker, ARef, cancelled, Froms);

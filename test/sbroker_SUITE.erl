@@ -98,11 +98,16 @@ ask(_) ->
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
     1 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, 0} = sbroker:ask(Broker),
+    {go, Ref2, Self, AskTime} = sbroker:ask(Broker),
     0 = sbroker:len(Broker, ?TIMEOUT),
     0 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, _} = sbroker:await(Ref, ?TIMEOUT),
-    ok.
+    {go, Ref2, Self, AskRTime} = sbroker:await(Ref, ?TIMEOUT),
+    if
+        AskTime < AskRTime ->
+            ok;
+        true ->
+            exit({bad_sojourn_times, AskTime, AskRTime})
+    end.
 
 ask_r(_) ->
     {ok, Broker} = sbroker_test:start_link(),
@@ -110,11 +115,16 @@ ask_r(_) ->
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
     1 = sbroker:len(Broker, ?TIMEOUT),
-    {go, Ref2, Self, 0} = sbroker:ask_r(Broker),
+    {go, Ref2, Self, AskRTime} = sbroker:ask_r(Broker),
     0 = sbroker:len(Broker, ?TIMEOUT),
     0 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, _} = sbroker:await(Ref, ?TIMEOUT),
-    ok.
+    {go, Ref2, Self, AskTime} = sbroker:await(Ref, ?TIMEOUT),
+    if
+        AskRTime < AskTime ->
+            ok;
+        true ->
+            exit({bad_sojourn_times, AskRTime, AskTime})
+    end.
 
 await_timeout(_) ->
     {ok, Broker} = sbroker_test:start_link(),

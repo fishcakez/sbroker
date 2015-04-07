@@ -95,13 +95,13 @@ end_per_testcase(_TestCase, _Config) ->
 
 ask(_) ->
     {ok, Regulator} = sregulator_test:start_link(),
-    {go, Ref, Regulator, 0} = sregulator:ask(Regulator),
-    ok = sregulator:done(Regulator, Ref),
+    {go, Ref, Regulator, _} = sregulator:ask(Regulator),
+    ok = sregulator:done(Regulator, Ref, ?TIMEOUT),
     ok.
 
 len(_) ->
     {ok, Regulator} = sregulator_test:start_link(),
-    {go, _, Regulator, 0} = sregulator:ask(Regulator),
+    {go, _, Regulator, _} = sregulator:ask(Regulator),
     0 = sregulator:len(Regulator, ?TIMEOUT),
     Ref = make_ref(),
     {await, Ref, Regulator} = sregulator:async_ask(Regulator, Ref),
@@ -113,7 +113,7 @@ len(_) ->
 size(_) ->
     {ok, Regulator} = sregulator_test:start_link(),
     0 = sregulator:size(Regulator, ?TIMEOUT),
-    {go, _, Regulator, 0} = sregulator:ask(Regulator),
+    {go, _, Regulator, _} = sregulator:ask(Regulator),
     1 = sregulator:size(Regulator, ?TIMEOUT),
     Ref = make_ref(),
     {await, Ref, Regulator} = sregulator:async_ask(Regulator, Ref),
@@ -122,7 +122,7 @@ size(_) ->
 
 await_timeout(_) ->
     {ok, Regulator} = sregulator_test:start_link(),
-    {go, _, Regulator, 0} = sregulator:ask(Regulator),
+    {go, _, Regulator, _} = sregulator:ask(Regulator),
     Ref = make_ref(),
     {await, Ref, Regulator} = sregulator:async_ask(Regulator, Ref),
     {'EXIT',

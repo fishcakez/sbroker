@@ -49,6 +49,8 @@
                 ask_drop, valve_status, valve_state=[], min=0, max=0, active=[],
                 done=[], cancels=[], drops=[]}).
 
+-define(TIMEOUT, 5000).
+
 quickcheck() ->
     quickcheck([]).
 
@@ -90,8 +92,8 @@ command(State) ->
                {4, {call, ?MODULE, shutdown_client,
                     shutdown_client_args(State)}},
                {4, {call, ?MODULE, change_config, change_config_args(State)}},
-               {2, {call, sregulator, force_timeout,
-                    force_timeout_args(State)}}]).
+               {2, {call, sregulator, timeout,
+                    timeout_args(State)}}]).
 
 precondition(State, {call, _, start_link, Args}) ->
     start_link_pre(State, Args);
@@ -114,8 +116,8 @@ next_state(State, Value, {call, _, cancel, Args}) ->
     cancel_next(State, Value, Args);
 next_state(State, Value, {call, _, shutdown_client, Args}) ->
     shutdown_client_next(State, Value, Args);
-next_state(State, Value, {call, _, force_timeout, Args}) ->
-    force_timeout_next(State, Value, Args);
+next_state(State, Value, {call, _, timeout, Args}) ->
+    timeout_next(State, Value, Args);
 next_state(State, Value, {call, _, change_config, Args}) ->
     change_config_next(State, Value, Args).
 
@@ -133,8 +135,8 @@ postcondition(State, {call, _, cancel, Args}, Result) ->
     cancel_post(State, Args, Result);
 postcondition(State, {call, _, shutdown_client, Args}, Result) ->
     shutdown_client_post(State, Args, Result);
-postcondition(State, {call, _, force_timeout, Args}, Result) ->
-    force_timeout_post(State, Args, Result);
+postcondition(State, {call, _, timeout, Args}, Result) ->
+    timeout_post(State, Args, Result);
 postcondition(State, {call, _, change_config, Args}, Result) ->
     change_config_post(State, Args, Result).
 
@@ -193,7 +195,13 @@ start_link(Init) ->
 
 init([]) ->
     {ok, Result} = application:get_env(sbroker, ?MODULE),
-    Result.
+    case Result of
+        {ok, {AskSpec, ValveSpec, Interval}} ->
+            NInterval = sbroker_time:milli_seconds_to_native(Interval),
+            {ok, {AskSpec, ValveSpec, NInterval}};
+        Other ->
+            Other
+    end.
 
 start_link_pre(#state{sregulator=Regulator}, _) ->
     Regulator =:= undefined.
@@ -318,17 +326,30 @@ update_post(State, [_, _, {go, SojournTime}], Result) ->
 update_post(_, [_, _, {retry, _} = Response], Result) ->
     Response =:= Result;
 update_post(State, [_, undefined, {drop, SojournTime}], Result) ->
-    Result =:= {not_found, SojournTime} andalso dequeue_post(State);
+    case Result of
+        {not_found, NSojournTime} ->
+            is_integer(NSojournTime) andalso NSojournTime >= SojournTime andalso
+            dequeue_post(State);
+        _ ->
+            false
+    end;
 update_post(#state{active=Active, min=Min} = State,
             [_, Client, {drop, SojournTime}], Result) ->
-    case lists:member(Client, Active) of
-        true when length(Active) =< Min ->
-            Result =:= {retry, SojournTime} andalso update_post(State);
-        true ->
-            Result =:= {dropped, SojournTime} andalso
-            update_post(State#state{active=Active--[Client]});
-        false ->
-            Result =:= {not_found, SojournTime} andalso dequeue_post(State)
+    case Result of
+        {_, NSojournTime}
+          when not (is_integer(NSojournTime) andalso
+                    NSojournTime >= SojournTime) ->
+            false;
+        {retry, _} ->
+            lists:member(Client, Active) andalso length(Active) =< Min andalso
+            update_post(State);
+        {dropped, _} ->
+            lists:member(Client, Active) andalso length(Active) > Min andalso
+            update_post(State);
+        {not_found, _} ->
+            (not lists:member(Client, Active)) andalso dequeue_post(State);
+        _ ->
+            false
     end.
 
 update_post(#state{asks=[_ | _], active=Active, min=Min} = State)
@@ -358,7 +379,7 @@ done_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
     end.
 
 done(Regulator, undefined) ->
-    sregulator:done(Regulator, make_ref());
+    sregulator:done(Regulator, make_ref(), ?TIMEOUT);
 done(_, Client) ->
     client_call(Client, done).
 
@@ -391,7 +412,7 @@ ensure_dropped_args(#state{sregulator=Regulator, asks=Asks, active=Active,
     end.
 
 ensure_dropped(Regulator, undefined) ->
-    sregulator:ensure_dropped(Regulator, make_ref());
+    sregulator:ensure_dropped(Regulator, make_ref(), ?TIMEOUT);
 ensure_dropped(_, Client) ->
     client_call(Client, ensure_dropped).
 
@@ -423,7 +444,7 @@ cancel_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
     end.
 
 cancel(Regulator, undefined) ->
-    sregulator:cancel(Regulator, make_ref());
+    sregulator:cancel(Regulator, make_ref(), ?TIMEOUT);
 cancel(_, Client) ->
     client_call(Client, cancel).
 
@@ -521,13 +542,13 @@ shutdown_client_post(#state{active=Active, asks=Asks} = State,
             true
     end.
 
-force_timeout_args(#state{sregulator=Regulator}) ->
+timeout_args(#state{sregulator=Regulator}) ->
     [Regulator].
 
-force_timeout_next(State, _, _) ->
+timeout_next(State, _, _) ->
     ask_next(dequeue_next(State), fun(NState) -> NState end).
 
-force_timeout_post(State, _, _) ->
+timeout_post(State, _, _) ->
     case dequeue(State) of
         {true, NState} ->
             ask_post(NState, fun(NState2) -> {true, NState2} end);
@@ -682,8 +703,8 @@ drops_post([Client | Drops]) ->
 
 go_post(Client, Regulator) ->
     case result(Client) of
-        {go, Ref, Regulator, _} when is_reference(Ref) ->
-            true;
+        {go, Ref, Regulator, SojournTime} when is_reference(Ref) ->
+            is_integer(SojournTime) andalso SojournTime >= 0;
         Other ->
             ct:pal("~p Go: ~p", [Client, Other]),
             false
@@ -692,8 +713,8 @@ go_post(Client, Regulator) ->
 
 retry_post(Client) ->
     case result(Client) of
-        {retry, 0} ->
-            true;
+        {retry, SojournTime} ->
+            is_integer(SojournTime) andalso SojournTime >= 0;
         Other ->
             ct:pal("~p Retry: ~p", [Client, Other]),
             false
@@ -813,7 +834,7 @@ client_loop(MRef, Regulator, Tag, Ref, State, Froms) ->
             exit(Regulator, {double_result, {self(), MRef}, State, Result}),
             exit(normal);
         {MRef, From, done} ->
-            case sregulator:done(Regulator, Ref) of
+            case sregulator:done(Regulator, Ref, ?TIMEOUT) of
                 ok ->
                     gen:reply(From, ok),
                     client_loop(MRef, Regulator, Tag, Ref, done, Froms);
@@ -822,7 +843,7 @@ client_loop(MRef, Regulator, Tag, Ref, State, Froms) ->
                     client_loop(MRef, Regulator, Tag, Ref, State, Froms)
             end;
         {MRef, From, ensure_dropped} ->
-            case sregulator:ensure_dropped(Regulator, Ref) of
+            case sregulator:ensure_dropped(Regulator, Ref, ?TIMEOUT) of
                 ok ->
                     gen:reply(From, ok),
                     client_loop(MRef, Regulator, Tag, Ref, dropped, Froms);
@@ -831,7 +852,7 @@ client_loop(MRef, Regulator, Tag, Ref, State, Froms) ->
                     client_loop(MRef, Regulator, Tag, Ref, State, Froms)
             end;
         {MRef, From, cancel} ->
-            case sregulator:cancel(Regulator, Tag) of
+            case sregulator:cancel(Regulator, Tag, ?TIMEOUT) of
                 ok ->
                     gen:reply(From, ok),
                     client_loop(MRef, Regulator, Tag, Ref, cancelled, Froms);

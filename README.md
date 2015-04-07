@@ -10,7 +10,7 @@ Introduction
 `sbroker` provides a simple interface to match processes. One party
 calls `sbroker:ask/1` and the counterparty `sbroker:ask_r/1`. If a match
 is found both return `{go, Ref, Pid, SojournTime}`, where `SojournTime` is
-the time spent in milliseconds waiting for a match (one will have a time
+the time spent in `native` time units waiting for a match (one will have a time
 of 0), `Pid` is the other process in the match and `Ref` is the transaction
 reference. If no match is found, returns `{drop, SojournTime}`.
 
@@ -57,7 +57,7 @@ init(_) ->
 `AskRQueueSpec` is the `queue_spec` for the queue contaning processes calling
 `ask_r/1`, and the queue is referedd toas the `ask_r` queue.
 
-`Interval` is the interval in milliseconds that an `sbroker` is
+`Interval` is the interval in `native` time units that an `sbroker` is
 polled to apply timeout queue management. Note that timeout queue
 management can occur on every enqueue and dequeue, and is not reliant on
 the `Interval`. Setting a suitable interval ensures that active queue
@@ -85,11 +85,11 @@ init(_) ->
 `QueueSpec`.
 
 This configuration uses the `squeue_timeout` queue management module which drops
-requests after they have been in the queue for `200` milliseconds. `out` sets
-the queue to `FIFO`. `16` sets the maximum length of the queue. `drop` sets the
-queue to drop processes from the head of the queue (head drop) when the
-maximum size is reached. `Interval` sets the poll rate of the queue, which means
-that the maximum time between drops is `100` milliseconds.
+requests after they have been in the queue for `200` `native` time units.
+`out` sets the queue to `FIFO`. `16` sets the maximum length of the queue.
+`drop` sets the queue to drop processes from the head of the queue (head drop)
+when the maximum size is reached. `Interval` sets the poll rate of the queue,
+which means that the maximum time between drops is `100` `native` time units.
 
 To use this `sbroker`:
 ```erlang

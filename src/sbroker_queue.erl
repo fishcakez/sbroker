@@ -23,7 +23,7 @@
 %% public api
 
 -export([new/2]).
--export([in/3]).
+-export([in/4]).
 -export([out/2]).
 -export([cancel/3]).
 -export([down/3]).
@@ -52,7 +52,7 @@
 %% public api
 
 -spec new(Time, Spec) -> Q when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Spec :: spec(),
       Q :: drop_queue().
 new(Time, {Mod, Args, Out, Size, Drop})
@@ -62,18 +62,19 @@ new(Time, {Mod, Args, Out, Size, Drop})
     #drop_queue{module=Mod, args=Args, out=Out, drop=Drop,
                 size=Size, squeue=squeue:new(Time, Mod, Args)}.
 
--spec in(Time, From, Q) -> NQ when
-      Time :: non_neg_integer(),
+-spec in(Time, InTime, From, Q) -> NQ when
+      Time :: integer(),
+      InTime :: integer(),
       From :: {pid(), tag()},
       Q :: drop_queue(),
       NQ :: drop_queue().
-in(_Time, From, #drop_queue{size=0, len=0} = Q) ->
-    gen_fsm:reply(From, {drop, 0}),
+in(Time, InTime, From, #drop_queue{size=0, len=0} = Q) ->
+    drop(From, Time-InTime),
     Q;
-in(Time, {Pid, _} = From,
+in(Time, InTime, {Pid, _} = From,
    #drop_queue{drop=Drop, size=Size, len=Len, squeue=S} = Q) ->
     Ref = monitor(process, Pid),
-    {Drops, NS} = squeue:in(Time, {Ref, From}, S),
+    {Drops, NS} = squeue:in(Time, InTime, {Ref, From}, S),
     case Len - drops(Drops) + 1 of
         NLen when NLen > Size ->
             {Dropped, NS2} = drop_loop(Drop, NLen - Size, NS),
@@ -83,7 +84,7 @@ in(Time, {Pid, _} = From,
     end.
 
 -spec out(Time, Q) -> {Result, NQ} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: drop_queue(),
       Result :: empty | {SojournTime, {Ref, From}},
       SojournTime :: non_neg_integer(),
@@ -99,7 +100,7 @@ out(Time, #drop_queue{out=Out, len=Len, squeue=S} = Q) ->
     end.
 
 -spec cancel(Time, Tag, Q) -> {Cancelled, NQ} when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Tag :: tag(),
       Q :: drop_queue(),
       Cancelled :: pos_integer() | false,
@@ -123,7 +124,7 @@ cancel(Time, Tag, #drop_queue{len=Len, squeue=S} = Q) ->
     end.
 
 -spec down(Time, Ref, Q) -> NQ when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Ref :: reference(),
       Q :: drop_queue(),
       NQ :: drop_queue().
@@ -154,7 +155,7 @@ config_change(Spec, #drop_queue{len=Len, squeue=S}) ->
     NQ#drop_queue{len=Len, squeue=squeue:join(NS, S)}.
 
 -spec timeout(Time, Q) -> NQ when
-      Time :: non_neg_integer(),
+      Time :: integer(),
       Q :: drop_queue(),
       NQ :: drop_queue().
 timeout(Time, #drop_queue{len=Len, squeue=S} = Q) ->
@@ -185,6 +186,9 @@ drops([], N) ->
 
 drop({SojournTime, {Ref, From}}) ->
     demonitor(Ref, [flush]),
+    drop(From, SojournTime).
+
+drop(From, SojournTime) ->
     gen_fsm:reply(From, {drop, SojournTime}).
 
 maybe_drop(#drop_queue{size=Size, len=Len, drop=Drop, squeue=S} = Q)
