@@ -269,7 +269,9 @@ spawn_client_post(_, [_, nb_ask], Ask) ->
     retry_post(Ask).
 
 update() ->
-    frequency([{10, {go, choose(0, 5)}},
+    Go = ?LET(SojournTime, choose(0, 5),
+              {go, choose(-3, SojournTime), SojournTime}),
+    frequency([{10, Go},
                {5, {drop, choose(0, 5)}},
                {1, {retry, choose(0, 5)}}]).
 
@@ -283,14 +285,15 @@ update_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
                                    {1, undefined}]), update()]
     end.
 
-update(Regulator, Ref, {go, SojournTime}) ->
-    update(Regulator, Ref, {go, make_ref(), self(), SojournTime});
+update(Regulator, Ref, {go, RelSojournTime, SojournTime}) ->
+    Go = {go, make_ref(), self(), RelSojournTime, SojournTime},
+    sregulator:update(Regulator, Ref, Go);
 update(Regulator, undefined, Response) ->
     sregulator:update(Regulator, make_ref(), Response);
 update(_, Client, Response) ->
     client_call(Client, {update, Response}).
 
-update_next(State, _, [_, _, {go, _}]) ->
+update_next(State, _, [_, _, {go, _, _}]) ->
     update_next(State);
 update_next(State, _, [_, _, {retry, _}]) ->
     State;
@@ -316,9 +319,9 @@ update_next(State) ->
             ask_out_next(NState)
     end.
 
-update_post(State, [_, _, {go, SojournTime}], Result) ->
+update_post(State, [_, _, {go, RelSojournTime, SojournTime}], Result) ->
     case Result of
-        {go, _, _, SojournTime} ->
+        {go, _, _, RelSojournTime, SojournTime} ->
             update_post(State);
         _ ->
             false
@@ -703,8 +706,10 @@ drops_post([Client | Drops]) ->
 
 go_post(Client, Regulator) ->
     case result(Client) of
-        {go, Ref, Regulator, SojournTime} when is_reference(Ref) ->
-            is_integer(SojournTime) andalso SojournTime >= 0;
+        {go, Ref, Regulator, IntSojournTime, SojournTime}
+          when is_reference(Ref) ->
+            is_integer(IntSojournTime) andalso IntSojournTime >= 0 andalso
+            is_integer(SojournTime) andalso SojournTime >= IntSojournTime;
         Other ->
             ct:pal("~p Go: ~p", [Client, Other]),
             false
@@ -810,7 +815,7 @@ client_init(Regulator, async_ask) ->
 client_init(Regulator, nb_ask) ->
     MRef = monitor(process, Regulator),
     case sregulator:nb_ask(Regulator) of
-        {go, Ref, _, _} = State ->
+        {go, Ref, _, _, _} = State ->
             client_init(MRef, Regulator, make_ref(), Ref, State);
         State ->
             client_init(MRef, Regulator, make_ref(), make_ref(), State)
@@ -824,7 +829,7 @@ client_loop(MRef, Regulator, Tag, Ref, State, Froms) ->
     receive
         {'DOWN', MRef, _, _, _} ->
             exit(normal);
-        {Tag, {go, NRef, _, _} = Result} when State =:= queued ->
+        {Tag, {go, NRef, _, _, _} = Result} when State =:= queued ->
             _ = [gen:reply(From, Result) || From <- Froms],
             client_loop(MRef, Regulator, Tag, NRef, Result, []);
         {Tag, Result} when State =:= queued ->

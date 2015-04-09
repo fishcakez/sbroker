@@ -150,17 +150,41 @@
 %% public api
 
 %% @doc Tries to match with a process calling `ask_r/1' on the same broker.
-%% Returns `{go, Ref, Pid, SojournTime}' on a successful match or
-%% `{drop, SojournTime}'.
+%% Returns `{go, Ref, Pid, RelativeTime, SojournTime}' on a successful match
+%% or `{drop, SojournTime}'.
 %%
 %% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
-%% matched process. `SojournTime' is the time spent in the queue in `native'
-%% time units.
+%% matched process. `RelativeTime' is the time (in `native' time units) spent
+%% waiting for a match after discounting time spent waiting for the broker to
+%% handle requests. `SojournTime' is the time spent in both the broker's message
+%% queue and internal queue, in `native' time units.
+%%
+%% `RelativeTime' represents the `SojournTime' without the overhead of the
+%% broker. The value measures the level of queue congestion without being
+%% effected by the load of the broker.
+%%
+%% If `RelativeTime' is positive, the request was enqueued in the internal
+%% queue awaiting a match with another request sent approximately `RelativeTime'
+%% after this request was sent. Therefore `SojournTime' minus `RelativeTime'
+%% is the latency, or overhead, of the broker in `native' time units.
+%%
+%% If `RelativeTime' is negative, the request dequeued a request in the internal
+%% queue that was sent approximately `RelativeTime' before this request was
+%% sent. Therefore `SojournTime' is the latency, or overhead, of the broker in
+%% `native' time units.
+%%
+%% If `RelativeTime' is `0', the request was matched with a request sent at
+%% approximately the same time. Therefore `SojournTime' is the latency, or
+%% overhead, of the broker in `native' time units.
+%%
+%% The sojourn time for `Pid' (in `native' time units) can be approximated by
+%% `SojournTime' minus `RelativeTime'.
 -spec ask(Broker) -> Go | Drop when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
+      RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask(Broker) ->
@@ -171,9 +195,10 @@ ask(Broker) ->
 %% @see ask/1
 -spec ask_r(Broker) -> Go | Drop when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
+      RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask_r(Broker) ->
@@ -181,17 +206,22 @@ ask_r(Broker) ->
 
 %% @doc Tries to match with a process calling `ask_r/1' on the same broker but
 %% does not enqueue the request if no immediate match. Returns
-%% `{go, Ref, Pid, 0}' on a successful match or `{retry, 0}'.
+%% `{go, Ref, Pid, RelativeTime, SojournTime}' on a successful match or
+%% `{retry, SojournTime}'.
 %%
 %% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
-%% matched process. `0' reflects the fact that no time was spent in the queue.
+%% matched process. `RelativeTime' is the time (in `native' time units) spent
+%% waiting for a match after discounting time spent waiting for the broker to
+%% handle requests. `SojournTime' is the time spent in the broker's message
+%% queue in `native' time units.
 %%
 %% @see ask/1
 -spec nb_ask(Broker) -> Go | Retry when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
+      RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask(Broker) ->
@@ -203,9 +233,10 @@ nb_ask(Broker) ->
 %% @see nb_ask/1
 -spec nb_ask_r(Broker) -> Go | Retry when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
+      RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask_r(Broker) ->
@@ -218,8 +249,8 @@ nb_ask_r(Broker) ->
 %% containing the result of the request. `Pid', is the pid (`pid()') of the
 %% monitored broker. To cancel the request call `cancel(Pid, Tag)'.
 %%
-%% The reply is of the form `{Tag, {go, Ref, Pid, SojournTime}' or
-%% `{Tag, {drop, SojournTime}}'.
+%% The reply is of the form `{Tag, {go, Ref, Pid, RelativeTime, SojournTime}'
+%% or `{Tag, {drop, SojournTime}}'.
 %%
 %% Multiple asynchronous requests can be made from a single process to a
 %% broker and no guarantee is made of the order of replies. A process making
@@ -242,7 +273,7 @@ async_ask(Broker) ->
 %% request. `Pid', is the pid (`pid()') of the broker. To cancel all requests
 %% identified by `Tag' on broker `Pid' call `cancel(Pid, Tag)'.
 %%
-%% The reply is of the form `{Tag, {go, Ref, Pid, SojournTime}' or
+%% The reply is of the form `{Tag, {go, Ref, Pid, RelativeTime, SojournTime}' or
 %% `{Tag, {drop, SojournTime}}'.
 %%
 %% Multiple asynchronous requests can be made from a single process to a
@@ -292,14 +323,15 @@ async_ask_r(Broker, Tag) ->
 -spec await(Tag, Timeout) -> Go | Drop when
       Tag :: any(),
       Timeout :: timeout(),
-      Go :: {go, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
+      RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 await(Tag, Timeout) ->
     receive
-        {Tag, {go, _, _, _} = Reply} ->
+        {Tag, {go, _, _, _, _} = Reply} ->
             Reply;
         {Tag, {drop, _} = Reply} ->
             Reply;
@@ -501,8 +533,10 @@ bidding_bid(Start, Bid, #state{bidding=B} = State) ->
 bidding_ask(Start, Ask, #state{bidding=B, asking=A} = State) ->
     Time = sbroker_time:native(),
     case sbroker_queue:out(Time, B) of
-        {{SojournTime, {MRef, Bid}}, NB} ->
-            settle(MRef, Bid, SojournTime, Ask, Time-Start),
+        {{BidSojourn, {MRef, Bid}}, NB} ->
+            AskSojourn = Time - Start,
+            RelativeTime = max(BidSojourn - AskSojourn, 0),
+            settle(MRef, RelativeTime, Bid, BidSojourn, Ask, AskSojourn),
             {next_state, bidding, State#state{bidding=NB}};
         {empty, NB} ->
             NA = sbroker_queue:in(Time, Start, Ask, A),
@@ -512,8 +546,10 @@ bidding_ask(Start, Ask, #state{bidding=B, asking=A} = State) ->
 bidding_nb_ask(Start, Ask, #state{bidding=B} = State) ->
     Time = sbroker_time:native(),
     case sbroker_queue:out(Time, B) of
-        {{SojournTime, {MRef, Bid}}, NB} ->
-            settle(MRef, Bid, SojournTime, Ask, Time-Start),
+        {{BidSojourn, {MRef, Bid}}, NB} ->
+            AskSojourn = Time - Start,
+            RelativeTime = max(BidSojourn - AskSojourn, 0),
+            settle(MRef, RelativeTime, Bid, BidSojourn, Ask, AskSojourn),
             {next_state, bidding, State#state{bidding=NB}};
         {empty, NB} ->
             retry(Time, Start, Ask),
@@ -528,8 +564,10 @@ asking_ask(Start, Ask, #state{asking=A} = State) ->
 asking_bid(Start, Bid, #state{asking=A, bidding=B} = State) ->
     Time = sbroker_time:native(),
     case sbroker_queue:out(Time, A) of
-        {{SojournTime, {MRef, Ask}}, NA} ->
-            settle(MRef, Bid, Time-Start, Ask, SojournTime),
+        {{AskSojourn, {MRef, Ask}}, NA} ->
+            BidSojourn = Time - Start,
+            RelativeTime = min(BidSojourn - AskSojourn, 0),
+            settle(MRef, RelativeTime, Bid, BidSojourn, Ask, AskSojourn),
             {next_state, asking, State#state{asking=NA}};
         {empty, NA} ->
             NB = sbroker_queue:in(Time, Start, Bid, B),
@@ -539,18 +577,21 @@ asking_bid(Start, Bid, #state{asking=A, bidding=B} = State) ->
 asking_nb_bid(Start, Bid, #state{asking=A} = State) ->
     Time = sbroker_time:native(),
     case sbroker_queue:out(Time, A) of
-        {{SojournTime, {MRef, Ask}}, NA} ->
-            settle(MRef, Bid, Time-Start, Ask, SojournTime),
+        {{AskSojourn, {MRef, Ask}}, NA} ->
+            BidSojourn = Time - Start,
+            RelativeTime = min(BidSojourn - AskSojourn, 0),
+            settle(MRef, RelativeTime, Bid, BidSojourn, Ask, AskSojourn),
             {next_state, asking, State#state{asking=NA}};
         {empty, NA} ->
             retry(Time, Start, Bid),
             {next_state, bidding, State#state{asking=NA}}
     end.
 
-settle(MRef, {PidB, _} = Bid, SojournTimeB, {PidA, _} = Ask, SojournTimeA) ->
-    %% Bid notified always messaged first.
-    gen_fsm:reply(Bid, {go, MRef, PidA, SojournTimeB}),
-    gen_fsm:reply(Ask, {go, MRef, PidB, SojournTimeA}),
+settle(MRef, RelativeTime, {BidPid, _} = Bid, BidSojourn, {AskPid, _} = Ask,
+       AskSojourn) ->
+    %% Bid always messaged first.
+    gen_fsm:reply(Bid, {go, MRef, AskPid, RelativeTime, BidSojourn}),
+    gen_fsm:reply(Ask, {go, MRef, BidPid, -RelativeTime, AskSojourn}),
     demonitor(MRef, [flush]).
 
 retry(Start, From) ->

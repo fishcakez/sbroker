@@ -98,10 +98,11 @@ ask(_) ->
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask_r(Broker, Ref),
     1 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, AskTime} = sbroker:ask(Broker),
+    {go, Ref2, Self, AskRel, AskTime} = sbroker:ask(Broker),
     0 = sbroker:len(Broker, ?TIMEOUT),
     0 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, AskRTime} = sbroker:await(Ref, ?TIMEOUT),
+    AskRRel = -AskRel,
+    {go, Ref2, Self, AskRRel, AskRTime} = sbroker:await(Ref, ?TIMEOUT),
     if
         AskTime < AskRTime ->
             ok;
@@ -115,10 +116,11 @@ ask_r(_) ->
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask(Broker, Ref),
     1 = sbroker:len(Broker, ?TIMEOUT),
-    {go, Ref2, Self, AskRTime} = sbroker:ask_r(Broker),
+    {go, Ref2, Self, AskRRel, AskRTime} = sbroker:ask_r(Broker),
     0 = sbroker:len(Broker, ?TIMEOUT),
     0 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, AskTime} = sbroker:await(Ref, ?TIMEOUT),
+    AskRel = -AskRRel,
+    {go, Ref2, Self, AskRel, AskTime} = sbroker:await(Ref, ?TIMEOUT),
     if
         AskRTime < AskTime ->
             ok;

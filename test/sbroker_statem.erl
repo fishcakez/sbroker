@@ -584,9 +584,12 @@ settled_post(Client1, Client2) ->
     Pid1 = client_pid(Client1),
     Pid2 = client_pid(Client2),
     case {result(Client1), result(Client2)} of
-        {{go, Ref, Pid2, SojournTime1}, {go, Ref, Pid1, SojournTime2}} ->
+        {{go, Ref, Pid2, RelSojournTime1, SojournTime1},
+         {go, Ref, Pid1, RelSojournTime2, SojournTime2}} ->
             is_integer(SojournTime1) andalso SojournTime1 >= 0 andalso
-            is_integer(SojournTime2) andalso SojournTime2 >= 0;
+            is_integer(SojournTime2) andalso SojournTime2 >= 0 andalso
+            is_integer(RelSojournTime1) andalso RelSojournTime1 =< 0 andalso
+            -RelSojournTime1 =:= RelSojournTime2;
         Result ->
             ct:log("Result: ~p", [Result]),
             false
