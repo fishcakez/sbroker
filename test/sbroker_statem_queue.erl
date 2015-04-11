@@ -80,4 +80,4 @@ do_handle(Q, {[], Drops}) ->
 do_handle(Q, {[N | Rest], Drops}) ->
     Split = min(N, queue:len(Q)),
     {DropQ, NQ} = queue:split(Split, Q),
-    {queue:to_list(DropQ), NQ, {Rest, Drops}}.
+    {lists:reverse(queue:to_list(DropQ)), NQ, {Rest, Drops}}.

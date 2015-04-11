@@ -11,12 +11,8 @@
 -export([args/0]).
 
 -export([init/1]).
--export([handle_sojourn/6]).
--export([handle_sojourn_r/6]).
--export([handle_sojourn_closed/6]).
--export([handle_dropped/5]).
--export([handle_dropped_r/5]).
--export([handle_dropped_closed/5]).
+-export([handle_sojourn/4]).
+-export([handle_dropped/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -60,42 +56,23 @@ args() ->
 init(undefined) ->
     undefined.
 
-handle_sojourn(Time, _, Q, Manager, ManState, undefined) ->
-    {DropCount, NManState} = Manager:handle_out(Time, Q, ManState),
-    {open, DropCount, NManState, undefined}.
+handle_sojourn(_, _, _, undefined) ->
+    {open, undefined}.
 
-handle_sojourn_r(Time, _, Q, Manager, ManState, undefined) ->
-    {DropCount, NManState} = Manager:handle_out_r(Time, Q, ManState),
-    {open, DropCount, NManState, undefined}.
-
-handle_sojourn_closed(Time, _, Q, Manager, ManState, undefined) ->
-    {DropCount, NManState} = Manager:handle_timeout(Time, Q, ManState),
-    {closed, DropCount, NManState, undefined}.
-
-handle_dropped(Time, Q, Manager, ManState, undefined) ->
-    {DropCount, NManState} = Manager:handle_timeout(Time, Q, ManState),
-    {closed, DropCount, NManState, undefined}.
-
-handle_dropped_r(Time, Q, Manager, ManState, undefined) ->
-    handle_dropped(Time, Q, Manager, ManState, undefined).
-
-handle_dropped_closed(Time, Q, Manager, ManState, undefined) ->
-    handle_dropped(Time, Q, Manager, ManState, undefined).
+handle_dropped(_, _, undefined) ->
+    {closed, undefined}.
 
 initial_state() ->
-    squeue_statem:initial_state(svalve, ?MODULE, [squeue_timeout_statem,
-                                                  squeue_naive_statem,
-                                                  squeue_codel_statem,
-                                                  squeue_codel_timeout_statem]).
+    svalve_statem:initial_state(?MODULE).
 
 command(State) ->
-    squeue_statem:command(State).
+    svalve_statem:command(State).
 
 precondition(State, Call) ->
-    squeue_statem:precondition(State, Call).
+    svalve_statem:precondition(State, Call).
 
 next_state(State, Value, Call) ->
-    squeue_statem:next_state(State, Value, Call).
+    svalve_statem:next_state(State, Value, Call).
 
 postcondition(State, Call, Result) ->
-    squeue_statem:postcondition(State, Call, Result).
+    svalve_statem:postcondition(State, Call, Result).

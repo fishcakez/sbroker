@@ -11,12 +11,8 @@
 -export([args/0]).
 
 -export([init/1]).
--export([handle_sojourn/6]).
--export([handle_sojourn_r/6]).
--export([handle_sojourn_closed/6]).
--export([handle_dropped/5]).
--export([handle_dropped_r/5]).
--export([handle_dropped_closed/5]).
+-export([handle_sojourn/4]).
+-export([handle_dropped/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -25,7 +21,7 @@
 -export([postcondition/3]).
 
 -record(state, {target, interval, first_below_time=undefined,
-                dequeue_next=undefined, count=0, dequeuing=false, status=open,
+                dequeue_next=undefined, count=0, dequeuing=false,
                 now=undefined}).
 
 quickcheck() ->
@@ -53,8 +49,6 @@ prop_svalve() ->
                                     aggregate(command_names(Cmds), Result =:= ok))
                       end)).
 
-
-
 module() ->
     svalve_codel_r.
 
@@ -65,99 +59,49 @@ args() ->
 init({Target, Interval}) ->
     #state{target=Target, interval=Interval}.
 
-handle_sojourn(Time, SojournTime, Q, Manager, ManState, State) ->
-    NState = State#state{now=Time, status=open},
-    {Status, NState2} = do_compare(SojournTime, NState),
-    case NState2#state.dequeuing of
+handle_sojourn(Time, SojournTime, Q, State) ->
+    {Status, NState} = do_compare(SojournTime, State#state{now=Time}),
+    case NState#state.dequeuing of
         true ->
-            handle_dequeuing(Status, handle_out, Q, Manager, ManState, NState2);
+            handle_dequeuing(Status, Q, NState);
         false ->
-            handle_not_dequeuing(Status, handle_out, Q, Manager, ManState,
-                                 NState2)
+            handle_not_dequeuing(Status, Q, NState)
     end.
 
-handle_sojourn_r(Time, SojournTime, Q, Manager, ManState, State) ->
-    NState = State#state{now=Time, status=open},
-    {Status, NState2} = do_compare(SojournTime, NState),
-    case NState2#state.dequeuing of
-        true ->
-            handle_dequeuing(Status, handle_out_r, Q, Manager, ManState,
-                             NState2);
-        false ->
-            handle_not_dequeuing(Status, handle_out_r, Q, Manager, ManState,
-                                 NState2)
-    end.
-
-handle_sojourn_closed(Time, SojournTime, Q, Manager, ManState, State) ->
-    NState = State#state{now=Time, status=closed},
-    {Status, NState2} = do_compare(SojournTime, NState),
-    case NState2#state.dequeuing of
-        true ->
-            handle_dequeuing(Status, handle_timeout, Q, Manager, ManState,
-                             NState2);
-        false ->
-            handle_not_dequeuing(Status, handle_timeout, Q, Manager, ManState,
-                                 NState2)
-    end.
-
-handle_dropped(Time, Q, Manager, ManState, #state{count=Count} = State) ->
+handle_dropped(Time, Q, #state{count=Count} = State) ->
     NState = State#state{first_below_time=undefined, dequeuing=false,
-                         count=max(0, Count-1), status=open, now=Time},
-    handle_not_dequeuing(closed, undefined, Q, Manager, ManState, NState).
+                         count=max(0, Count-1), now=Time},
+    handle_not_dequeuing(closed, Q, NState).
 
-handle_dropped_r(Time, Q, Manager, ManState, State) ->
-    handle_dropped(Time, Q, Manager, ManState, State).
-
-handle_dropped_closed(Time, Q, Manager, ManState,
-                      #state{count=Count} = State) ->
-    NState = State#state{first_below_time=undefined, dequeuing=false,
-                         count=max(0, Count-1), status=closed, now=Time},
-    handle_not_dequeuing(closed, undefined, Q, Manager, ManState, NState).
-
-handle_dequeuing(closed, _, Q, Manager, ManState, #state{now=Now} = State) ->
-    {DropCount, NManState} = Manager:handle_timeout(Now, Q, ManState),
-    {closed, DropCount, NManState, State#state{dequeuing=false}};
-handle_dequeuing(open, Fun, Q, Manager, ManState,
-                 #state{dequeue_next=DequeueNext, status=Status, count=Count,
-                        now=Now} = State)
+handle_dequeuing(closed, _, State) ->
+    {closed, State#state{dequeuing=false}};
+handle_dequeuing(open, Q, #state{dequeue_next=DequeueNext, count=Count,
+                                 now=Now} = State)
   when Now >= DequeueNext ->
-    case Manager:Fun(Now, Q, ManState) of
-        {DropCount, NManState} when Status =:= closed ->
-            {closed, DropCount, NManState, State};
-        {DropCount, NManState} when length(Q) =:= DropCount ->
-            {open, DropCount, NManState, State};
-        {DropCount, NManState} ->
+    case Q of
+        [_ | _] ->
             NState = control_law(DequeueNext, State#state{count=Count+1}),
-            {open, DropCount, NManState, NState}
+            {open, NState};
+        [] ->
+            {open, State}
     end;
-handle_dequeuing(open, _, Q, Manager, ManState, #state{now=Now} = State) ->
-    {DropCount, NManState} = Manager:handle_timeout(Now, Q, ManState),
-    {closed, DropCount, NManState, State}.
+handle_dequeuing(open, _, State) ->
+    {closed, State}.
 
-handle_not_dequeuing(open, Fun, Q, Manager, ManState,
+handle_not_dequeuing(open, [_ | _],
                      #state{interval=Interval, dequeue_next=DequeueNext,
-                            status=Status, count=Count, now=Now} = State) ->
-    case Manager:Fun(Now, Q, ManState) of
-        {DropCount, NManState} when Status =:= closed ->
-            {closed, DropCount, NManState, State};
-        {DropCount, NManState} when length(Q) =:= DropCount ->
-            {open, DropCount, NManState, State};
-        {DropCount, NManState} ->
-            NState = State#state{dequeuing=true},
-            NCount = if
-                         Count > 2 andalso Now - DequeueNext < Interval ->
-                             Count - 2;
-                         true ->
-                             1
-                     end,
-            NState2 = control_law(Now, NState#state{count=NCount}),
-            {open, DropCount, NManState, NState2}
-    end;
-handle_not_dequeuing(closed, _Fun, Q, Manager, ManState,
-                     #state{now=Now} = State) ->
-    {DropCount, NManState} = Manager:handle_timeout(Now, Q, ManState),
-    {closed, DropCount, NManState, State}.
-
+                            count=Count, now=Now} = State) ->
+    NState = State#state{dequeuing=true},
+    NCount = if
+                 Count > 2 andalso Now - DequeueNext < Interval ->
+                     Count - 2;
+                 true ->
+                     1
+             end,
+    NState2 = control_law(Now, NState#state{count=NCount}),
+    {open, NState2};
+handle_not_dequeuing(Status, _, State) ->
+    {Status, State}.
 
 do_compare(SojournTime, #state{target=Target} = State)
   when SojournTime > Target ->
@@ -179,19 +123,16 @@ control_law(Start, #state{interval=Interval, count=Count} = State) ->
     State#state{dequeue_next=DequeueNext}.
 
 initial_state() ->
-    squeue_statem:initial_state(svalve, ?MODULE, [squeue_timeout_statem,
-                                                  squeue_naive_statem,
-                                                  squeue_codel_statem,
-                                                  squeue_codel_timeout_statem]).
+    svalve_statem:initial_state(?MODULE).
 
 command(State) ->
-    squeue_statem:command(State).
+    svalve_statem:command(State).
 
 precondition(State, Call) ->
-    squeue_statem:precondition(State, Call).
+    svalve_statem:precondition(State, Call).
 
 next_state(State, Value, Call) ->
-    squeue_statem:next_state(State, Value, Call).
+    svalve_statem:next_state(State, Value, Call).
 
 postcondition(State, Call, Result) ->
-    squeue_statem:postcondition(State, Call, Result).
+    svalve_statem:postcondition(State, Call, Result).

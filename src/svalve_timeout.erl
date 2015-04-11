@@ -54,11 +54,11 @@ init(_Time, Timeout) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_sojourn(Time, SojournTime, S, Timeout) when SojournTime > Timeout ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_sojourn(_, SojournTime, S, Timeout) when SojournTime > Timeout ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, Timeout};
-handle_sojourn(Time, _, S, Timeout) ->
-    {Result, Drops, NS} = squeue:out(Time, S),
+handle_sojourn(_, _, S, Timeout) ->
+    {Result, Drops, NS} = squeue:out(S),
     {Result, Drops, NS, Timeout}.
 
 %% @private
@@ -73,11 +73,11 @@ handle_sojourn(Time, _, S, Timeout) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_sojourn_r(Time, SojournTime, S, Timeout) when SojournTime > Timeout ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_sojourn_r(_, SojournTime, S, Timeout) when SojournTime > Timeout ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, Timeout};
-handle_sojourn_r(Time, _, S, Timeout) ->
-    {Result, Drops, NS} = squeue:out_r(Time, S),
+handle_sojourn_r(_, _, S, Timeout) ->
+    {Result, Drops, NS} = squeue:out_r(S),
     {Result, Drops, NS, Timeout}.
 
 %% @private
@@ -90,8 +90,8 @@ handle_sojourn_r(Time, _, S, Timeout) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_sojourn_closed(Time, _, S, Timeout) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_sojourn_closed(_, _, S, Timeout) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, Timeout}.
 
 %% @private
@@ -103,8 +103,8 @@ handle_sojourn_closed(Time, _, S, Timeout) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_dropped(Time, S, Timeout) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_dropped(_, S, Timeout) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, Timeout}.
 
 %% @private

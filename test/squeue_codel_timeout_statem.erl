@@ -143,7 +143,7 @@ droplast(L) ->
     lists:reverse(RevL).
 
 initial_state() ->
-    squeue_statem:initial_state(squeue, ?MODULE).
+    squeue_statem:initial_state(?MODULE).
 
 command(State) ->
     squeue_statem:command(State).

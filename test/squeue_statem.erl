@@ -23,66 +23,39 @@
 
 -compile({no_auto_import, [time/0]}).
 
--export([initial_state/2]).
--export([initial_state/3]).
+-export([initial_state/1]).
 -export([command/1]).
 -export([precondition/2]).
 -export([next_state/3]).
 -export([postcondition/3]).
 
+-export([new/2]).
 -export([new/3]).
--export([new/4]).
--export([new/6]).
--export([new/7]).
--export([drop/2]).
--export([drop_r/2]).
--export([join/3]).
--export([join/5]).
+-export([drop/1]).
+-export([drop_r/1]).
+-export([join/2]).
+-export([filter/3]).
 -export([filter/4]).
--export([filter/5]).
 
--record(state, {mod, managers=[], manager, manager_state, feedback,
-                feedback_state, status=open, time=0, tail_time=0, list=[],
-                queue}).
+-record(state, {manager, manager_state, time=0, tail_time=0, list=[], queue}).
 
-initial_state(Mod, Manager) ->
-    #state{mod=Mod, manager=Manager}.
-
-initial_state(Mod, Feedback, Managers) ->
-    #state{mod=Mod, managers=Managers, feedback=Feedback}.
+initial_state(Manager) ->
+    #state{manager=Manager}.
 
 command(#state{queue=undefined} = State) ->
     {call, ?MODULE, new, new_args(State)};
-command(#state{mod=Mod, feedback=undefined} = State) ->
-    frequency([{20, {call, Mod, in, in_args(State)}},
-               {10, {call, Mod, out, out_args(State)}},
-               {10, {call, Mod, out_r, out_r_args(State)}},
+command(State) ->
+    frequency([{20, {call, squeue, in, in_args(State)}},
+               {10, {call, squeue, out, out_args(State)}},
+               {10, {call, squeue, out_r, out_r_args(State)}},
                {6, {call, ?MODULE, drop, drop_args(State)}},
                {6, {call, ?MODULE, drop_r, drop_r_args(State)}},
                {6, {call, ?MODULE, join, join_args(State)}},
                {4, {call, ?MODULE, filter, filter_args(State)}},
-               {1, {call, Mod, time, time_args(State)}},
-               {1, {call, Mod, timeout, timeout_args(State)}},
-               {1, {call, Mod, len, len_args(State)}},
-               {1, {call, Mod, to_list, to_list_args(State)}}]);
-command(#state{mod=Mod} = State) ->
-    frequency([{30, {call, Mod, in, in_args(State)}},
-               {15, {call, Mod, sojourn, sojourn_args(State)}},
-               {15, {call, Mod, sojourn_r, sojourn_r_args(State)}},
-               {6, {call, Mod, out, out_args(State)}},
-               {6, {call, Mod, out_r, out_r_args(State)}},
-               {6, {call, ?MODULE, drop, drop_args(State)}},
-               {6, {call, ?MODULE, drop_r, drop_r_args(State)}},
-               {6, {call, ?MODULE, join, join_args(State)}},
-               {4, {call, Mod, dropped, dropped_args(State)}},
-               {4, {call, Mod, dropped_r, dropped_r_args(State)}},
-               {4, {call, ?MODULE, filter, filter_args(State)}},
-               {4, {call, Mod, open, open_args(State)}},
-               {4, {call, Mod, close, close_args(State)}},
-               {1, {call, Mod, time, time_args(State)}},
-               {1, {call, Mod, timeout, timeout_args(State)}},
-               {1, {call, Mod, len, len_args(State)}},
-               {1, {call, Mod, to_list, to_list_args(State)}}]).
+               {1, {call, squeue, time, time_args(State)}},
+               {1, {call, squeue, timeout, timeout_args(State)}},
+               {1, {call, squeue, len, len_args(State)}},
+               {1, {call, squeue, to_list, to_list_args(State)}}]).
 
 precondition(State, {call, _, new, Args}) ->
     new_pre(State, Args);
@@ -109,21 +82,7 @@ precondition(State, {call, _, timeout, Args}) ->
 precondition(State, {call, _, len, Args}) ->
     len_pre(State, Args);
 precondition(State, {call, _, to_list, Args}) ->
-    to_list_pre(State, Args);
-precondition(#state{feedback=undefined}, _) ->
-    false;
-precondition(State, {call, _, sojourn, Args}) ->
-    sojourn_pre(State, Args);
-precondition(State, {call, _, sojourn_r, Args}) ->
-    sojourn_r_pre(State, Args);
-precondition(State, {call, _, dropped, Args}) ->
-    dropped_pre(State, Args);
-precondition(State, {call, _, dropped_r, Args}) ->
-    dropped_r_pre(State, Args);
-precondition(State, {call, _, open, Args}) ->
-    open_pre(State, Args);
-precondition(State, {call, _, close, Args}) ->
-    close_pre(State, Args).
+    to_list_pre(State, Args).
 
 next_state(State, Value, {call, _, new, Args}) ->
     new_next(State, Value, Args);
@@ -148,19 +107,7 @@ next_state(State, Value, {call, _, timeout, Args}) ->
 next_state(State, Value, {call, _, len, Args}) ->
     len_next(State, Value, Args);
 next_state(State, Value, {call, _, to_list, Args}) ->
-    to_list_next(State, Value, Args);
-next_state(State, Value, {call, _, sojourn, Args}) ->
-    sojourn_next(State, Value, Args);
-next_state(State, Value, {call, _, sojourn_r, Args}) ->
-    sojourn_r_next(State, Value, Args);
-next_state(State, Value, {call, _, dropped, Args}) ->
-    dropped_next(State, Value, Args);
-next_state(State, Value, {call, _, dropped_r, Args}) ->
-    dropped_r_next(State, Value, Args);
-next_state(State, Value, {call, _, open, Args}) ->
-    open_next(State, Value, Args);
-next_state(State, Value, {call, _, close, Args}) ->
-    close_next(State, Value, Args).
+    to_list_next(State, Value, Args).
 
 postcondition(State, {call, _, new, Args}, Result) ->
     new_post(State, Args, Result);
@@ -185,19 +132,7 @@ postcondition(State, {call, _, timeout, Args}, Result) ->
 postcondition(State, {call, _, len, Args}, Result) ->
     len_post(State, Args, Result);
 postcondition(State, {call, _, to_list, Args}, Result) ->
-    to_list_post(State, Args, Result);
-postcondition(State, {call, _, sojourn, Args}, Result) ->
-    sojourn_post(State, Args, Result);
-postcondition(State, {call, _, sojourn_r, Args}, Result) ->
-    sojourn_r_post(State, Args, Result);
-postcondition(State, {call, _, dropped, Args}, Result) ->
-    dropped_post(State, Args, Result);
-postcondition(State, {call, _, dropped_r, Args}, Result) ->
-    dropped_r_post(State, Args, Result);
-postcondition(State, {call, _, open, Args}, Result) ->
-    open_post(State, Args, Result);
-postcondition(State, {call, _, close, Args}, Result) ->
-    close_post(State, Args, Result).
+    to_list_post(State, Args, Result).
 
 time() ->
     choose(-10, 10).
@@ -209,51 +144,27 @@ time(Time) ->
     frequency([{10, ?LET(Incr, choose(0, 3), Time + Incr)},
                {1, choose(-10, Time)}]).
 
-new(Mod, Manager, Args) ->
-    Mod:new(Manager, Args).
+new(Manager, Args) ->
+    squeue:new(Manager, Args).
 
-new(Mod, Time, Manager, Args) ->
-    Mod:new(Time, Manager, Args).
+new(Time, Manager, Args) ->
+    squeue:new(Time, Manager, Args).
 
-new(Mod, _Manager, ManMod, ManArgs, Feedback, FbArgs) ->
-    S = squeue:new(ManMod, ManArgs),
-    Mod:squeue(S, Mod:new(Feedback, FbArgs)).
-
-new(Mod, _Manager, Time, ManMod, ManArgs, Feedback, FbArgs) ->
-    S = squeue:new(Time, ManMod, ManArgs),
-    Mod:squeue(S, Mod:new(Time, Feedback, FbArgs)).
-
-
-new_args(#state{mod=Mod, manager=Manager, feedback=undefined}) ->
+new_args(#state{manager=Manager}) ->
     Args = [Manager:module(), Manager:args()],
-    oneof([[Mod, time() | Args], [Mod | Args]]);
-new_args(#state{mod=Mod, managers=Managers, feedback=Feedback}) ->
-    ?LET(Manager, elements(Managers),
-         begin
-             Args = [Manager:module(), Manager:args(),
-                     Feedback:module(), Feedback:args()],
-             oneof([[Mod, Manager, time() | Args], [Mod, Manager | Args]])
-         end).
+    oneof([[time() | Args], Args]).
 
 new_pre(#state{queue=Q}, _Args) ->
     Q =:= undefined.
 
-new_next(State, Value, [Mod, ManMod, ManArgs]) ->
-    new_next(State, Value, [Mod, 0, ManMod, ManArgs]);
-new_next(#state{manager=Manager} = State, VQ, [_Mod, Time, _ManMod, ManArgs]) ->
+new_next(State, Value, [Module, Args]) ->
+    new_next(State, Value, [0, Module, Args]);
+new_next(#state{manager=Manager} = State, VQ, [Time, _, Args]) ->
     State#state{time=Time, tail_time=Time, queue=VQ, list=[],
-                manager_state=Manager:init(ManArgs)};
-new_next(State, Value, [Mod, Manager, ManMod, ManArgs, FbMod, FbArgs]) ->
-    new_next(State, Value, [Mod, Manager, 0, ManMod, ManArgs, FbMod, FbArgs]);
-new_next(#state{feedback=Feedback} = State, VQ,
-         [_Mod, Manager, Time, _ManMod, ManArgs, _FbMod, FbArgs]) ->
-    State#state{time=Time, tail_time=Time, queue=VQ, list=[],
-                manager=Manager,
-                manager_state=Manager:init(ManArgs),
-                feedback_state=Feedback:init(FbArgs)}.
+                manager_state=Manager:init(Args)}.
 
-new_post(#state{mod=Mod}, _Args, Q) ->
-    Mod:is_queue(Q).
+new_post(_, _Args, Q) ->
+    squeue:is_queue(Q).
 
 in_args(#state{time=Time, queue=Q} = State) ->
     oneof([in_args_intime(State),
@@ -289,8 +200,8 @@ in_post(#state{time=Time} = State, [Item, Q], Result) ->
 in_post(#state{time=PrevTime} = State, [Time, Item, Q], Result) ->
     NTime = max(PrevTime, Time),
     in_post(State, [NTime, NTime, Item, Q], Result);
-in_post(#state{mod=Mod} = State, [Time, _InTime, _Item, _Q], {Drops, NQ}) ->
-    advance_time_drops(State, Time) =:= Drops andalso Mod:is_queue(NQ).
+in_post(State, [Time, _InTime, _Item, _Q], {Drops, NQ}) ->
+    advance_time_drops(State, Time) =:= Drops andalso squeue:is_queue(NQ).
 
 out_args(#state{time=Time, queue=Q}) ->
     oneof([[time(Time), Q],
@@ -312,12 +223,12 @@ out_next(State, Value, [Time, _Q]) ->
 
 out_post(#state{time=Time} = State, [Q], Result) ->
     out_post(State, [Time, Q], Result);
-out_post(#state{mod=Mod} = State, [Time, _Q], {Result, Drops, NQ}) ->
+out_post(State, [Time, _Q], {Result, Drops, NQ}) ->
     case prepare_out(State, Time) of
         {Drops, #state{list=[]}} ->
-            Result =:= empty andalso Mod:is_queue(NQ);
+            Result =:= empty andalso squeue:is_queue(NQ);
         {Drops, #state{list=[Result|_]}} ->
-            Mod:is_queue(NQ);
+            squeue:is_queue(NQ);
         _ ->
             false
     end.
@@ -341,18 +252,18 @@ out_r_next(State, Value, [Time, _Q]) ->
 
 out_r_post(#state{time=Time} = State, [Q], Result) ->
     out_r_post(State, [Time, Q], Result);
-out_r_post(#state{mod=Mod} = State, [Time, _Q], {Result, Drops, NQ}) ->
+out_r_post(State, [Time, _Q], {Result, Drops, NQ}) ->
     case prepare_out_r(State, Time) of
         {Drops, #state{list=[]}} ->
-            Result =:= empty andalso Mod:is_queue(NQ);
+            Result =:= empty andalso squeue:is_queue(NQ);
         {Drops, #state{list=L}} ->
-            Result =:= lists:last(L) andalso Mod:is_queue(NQ);
+            Result =:= lists:last(L) andalso squeue:is_queue(NQ);
         _ ->
             false
     end.
 
-drop(Mod, Args) ->
-    try apply(Mod, drop, Args) of
+drop(Args) ->
+    try apply(squeue, drop, Args) of
         Result ->
             Result
     catch
@@ -360,18 +271,18 @@ drop(Mod, Args) ->
             {Class, Reason, erlang:get_stacktrace()}
     end.
 
-drop_args(#state{mod=Mod, time=Time, queue=Q}) ->
-    [Mod, oneof([[time(Time), Q],
+drop_args(#state{time=Time, queue=Q}) ->
+    [oneof([[time(Time), Q],
                  [Q]])].
 
-drop_pre(#state{mod=Mod}, [Mod2, _]) ->
-    Mod =:= Mod2.
+drop_pre(_, _) ->
+    true.
 
 drop_next(#state{list=[]} = State, _Value, _Args) ->
     State;
-drop_next(#state{time=Time} = State, Value, [Mod, [Q]]) ->
-    drop_next(State, Value, [Mod, [Time, Q]]);
-drop_next(State, Value, [_Mod, [Time, _Q]]) ->
+drop_next(#state{time=Time} = State, Value, [[Q]]) ->
+    drop_next(State, Value, [[Time, Q]]);
+drop_next(State, Value, [[Time, _Q]]) ->
     VQ = {call, erlang, element, [2, Value]},
     case advance_time(State, Time) of
         {[], #state{list=[_|NL]} = NState} ->
@@ -387,20 +298,20 @@ drop_post(#state{list=[]}, _, Result) ->
         _ ->
             false
     end;
-drop_post(#state{time=Time} = State, [Mod, [Q]], Result) ->
-    drop_post(State, [Mod, [Time, Q]], Result);
-drop_post(#state{mod=Mod} = State, [_Mod, [Time, _Q]], {Drops, NQ}) ->
+drop_post(#state{time=Time} = State, [[Q]], Result) ->
+    drop_post(State, [[Time, Q]], Result);
+drop_post(State, [[Time, _Q]], {Drops, NQ}) ->
     case advance_time(State, Time) of
         {[], #state{list=[Drop|_]}} ->
-            Drops =:= [Drop] andalso Mod:is_queue(NQ);
+            Drops =:= [Drop] andalso squeue:is_queue(NQ);
         {Drops, _} ->
-            Mod:is_queue(NQ);
+            squeue:is_queue(NQ);
         _ ->
             false
     end.
 
-drop_r(Mod, Args) ->
-    try apply(Mod, drop_r, Args) of
+drop_r(Args) ->
+    try apply(squeue, drop_r, Args) of
         Result ->
             Result
     catch
@@ -416,9 +327,9 @@ drop_r_pre(State, Args) ->
 
 drop_r_next(#state{list=[]} = State, _Value, _Args) ->
     State;
-drop_r_next(#state{time=Time} = State, Value, [Mod, [Q]]) ->
-    drop_r_next(State, Value, [Mod, [Time, Q]]);
-drop_r_next(State, Value, [_Mod, [Time, _Q]]) ->
+drop_r_next(#state{time=Time} = State, Value, [[Q]]) ->
+    drop_r_next(State, Value, [[Time, Q]]);
+drop_r_next(State, Value, [[Time, _Q]]) ->
     VQ = {call, erlang, element, [2, Value]},
     case advance_time(State, Time) of
         {[], #state{list=NL} = NState} ->
@@ -434,26 +345,21 @@ drop_r_post(#state{list=[]}, _, Result) ->
         _ ->
             false
     end;
-drop_r_post(#state{time=Time} = State, [Mod, [Q]], Result) ->
-    drop_r_post(State, [Mod, [Time, Q]], Result);
-drop_r_post(#state{mod=Mod} = State, [_Mod, [Time, _Q]], {Drops, NQ}) ->
+drop_r_post(#state{time=Time} = State, [[Q]], Result) ->
+    drop_r_post(State, [[Time, Q]], Result);
+drop_r_post(State, [[Time, _Q]], {Drops, NQ}) ->
     case advance_time(State, Time) of
         {[], #state{list=L}} ->
-            Drops =:= [lists:last(L)] andalso Mod:is_queue(NQ);
+            Drops =:= [lists:last(L)] andalso squeue:is_queue(NQ);
         {Drops, _} ->
-            Mod:is_queue(NQ);
+            squeue:is_queue(NQ);
         _ ->
             false
     end.
 
-join(Mod, Q1, {Time2, TailTime, StartList, Module, Args}) ->
-    Q2 = Mod:from_start_list(Time2, TailTime, StartList, Module, Args),
-    Mod:join(Q1, Q2).
-
-join(Mod, Q1, {Time2, TailTime, StartList, ManMod, ManArgs}, FbMod, FbArgs) ->
-    S = squeue:from_start_list(Time2, TailTime, StartList, ManMod, ManArgs),
-    Q2 = Mod:squeue(S, Mod:new(Time2, FbMod, FbArgs)),
-    Mod:join(Q1, Q2).
+join(Q1, {Time2, TailTime, StartList, Module, Args}) ->
+    Q2 = squeue:from_start_list(Time2, TailTime, StartList, Module, Args),
+    squeue:join(Q1, Q2).
 
 join_list(MinStart, MaxStart) ->
     ?LET(Unordered, list(join_item(MinStart, MaxStart)),
@@ -473,19 +379,12 @@ join_queue(Time, MinStart, Manager) ->
              {Time, TailTime, JoinList, Manager:module(), Args}
          end).
 
-join_args(#state{mod=Mod, manager=Manager, feedback=Feedback, list=L, time=Time,
-                 queue=Q}) ->
+join_args(#state{manager=Manager, list=L, time=Time, queue=Q}) ->
     %% Add default item that has been in queue whole time so that empty queue
     %% has MinStart of -10.
     {SojournTime, _} = lists:last([{Time+10, a} | L]),
     MinStart = Time-SojournTime,
-    Args = [Mod, Q, join_queue(Time, MinStart, Manager)],
-    case Feedback of
-        undefined ->
-            Args;
-        _ ->
-            Args ++ [Feedback:module(), Feedback:args()]
-    end.
+    [Q, join_queue(Time, MinStart, Manager)].
 
 join_pre(#state{time=Time, list=L1},
          [_Q1, _, {Time, _, StartList, _, _} | _]) ->
@@ -511,18 +410,18 @@ do_join_pre(L1,L2) ->
 
 
 join_next(#state{time=Time, tail_time=TailTime, list=L1} = State, VQ,
-          [_Mod, _Q1, {Time, TailTime2, StartList, _Module2, _Args2} | _]) ->
+          [_Q1, {Time, TailTime2, StartList, _Module2, _Args2}]) ->
     L2 = [{Time - Start, Item} || {Start, Item} <- StartList],
     State#state{tail_time=max(TailTime, TailTime2), list=L1++L2, queue=VQ}.
 
-join_post(#state{mod=Mod}, _, NQ) ->
-    Mod:is_queue(NQ).
+join_post(_, _, NQ) ->
+    squeue:is_queue(NQ).
 
-filter(Mod, Method, Item, Q) ->
-    Mod:filter(make_filter(Method, Item), Q).
+filter(Method, Item, Q) ->
+    squeue:filter(make_filter(Method, Item), Q).
 
-filter(Mod, Time, Method, Item, Q) ->
-    Mod:filter(Time, make_filter(Method, Item), Q).
+filter(Time, Method, Item, Q) ->
+    squeue:filter(Time, make_filter(Method, Item), Q).
 
 make_filter(duplicate, Item) ->
     fun(Item2) when Item2 =:= Item ->
@@ -535,16 +434,16 @@ make_filter(filter, Item) ->
             Item2 =:= Item
     end.
 
-filter_args(#state{mod=Mod, time=Time, queue=Q}) ->
+filter_args(#state{time=Time, queue=Q}) ->
     Args = [oneof([duplicate, filter]), item(), Q],
-    oneof([[Mod, time(Time) | Args], [Mod | Args]]).
+    oneof([[time(Time) | Args], Args]).
 
 filter_pre(_State, _Args) ->
     true.
 
-filter_next(#state{time=Time} = State, Value, [Mod, Action, Item, Q]) ->
-    filter_next(State, Value, [Mod, Time, Action, Item, Q]);
-filter_next(State, Value, [_Mod, Time, duplicate, Item, _Q]) ->
+filter_next(#state{time=Time} = State, Value, [Action, Item, Q]) ->
+    filter_next(State, Value, [Time, Action, Item, Q]);
+filter_next(State, Value, [Time, duplicate, Item, _Q]) ->
     VQ = {call, erlang, element, [2, Value]},
     #state{list=L} = NState = advance_time_state(State, Time),
     Duplicate = fun({_, Item2} = Elem) when Item2 =:= Item ->
@@ -554,17 +453,17 @@ filter_next(State, Value, [_Mod, Time, duplicate, Item, _Q]) ->
                 end,
     NL = lists:flatmap(Duplicate, L),
     NState#state{list=NL, queue=VQ};
-filter_next(State, Value, [_Mod, Time, filter, Item, _Q]) ->
+filter_next(State, Value, [Time, filter, Item, _Q]) ->
     VQ = {call, erlang, element, [2, Value]},
     #state{list=L} = NState = advance_time_state(State, Time),
     Filter = fun({_, Item2} ) -> Item2 =:= Item end,
     NL = lists:filter(Filter, L),
     NState#state{list=NL, queue=VQ}.
 
-filter_post(#state{time=Time} = State, [Mod, Action, Item, Q], Result) ->
-    filter_post(State, [Mod, Time, Action, Item, Q], Result);
-filter_post(State, [Mod, Time, _Action, _Item, _Q], {Drops, NQ}) ->
-    advance_time_drops(State, Time) =:= Drops andalso Mod:is_queue(NQ).
+filter_post(#state{time=Time} = State, [Action, Item, Q], Result) ->
+    filter_post(State, [Time, Action, Item, Q], Result);
+filter_post(State, [Time, _Action, _Item, _Q], {Drops, NQ}) ->
+    advance_time_drops(State, Time) =:= Drops andalso squeue:is_queue(NQ).
 
 time_args(#state{queue=Q}) ->
     [Q].
@@ -589,8 +488,8 @@ timeout_next(State, Value, [Time, _Q]) ->
     NState = advance_time_state(State, Time),
     NState#state{queue=VQ}.
 
-timeout_post(#state{mod=Mod} = State, [Time, _Q], {Drops, NQ}) ->
-    advance_time_drops(State, Time) =:= Drops andalso Mod:is_queue(NQ).
+timeout_post(State, [Time, _Q], {Drops, NQ}) ->
+    advance_time_drops(State, Time) =:= Drops andalso squeue:is_queue(NQ).
 
 len_args(#state{queue=Q}) ->
     [Q].
@@ -616,174 +515,6 @@ to_list_next(State, _Value, _Args) ->
 to_list_post(#state{list=L}, [_Q], List) ->
     {_, Items} = lists:unzip(L),
     Items =:= List.
-
-%% svalve
-
-sojourn() ->
-    choose(0, 3).
-
-sojourn_args(#state{time=Time, queue=Q}) ->
-    oneof([[time(Time), sojourn(), Q],
-           [sojourn(), Q]]).
-
-sojourn_pre(_State, _Args) ->
-    true.
-
-sojourn_next(#state{time=Time} = State, Value, [SojournTime, Q]) ->
-    sojourn_next(State, Value, [Time, SojournTime, Q]);
-sojourn_next(State, Value, [Time, SojournTime, _Q]) ->
-    VQ = {call, erlang, element, [3, Value]},
-    case prepare_sojourn(State, handle_sojourn, SojournTime, Time) of
-        {closed, _, NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=[]} = NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=[_Out | NL]} = NState} ->
-            NState#state{list=NL, queue=VQ}
-    end.
-
-sojourn_post(#state{time=Time} = State, [SojournTime, Q], Result) ->
-    sojourn_post(State, [Time, SojournTime, Q], Result);
-sojourn_post(#state{mod=Mod} = State, [Time, SojournTime, _Q],
-         {Result, Drops, NQ}) ->
-    case prepare_sojourn(State, handle_sojourn, SojournTime, Time) of
-        {closed, Drops, _} ->
-            Result =:= closed andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=[]}} ->
-            Result =:= empty andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=[Result|_]}} ->
-            Mod:is_queue(NQ);
-        _ ->
-            false
-    end.
-
-sojourn_r_args(State) ->
-    sojourn_args(State).
-
-sojourn_r_pre(State, Args) ->
-    sojourn_pre(State, Args).
-
-sojourn_r_next(#state{time=Time} = State, Value, [SojournTime, Q]) ->
-    sojourn_r_next(State, Value, [Time, SojournTime, Q]);
-sojourn_r_next(State, Value, [Time, SojournTime, _Q]) ->
-    VQ = {call, erlang, element, [3, Value]},
-    case prepare_sojourn(State, handle_sojourn_r, SojournTime, Time) of
-        {closed, _, NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=[]} = NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=NL} = NState} ->
-            NState#state{list=droplast(NL), queue=VQ}
-    end.
-
-sojourn_r_post(#state{time=Time} = State, [SojournTime, Q], Result) ->
-    sojourn_r_post(State, [Time, SojournTime, Q], Result);
-sojourn_r_post(#state{mod=Mod} = State, [Time, SojournTime, _Q],
-         {Result, Drops, NQ}) ->
-    case prepare_sojourn(State, handle_sojourn_r, SojournTime, Time) of
-        {closed, Drops, _} ->
-            Result =:= closed andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=[]}} ->
-            Result =:= empty andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=NL}} ->
-            lists:last(NL) =:= Result andalso Mod:is_queue(NQ);
-        _ ->
-            false
-    end.
-
-
-dropped_args(#state{time=Time, queue=Q}) ->
-    oneof([[time(Time), Q],
-           [Q]]).
-
-dropped_pre(_State, _Args) ->
-    true.
-
-dropped_next(#state{time=Time} = State, Value, [Q]) ->
-    dropped_next(State, Value, [Time, Q]);
-dropped_next(State, Value, [Time, _Q]) ->
-    VQ = {call, erlang, element, [3, Value]},
-    case prepare_dropped(State, handle_dropped, Time) of
-        {closed, _, NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=[]} = NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=NL} = NState} ->
-            NState#state{list=droplast(NL), queue=VQ}
-    end.
-
-dropped_post(#state{time=Time} = State, [Q], Result) ->
-    dropped_post(State, [Time, Q], Result);
-dropped_post(#state{mod=Mod} = State, [Time, _Q],
-         {Result, Drops, NQ}) ->
-    case prepare_dropped(State, handle_dropped, Time) of
-        {closed, Drops, _} ->
-            Result =:= closed andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=[]}} ->
-            Result =:= empty andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=NL}} ->
-            lists:last(NL) =:= Result andalso Mod:is_queue(NQ);
-        _ ->
-            false
-    end.
-
-dropped_r_args(State) ->
-    dropped_args(State).
-
-dropped_r_pre(State, Args) ->
-    dropped_pre(State, Args).
-
-dropped_r_next(#state{time=Time} = State, Value, [Q]) ->
-    dropped_r_next(State, Value, [Time, Q]);
-dropped_r_next(State, Value, [Time, _Q]) ->
-    VQ = {call, erlang, element, [3, Value]},
-    case prepare_dropped(State, handle_dropped_r, Time) of
-        {closed, _, NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=[]} = NState} ->
-            NState#state{queue=VQ};
-        {open, _, #state{list=NL} = NState} ->
-            NState#state{list=droplast(NL), queue=VQ}
-    end.
-
-dropped_r_post(#state{time=Time} = State, [Q], Result) ->
-    dropped_r_post(State, [Time, Q], Result);
-dropped_r_post(#state{mod=Mod} = State, [Time, _Q],
-         {Result, Drops, NQ}) ->
-    case prepare_dropped(State, handle_dropped_r, Time) of
-        {closed, Drops, _} ->
-            Result =:= closed andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=[]}} ->
-            Result =:= empty andalso Mod:is_queue(NQ);
-        {open, Drops, #state{list=NL}} ->
-            lists:last(NL) =:= Result andalso Mod:is_queue(NQ);
-        _ ->
-            false
-    end.
-
-open_args(#state{queue=Q}) ->
-    [Q].
-
-open_pre(_State, _Args) ->
-    true.
-
-open_next(State, VQ, _Args) ->
-    State#state{status=open, queue=VQ}.
-
-open_post(#state{mod=Mod}, _Args, Result) ->
-    Mod:is_queue(Result).
-
-close_args(#state{queue=Q}) ->
-    [Q].
-
-close_pre(_State, _Args) ->
-    true.
-
-close_next(State, VQ, _Args) ->
-    State#state{status=closed, queue=VQ}.
-
-close_post(#state{mod=Mod}, _Args, Result) ->
-    Mod:is_queue(Result).
 
 %% Helpers
 
@@ -822,42 +553,6 @@ prepare(#state{manager=Manager, manager_state=ManState, time=Time,
     {DropCount, NManState} = Manager:Fun(NTime, SojournTimes, ManState),
     {Drops, NL2} = lists:split(DropCount, NL),
     {Drops, State#state{time=NTime, list=NL2, manager_state=NManState}}.
-
-prepare_sojourn(#state{time=Time} = State, Fun, SojournTime, NTime)
-  when Time > NTime ->
-    prepare_sojourn(State, Fun, SojournTime, Time);
-prepare_sojourn(#state{status=closed} = State, Fun, SojournTime, NTime)
-  when Fun =/= handle_sojourn_closed ->
-    prepare_sojourn(State, handle_sojourn_closed, SojournTime, NTime);
-prepare_sojourn(#state{feedback=Feedback, feedback_state=FbState,
-                       manager=Manager, manager_state=ManState, time=Time,
-                       list=L} = State, Fun, SojournTime, NTime) ->
-    Diff = NTime - Time,
-    NL = [{ItemSojournTime + Diff, Item} || {ItemSojournTime, Item} <- L],
-    {SojournTimes, _} = lists:unzip(NL),
-    {Result, DropCount, NManState, NFbState} =
-        Feedback:Fun(NTime, SojournTime, SojournTimes, Manager, ManState,
-                     FbState),
-    {Drops, NL2} = lists:split(DropCount, NL),
-    {Result, Drops, State#state{time=NTime, list=NL2, manager_state=NManState,
-                                feedback_state=NFbState}}.
-
-prepare_dropped(#state{time=Time} = State, Fun, NTime) when Time > NTime ->
-    prepare_dropped(State, Fun, Time);
-prepare_dropped(#state{status=closed} = State, Fun, NTime)
-  when Fun =/= handle_dropped_closed ->
-    prepare_dropped(State, handle_dropped_closed, NTime);
-prepare_dropped(#state{feedback=Feedback, feedback_state=FbState,
-                       manager=Manager, manager_state=ManState, time=Time,
-                       list=L} = State, Fun, NTime) ->
-    Diff = NTime - Time,
-    NL = [{ItemSojournTime + Diff, Item} || {ItemSojournTime, Item} <- L],
-    {SojournTimes, _} = lists:unzip(NL),
-    {Result, DropCount, NManState, NFbState} =
-        Feedback:Fun(NTime, SojournTimes, Manager, ManState, FbState),
-    {Drops, NL2} = lists:split(DropCount, NL),
-    {Result, Drops, State#state{time=NTime, list=NL2, manager_state=NManState,
-                                feedback_state=NFbState}}.
 
 droplast(List) ->
     [_ | Rest] = lists:reverse(List),

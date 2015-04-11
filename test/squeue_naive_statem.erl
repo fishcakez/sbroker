@@ -83,7 +83,7 @@ handle_out_r(_Time, _L, State) ->
     {0, State}.
 
 initial_state() ->
-    squeue_statem:initial_state(squeue, ?MODULE).
+    squeue_statem:initial_state(?MODULE).
 
 command(State) ->
     squeue_statem:command(State).

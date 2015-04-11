@@ -69,6 +69,8 @@
 -export([filter/2]).
 -export([filter/3]).
 -export([time/1]).
+-export([time/2]).
+-export([timeout/1]).
 -export([timeout/2]).
 
 %% Additional API
@@ -79,13 +81,16 @@
 -export([squeue/2]).
 -export([sojourn/2]).
 -export([sojourn/3]).
+-export([sojourn/4]).
 -export([sojourn_r/2]).
 -export([sojourn_r/3]).
+-export([sojourn_r/4]).
 -export([dropped/1]).
 -export([dropped/2]).
+-export([dropped/3]).
 -export([dropped_r/1]).
 -export([dropped_r/2]).
-
+-export([dropped_r/3]).
 
 %% types
 
@@ -217,11 +222,7 @@ in(Item, #svalve{squeue=S} = V) ->
       V :: svalve(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-in(Time, Item, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
-    {Drops, NS} = squeue:in(Time, Item, S),
-    {Drops, V#svalve{time=Time, squeue=NS}};
-in(Time, Item, #svalve{squeue=S} = V) when is_integer(Time) ->
+in(Time, Item, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:in(Time, Item, S),
     {Drops, V#svalve{squeue=NS}}.
 
@@ -244,11 +245,7 @@ in(Time, Item, #svalve{squeue=S} = V) when is_integer(Time) ->
       V :: svalve(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-in(Time, InTime, Item, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
-    {Drops, NS} = squeue:in(Time, InTime, Item, S),
-    {Drops, V#svalve{time=Time, squeue=NS}};
-in(Time, InTime, Item, #svalve{squeue=S} = V) when is_integer(Time) ->
+in(Time, InTime, Item, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:in(Time, InTime, Item, S),
     {Drops, V#svalve{squeue=NS}}.
 
@@ -291,12 +288,9 @@ out(#svalve{squeue=S} = V) ->
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-out(Time, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
+out(Time, #svalve{squeue=S} = V) ->
     {Result, Drops, NS} = squeue:out(Time, S),
-    {Result, Drops, V#svalve{time=Time, squeue=NS}};
-out(Time, V) when is_integer(Time) ->
-    out(V).
+    {Result, Drops, V#svalve{squeue=NS}}.
 
 %% @doc Drops items, `Drops', from the queue, `V', and then removes the item,
 %% `Item', from the tail of the remaining queue. Returns
@@ -337,12 +331,9 @@ out_r(#svalve{squeue=S} = V) ->
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-out_r(Time, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
+out_r(Time, #svalve{squeue=S} = V) ->
     {Result, Drops, NS} = squeue:out_r(Time, S),
-    {Result, Drops, V#svalve{time=Time, squeue=NS}};
-out_r(Time, V) when is_integer(Time) ->
-    out_r(V).
+    {Result, Drops, V#svalve{squeue=NS}}.
 
 %% @doc Drops items, `Drops', from the queue, `V'. Returns `{Drops, NV}',
 %% where `Drops' is the list of dropped items and their sojourn times and `NV'
@@ -382,12 +373,9 @@ drop(#svalve{squeue=S} = V) ->
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-drop(Time, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
+drop(Time, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:drop(Time, S),
-    {Drops, V#svalve{time=Time, squeue=NS}};
-drop(Time, V) when is_integer(Time) ->
-    drop(V).
+    {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Drops items, `Drops', from the queue, `V'. Returns `{Drops, NV}',
 %% where `Drops' is the list of dropped items and their sojourn times and `NV'
@@ -429,12 +417,9 @@ drop_r(#svalve{squeue=S} = V) ->
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-drop_r(Time, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
+drop_r(Time, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:drop_r(Time, S),
-    {Drops, V#svalve{time=Time, squeue=NS}};
-drop_r(Time, V) when is_integer(Time) ->
-    drop_r(V).
+    {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Returns a list of items, `List', in the queue, `V'.
 %%
@@ -459,11 +444,9 @@ to_list(#svalve{squeue=S}) ->
       V2 :: svalve(Item),
       NV :: svalve(Item).
 %% To merge two queues they must have the same Time.
-join(#svalve{time=Time, squeue=S1} = V1, #svalve{time=Time, squeue=S2}) ->
+join(#svalve{time=Time1, squeue=S1} = V1, #svalve{time=Time2, squeue=S2}) ->
     NS = squeue:join(S1, S2),
-    V1#svalve{squeue=NS};
-join(#svalve{} = V1, #svalve{} = V2) ->
-    error(badarg, [V1, V2]).
+    V1#svalve{time=max(Time1, Time2), squeue=NS}.
 
 %% @doc Applys a fun, `Filter', to all items in the queue, `V', and returns the
 %% resulting queue, `NV'.
@@ -499,26 +482,42 @@ filter(Filter, #svalve{squeue=S} = V) ->
 %%
 %% If `Time' is less than the current time of the queue time, the current time
 %% is used instead.
-
 -spec filter(Time, Filter, V) -> {Drops, NV} when
       Time :: integer(),
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-filter(Time, Filter, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
+filter(Time, Filter, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:filter(Time, Filter, S),
-    {Drops, V#svalve{time=Time, squeue=NS}};
-filter(Time, Item, V) when is_integer(Time) ->
-    filter(Item, V).
+    {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Returns the current time , `Time', of the queue, `V'.
+%% @doc Returns the current time, `Time', of the queue, `V'.
 -spec time(V) -> Time when
       V :: svalve(),
       Time :: integer().
-time(#svalve{time=Time}) ->
-    Time.
+time(#svalve{squeue=S}) ->
+    squeue:time(S).
+
+%% @doc Advances the queue, `V', to time `Time', without dropping items. Returns
+%% the new queue, `NV'.
+-spec time(Time, V) -> NV when
+      Time :: integer(),
+      V :: svalve(Item),
+      NV :: svalve(Item).
+time(Time, #svalve{squeue=S} = V) ->
+    V#svalve{squeue=squeue:time(Time, S)}.
+
+%% @doc The time of the queue, `V', remains unchanged and may drop items.
+%% Returns a tuple containing the dropped items and their sojourn times,
+%% `Drops', and resulting queue, `NV'.
+-spec timeout(V) -> {Drops, NV} when
+      V :: svalve(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+timeout(#svalve{squeue=S} = V) ->
+    {Drops, NS} = squeue:timeout(S),
+    {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Advances the queue, `V', to time `Time' and drops item. Returns a tuple
 %% containing the dropped items and their sojourn times, `Drops', and resulting
@@ -531,13 +530,8 @@ time(#svalve{time=Time}) ->
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-timeout(Time, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
+timeout(Time, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:timeout(Time, S),
-    {Drops, V#svalve{time=Time, squeue=NS}};
-timeout(Time, #svalve{time=PrevTime, squeue=S} = V)
-  when is_integer(Time) ->
-    {Drops, NS} = squeue:timeout(PrevTime, S),
     {Drops, V#svalve{squeue=NS}}.
 
 %% Additional API
@@ -557,12 +551,12 @@ squeue(#svalve{squeue=S}) ->
       S :: squeue:squeue(Item),
       V :: svalve(),
       NV :: svalve(Item).
-squeue(S, #svalve{time=Time} = V) ->
-    case squeue:time(S) of
-        Time ->
-            V#svalve{squeue=S};
+squeue(NS, #svalve{squeue=S} = V) ->
+    case squeue:time(S) =:= squeue:time(NS) of
+        true ->
+            V#svalve{squeue=NS};
         _ ->
-            error(badarg, [S, V])
+            error(badarg, [NS, V])
     end.
 
 %% @doc Enable the feedback loop to dequeue items from queue, `V'.
@@ -587,8 +581,9 @@ close(V) ->
       Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-sojourn(SojournTime, V) ->
-    handle_sojourn(handle_sojourn, SojournTime, V).
+sojourn(SojournTime, #svalve{squeue=S} = V) ->
+    Time = squeue:time(S),
+    sojourn(Time, Time, SojournTime, V).
 
 %% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
 %% `SojournTime', of another queue to trigger a dequeue from the head of the
@@ -601,7 +596,26 @@ sojourn(SojournTime, V) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
 sojourn(Time, SojournTime, V) ->
-    handle_sojourn(handle_sojourn, Time, SojournTime, V).
+    sojourn(Time, Time, SojournTime, V).
+
+%% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
+%% `SojournTime', at time `OutTime' of another queue to trigger a dequeue from
+%% the head of the queue, `V'.
+-spec sojourn(Time, OutTime, SojournTime, V) -> {Result, Drops, NV} when
+      Time :: integer(),
+      OutTime :: integer(),
+      SojournTime :: non_neg_integer(),
+      V :: svalve(Item),
+      Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+sojourn(Time, OutTime, SojournTime, V) ->
+    case handle_sojourn(handle_sojourn, Time, OutTime, SojournTime, V) of
+        badarg ->
+            error(badarg, [Time, OutTime, SojournTime, V]);
+        Result ->
+            Result
+    end.
 
 %% @doc Signal the sojourn time, `SojournTime', of another queue to trigger a
 %% dequeue from the tail of the queue, `V'.
@@ -611,8 +625,9 @@ sojourn(Time, SojournTime, V) ->
       Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-sojourn_r(SojournTime, V) ->
-    handle_sojourn(handle_sojourn_r, SojournTime, V).
+sojourn_r(SojournTime, #svalve{squeue=S} = V) ->
+    Time = squeue:time(S),
+    sojourn_r(Time, Time, SojournTime, V).
 
 %% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
 %% `SojournTime', of another queue to trigger a dequeue from the tail of the
@@ -625,7 +640,26 @@ sojourn_r(SojournTime, V) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
 sojourn_r(Time, SojournTime, V) ->
-    handle_sojourn(handle_sojourn_r, Time, SojournTime, V).
+    sojourn_r(Time, Time, SojournTime, V).
+
+%% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
+%% `SojournTime', at time `OutTime' of another queue to trigger a dequeue from
+%% the tail of the queue, `V'.
+-spec sojourn_r(Time, OutTime, SojournTime, V) -> {Result, Drops, NV} when
+      Time :: integer(),
+      OutTime :: integer(),
+      SojournTime :: non_neg_integer(),
+      V :: svalve(Item),
+      Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+sojourn_r(Time, OutTime, SojournTime, V) ->
+    case handle_sojourn(handle_sojourn_r, Time, OutTime, SojournTime, V) of
+        badarg ->
+            error(badarg, [Time, OutTime, SojournTime, V]);
+        Result ->
+            Result
+    end.
 
 %% @doc Signal the dropping of an item to trigger a dequeue from the head of the
 %% queue, `V'.
@@ -634,8 +668,9 @@ sojourn_r(Time, SojournTime, V) ->
       Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-dropped(V) ->
-    handle_dropped(handle_dropped, V).
+dropped(#svalve{squeue=S} = V) ->
+    Time = squeue:time(S),
+    dropped(Time, Time, V).
 
 %% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
 %% item to trigger a dequeue from the head of the queue, `V'.
@@ -646,7 +681,25 @@ dropped(V) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
 dropped(Time, V) ->
-    handle_dropped(handle_dropped, Time, V).
+    dropped(Time, Time, V).
+
+%% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
+%% item, at time `DropTime', to trigger a dequeue from the head of the queue,
+%% `V'.
+-spec dropped(Time, DropTime, V) -> {Result, Drops, NV} when
+      Time :: integer(),
+      DropTime :: integer(),
+      V :: svalve(Item),
+      Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+dropped(Time, DropTime, V) ->
+    case handle_dropped(handle_dropped, Time, DropTime, V) of
+        badarg ->
+            error(badarg, [Time, DropTime, V]);
+        Result ->
+            Result
+    end.
 
 %% @doc Signal the dropping of an item to trigger a dequeue from the tail of the
 %% queue, `V'.
@@ -655,8 +708,9 @@ dropped(Time, V) ->
       Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
-dropped_r(V) ->
-    handle_dropped(handle_dropped_r, V).
+dropped_r(#svalve{squeue=S} = V) ->
+    Time = squeue:time(S),
+    dropped_r(Time, Time, V).
 
 %% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
 %% item to trigger a dequeue from the tail of the queue, `V'.
@@ -667,66 +721,67 @@ dropped_r(V) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NV :: svalve(Item).
 dropped_r(Time, V) ->
-    handle_dropped(handle_dropped_r, Time, V).
+    dropped_r(Time, Time, V).
+
+%% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
+%% item, at time `DropTime', to trigger a dequeue from the tail of the queue,
+%% `V'.
+-spec dropped_r(Time, DropTime, V) -> {Result, Drops, NV} when
+      Time :: integer(),
+      DropTime :: integer(),
+      V :: svalve(Item),
+      Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NV :: svalve(Item).
+dropped_r(Time, DropTime, V) ->
+    case handle_dropped(handle_dropped_r, Time, DropTime, V) of
+        badarg ->
+            error(badarg, [Time, DropTime, V]);
+        Result ->
+            Result
+    end.
 
 %% Internal
 
-handle_sojourn(Fun, SojournTime,
-               #svalve{status=open, module=Module, time=Time, squeue=S,
-                       state=State} = V)
-  when is_integer(SojournTime) andalso SojournTime >= 0 ->
-    {Result, Drops, NS, NState} = Module:Fun(Time, SojournTime, S, State),
-    {Result, Drops, V#svalve{squeue=NS, state=NState}};
-handle_sojourn(_, SojournTime,
-               #svalve{status=closed, module=Module, time=Time, squeue=S,
-                       state=State} = V)
-  when is_integer(SojournTime) andalso SojournTime >= 0 ->
-    {closed, Drops, NS, NState} = Module:handle_sojourn_closed(Time,
-                                                               SojournTime, S,
-                                                               State),
-    {closed, Drops, V#svalve{squeue=NS, state=NState}}.
-
-handle_sojourn(Fun, Time, SojournTime,
+handle_sojourn(Fun, STime, DropTime, SojournTime,
                #svalve{status=open, module=Module, time=PrevTime, squeue=S,
                        state=State} = V)
-  when is_integer(Time) andalso Time > PrevTime andalso
+  when is_integer(DropTime) andalso STime >= DropTime andalso
        is_integer(SojournTime) andalso SojournTime >= 0 ->
-    {Result, Drops, NS, NState} = Module:Fun(Time, SojournTime, S, State),
-    {Result, Drops, V#svalve{time=Time, squeue=NS, state=NState}};
-handle_sojourn(_, Time, SojournTime,
+    NS = squeue:time(STime, S),
+    NTime = max(PrevTime, DropTime),
+    {Result, Drops, NS2, NState} = Module:Fun(NTime, SojournTime, NS, State),
+    {Result, Drops, V#svalve{time=NTime, squeue=NS2, state=NState}};
+handle_sojourn(_, STime, DropTime, SojournTime,
                #svalve{status=closed, module=Module, time=PrevTime, squeue=S,
                        state=State} = V)
-  when is_integer(Time) andalso Time > PrevTime andalso
+  when is_integer(DropTime) andalso STime >= DropTime andalso
        is_integer(SojournTime) andalso SojournTime >= 0 ->
-    {closed, Drops, NS, NState} = Module:handle_sojourn_closed(Time,
-                                                               SojournTime, S,
-                                                               State),
-    {closed, Drops, V#svalve{time=Time, squeue=NS, state=NState}};
-handle_sojourn(Fun, Time, SojournTime, V) when is_integer(Time) ->
-    handle_sojourn(Fun, SojournTime, V).
+    NS = squeue:time(STime, S),
+    NTime = max(PrevTime, DropTime),
+    {closed, Drops, NS2, NState} = Module:handle_sojourn_closed(NTime,
+                                                                SojournTime, NS,
+                                                                State),
+    {closed, Drops, V#svalve{time=NTime, squeue=NS2, state=NState}};
+handle_sojourn(_, _, _, _, #svalve{}) ->
+    badarg.
 
-handle_dropped(Fun,
-               #svalve{status=open, module=Module, time=Time, squeue=S,
-                       state=State} = V) ->
-    {Result, Drops, NS, NState} = Module:Fun(Time, S, State),
-    {Result, Drops, V#svalve{squeue=NS, state=NState}};
-handle_dropped(_,
-               #svalve{status=closed, module=Module, time=Time, squeue=S,
-                       state=State} = V) ->
-    {closed, Drops, NS, NState} = Module:handle_dropped_closed(Time, S, State),
-    {closed, Drops, V#svalve{squeue=NS, state=NState}}.
-
-handle_dropped(Fun, Time,
+handle_dropped(Fun, STime, DropTime,
                #svalve{status=open, module=Module, time=PrevTime, squeue=S,
                        state=State} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
-    {Result, Drops, NS, NState} = Module:Fun(Time, S, State),
-    {Result, Drops, V#svalve{time=Time, squeue=NS, state=NState}};
-handle_dropped(_, Time,
+  when is_integer(DropTime) andalso STime >= DropTime ->
+    NS = squeue:time(STime, S),
+    NTime = max(PrevTime, DropTime),
+    {Result, Drops, NS2, NState} = Module:Fun(NTime, NS, State),
+    {Result, Drops, V#svalve{time=NTime, squeue=NS2, state=NState}};
+handle_dropped(_, STime, DropTime,
                #svalve{status=closed, module=Module, time=PrevTime, squeue=S,
                        state=State} = V)
-  when is_integer(Time) andalso Time > PrevTime ->
-    {closed, Drops, NS, NState} = Module:handle_dropped_closed(Time, S, State),
-    {closed, Drops, V#svalve{time=Time, squeue=NS, state=NState}};
-handle_dropped(Fun, Time, V) when is_integer(Time) ->
-    handle_dropped(Fun, V).
+  when is_integer(DropTime) andalso STime >= DropTime ->
+    NS = squeue:time(STime, S),
+    NTime = max(PrevTime, DropTime),
+    {closed, Drops, NS2, NState} = Module:handle_dropped_closed(NTime, NS,
+                                                                State),
+    {closed, Drops, V#svalve{time=NTime, squeue=NS2, state=NState}};
+handle_dropped(_, _, _, #svalve{}) ->
+    badarg.

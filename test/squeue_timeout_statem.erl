@@ -84,7 +84,7 @@ handle_out_r(Time, L, Timeout) ->
     handle_timeout(Time, L, Timeout).
 
 initial_state() ->
-    squeue_statem:initial_state(squeue, ?MODULE).
+    squeue_statem:initial_state(?MODULE).
 
 command(State) ->
     squeue_statem:command(State).

@@ -161,6 +161,8 @@
 %% Additional API
 
 -export([time/1]).
+-export([time/2]).
+-export([timeout/1]).
 -export([timeout/2]).
 
 %% Test API
@@ -682,14 +684,37 @@ filter(Time, Filter, S) when is_integer(Time) ->
 
 %% Additional API
 
-%% @doc Returns the current time , `Time', of the queue, `S'.
+%% @doc Returns the current time, `Time', of the queue, `S'.
 -spec time(S) -> Time when
       S :: squeue(),
       Time :: integer().
 time(#squeue{time=Time}) ->
     Time.
 
-%% @doc Advances the queue, `S', to time `Time' and drops item. Returns a tuple
+%% @doc Advances the queue, `S', to time `Time', without dropping items. Returns
+%% the new queue, `NS'.
+-spec time(Time, S) -> NS when
+      Time :: integer(),
+      S :: squeue(Item),
+      NS :: squeue(Item).
+time(Time, #squeue{time=PrevTime} = S)
+  when is_integer(Time) andalso Time > PrevTime ->
+    S#squeue{time=Time};
+time(Time, #squeue{} = S) when is_integer(Time) ->
+    S.
+
+%% @doc The time of the queue, `S', remains unchanged and may drop items.
+%% Returns a tuple containing the dropped items and their sojourn times,
+%% `Drops', and resulting queue, `NS'.
+-spec timeout(S) -> {Drops, NS} when
+      S :: squeue(Item),
+      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+      NS :: squeue(Item).
+timeout(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
+    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
+    {sojourn_drops(Time, Drops), S#squeue{queue=NQ, state=NState}}.
+
+%% @doc Advances the queue, `S', to time `Time' and drops items. Returns a tuple
 %% containing the dropped items and their sojourn times, `Drops', and resulting
 %% queue, `NS'.
 %%
@@ -704,8 +729,8 @@ timeout(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
   when is_integer(Time) andalso Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {sojourn_drops(Time, Drops), S#squeue{time=Time, queue=NQ, state=NState}};
-timeout(Time, #squeue{time=PrevTime} = S) when is_integer(Time) ->
-    timeout(PrevTime, S).
+timeout(Time, S) when is_integer(Time) ->
+    timeout(S).
 
 %% Test API
 

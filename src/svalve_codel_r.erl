@@ -105,8 +105,8 @@ handle_sojourn_closed(Time, SojournTime, S, State) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue:squeue(Item),
       NState :: #state{}.
-handle_dropped(Time, S, State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_dropped(_, S, State) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, dropped_control(State)}.
 
 %% @private
@@ -135,25 +135,25 @@ handle_dropped_closed(Time, S, State) ->
 
 %% Internal
 
-handle(Time, SojournTime, S, _, #state{target=Target} = State)
+handle(_, SojournTime, S, _, #state{target=Target} = State)
   when SojournTime > Target ->
-    {Drops, NS} = squeue:timeout(Time, S),
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State#state{dequeue_first=infinity}};
 handle(Time, _, S, _,
        #state{dequeue_first=infinity, interval=Interval} = State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State#state{dequeue_first=Time+Interval}};
 handle(Time, _, S, _, #state{dequeue_first=dequeuing,
                              dequeue_next=DequeueNext} = State)
   when DequeueNext > Time ->
-    {Drops, NS} = squeue:timeout(Time, S),
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State};
-handle(Time, _, S, timeout, #state{dequeue_first=dequeuing} = State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle(_, _, S, timeout, #state{dequeue_first=dequeuing} = State) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State};
-handle(Time, _, S, Out, #state{dequeue_first=dequeuing, count=C,
-                               dequeue_next=DequeueNext} = State) ->
-    case squeue:Out(Time, S) of
+handle(_, _, S, Out, #state{dequeue_first=dequeuing, count=C,
+                            dequeue_next=DequeueNext} = State) ->
+    case squeue:Out(S) of
         {empty, Drops, NS} ->
             {empty, Drops, NS, State};
         {Result, Drops, NS} ->
@@ -161,13 +161,13 @@ handle(Time, _, S, Out, #state{dequeue_first=dequeuing, count=C,
     end;
 handle(Time, _, S, _, #state{dequeue_first=DequeueFirst} = State)
   when DequeueFirst > Time ->
-    {Drops, NS} = squeue:timeout(Time, S),
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State};
-handle(Time, _, S, timeout, State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle(_, _, S, timeout, State) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State};
 handle(Time, _, S, Out, State) ->
-    case squeue:Out(Time, S) of
+    case squeue:Out(S) of
         {empty, Drops, NS} ->
             {empty, Drops, NS, State};
         {Result, Drops, NS} ->

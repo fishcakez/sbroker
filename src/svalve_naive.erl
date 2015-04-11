@@ -52,8 +52,8 @@ init(_Time, _Args) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_sojourn(Time, _, S, undefined) ->
-    {Result, Drops, NS} = squeue:out(Time, S),
+handle_sojourn(_, _, S, undefined) ->
+    {Result, Drops, NS} = squeue:out(S),
     {Result, Drops, NS, undefined}.
 
 %% @private
@@ -67,8 +67,8 @@ handle_sojourn(Time, _, S, undefined) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_sojourn_r(Time, _, S, undefined) ->
-    {Result, Drops, NS} = squeue:out_r(Time, S),
+handle_sojourn_r(_, _, S, undefined) ->
+    {Result, Drops, NS} = squeue:out_r(S),
     {Result, Drops, NS, undefined}.
 
 %% @private
@@ -80,8 +80,8 @@ handle_sojourn_r(Time, _, S, undefined) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_sojourn_closed(Time, _, S, undefined) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_sojourn_closed(_, _, S, undefined) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, undefined}.
 
 %% @private
@@ -92,8 +92,8 @@ handle_sojourn_closed(Time, _, S, undefined) ->
       Drops :: [{DropSojournTime, Item}],
       DropSojournTime :: non_neg_integer(),
       NS :: squeue:squeue(Item).
-handle_dropped(Time, S, undefined) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_dropped(_, S, undefined) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, undefined}.
 
 %% @private
