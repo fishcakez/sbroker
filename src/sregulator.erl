@@ -248,9 +248,8 @@ nb_ask(Regulator) ->
 %% lock. Returns `{await, Tag, Process}'.
 %%
 %% `Tag' is a monitor `reference()' that uniquely identifies the reply
-%% containing the result of the request. `Process', is the pid (`pid()') or
-%% process name (`{atom(), node()}') of the monitored regulator. To cancel the
-%% request call `cancel(Process, Tag)'.
+%% containing the result of the request. `Process', is the pid (`pid()') of the
+%% monitored regulator. To cancel the request call `cancel(Process, Tag)'.
 %%
 %% The reply is of the form `{Tag, {go, Ref, Pid, RelativeTime, SojournTime}'
 %% or `{Tag, {drop, SojournTime}}'.
@@ -273,14 +272,9 @@ async_ask(Regulator) ->
 %% Returns `{await, Tag, Process}'.
 %%
 %% `Tag' is a `any()' that identifies the reply containing the result of the
-%% request. `Process', is the pid (`pid()') or process name (`{atom(), node()}')
-%% of the regulator. To cancel all requests identified by `Tag' on regulator
-%% `Process' call `cancel(Process, Tag)'.
-%%
-%% `Tag' is a monitor `reference()' that uniquely identifies the reply
-%% containing the result of the request. `Process', is the pid (`pid()') or
-%% process name (`{atom(), node()}') of the monitored regulator. To cancel the
-%% request call `cancel(Process, Tag)'.
+%% request. `Process', is the pid (`pid()') of the regulator. To cancel all
+%% requests identified by `Tag' on regulator `Process' call
+%% `cancel(Process, Tag)'.
 %%
 %% The reply is of the form `{Tag, {go, Ref, Pid, RelativeTime, SojournTime}'
 %% or `{Tag, {drop, SojournTime}}'.
