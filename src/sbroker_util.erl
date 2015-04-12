@@ -23,7 +23,9 @@
 -compile({no_auto_import, whereis/1}).
 
 -export([whereis/1]).
+-export([send_event/2]).
 -export([sync_send_event/2]).
+-export([sync_send_event/3]).
 -export([async_send_event/2]).
 -export([async_send_event/3]).
 
@@ -48,6 +50,23 @@ whereis({global, Name}) ->
 whereis({via, Mod, Name}) ->
     Mod:whereis_name(Name).
 
+-spec send_event(Process, Request) -> ok when
+      Process :: process(),
+      Request :: any().
+send_event(Process, Request) ->
+    MFA = {?MODULE, send_event, [Process, Request]},
+    case whereis(Process) of
+        Pid when is_pid(Pid) andalso node(Pid) =:= node() ->
+            Start = sbroker_time:native(),
+            gen_fsm:send_event(Pid, {Request, Start});
+        Pid when is_pid(Pid) ->
+            exit({{badnode, node(Pid)}, MFA});
+        {Name, Node} when is_atom(Name) andalso is_atom(Node) ->
+            exit({{badnode, Node}, MFA});
+        undefined ->
+            exit({noproc, MFA})
+    end.
+
 -spec sync_send_event(Process, Request) -> Response when
       Process :: process(),
       Request :: any(),
@@ -59,6 +78,30 @@ sync_send_event(Process, Request) ->
             Start = sbroker_time:native(),
             try
                 gen_fsm:sync_send_event(Process, {Request, Start}, infinity)
+            catch
+                exit:{Reason, {gen_fsm, sync_send_event, _}} ->
+                    exit({Reason, MFA})
+            end;
+        Pid when is_pid(Pid) ->
+            exit({{badnode, node(Pid)}, MFA});
+        {Name, Node} when is_atom(Name) andalso is_atom(Node) ->
+            exit({{badnode, Node}, MFA});
+        undefined ->
+            exit({noproc, MFA})
+    end.
+
+-spec sync_send_event(Process, Request, Timeout) -> Response when
+      Process :: process(),
+      Request :: any(),
+      Timeout :: timeout(),
+      Response :: any().
+sync_send_event(Process, Request, Timeout) ->
+    MFA = {?MODULE, sync_send_event, [Process, Request, Timeout]},
+    case whereis(Process) of
+        Pid when is_pid(Pid) andalso node(Pid) =:= node() ->
+            Start = sbroker_time:native(),
+            try
+                gen_fsm:sync_send_event(Process, {Request, Start}, Timeout)
             catch
                 exit:{Reason, {gen_fsm, sync_send_event, _}} ->
                     exit({Reason, MFA})

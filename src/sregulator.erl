@@ -200,24 +200,27 @@
 %%
 %% `Ref' is the lock reference, which is a `reference()'. `Pid' is the `pid()'
 %% of the regulator. `RelativeTime' is the time (in `native' time units) spent
-%% waiting for the regulator to dequeue the request after discounting time spent
-%% waiting for the regulator to handle requests. `SojournTime' is the time spent
-%% in the message queue and the internal queue, in `native' time units.
+%% waiting for the svalve signal to dequeue the request after discounting time
+%% spent waiting for the regulator to handle requests. If the regulator dequeues
+%% the request due to going below the minimum concurrency limit the
+%% `RelativeTime' is `undefined'. `SojournTime' is the time spent in the message
+%% queue and the internal queue, in `native' time units.
 %%
 %% `RelativeTime' represents the `SojournTime' without some of the overhead of
 %% the regulator. The value measures the level of queue congestion in the
-%% internal queue.
+%% without being effected by the load of the regulator.
 %%
-%% `RelativeTime' is approximately the time (in `native' units) spent in the
-%% internal queue waiting for the valve to open. Therefore `SojournTime' minus
-%% `RelativeTime' is the latency, or message queue sojourn time, of the
-%% regulator in `native' time units.
+%% If `RelativeTime' is an integer, the request was enqueued in the internal
+%% queue awaiting a signal request to dequeue it sent approximately
+%% `RelativeTime' after this request was sent. Therefore `SojournTime' minus
+%% `RelativeTime' is the latency, or overhead, of the regulator in `native' time
+%% units.
 -spec ask(Regulator) -> Go | Drop when
       Regulator :: regulator(),
       Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
-      RelativeTime :: non_neg_integer(),
+      RelativeTime :: non_neg_integer() | undefined,
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask(Regulator) ->
@@ -225,18 +228,19 @@ ask(Regulator) ->
 
 %% @doc Tries to gain a work lock with the regulator but does not enqueue the
 %% request if a lock is not immediately available. Returns
-%% `{go, Ref, Pid, 0, SojournTime}' on a successfully gaining a lock or
+%% `{go, Ref, Pid, undefined, SojournTime}' on a successfully gaining a lock or
 %% `{retry, SojournTime}'.
 %%
 %% `Ref' is the lock reference, which is a `reference()'. `Pid' is the `pid()'
-%% of the regulator. `0' reflects the fact that no time was spent in the
-%% internal queue. `SojournTime' is the time spent in the message queue of the
-%% regulator, in `native' time units.
+%% of the regulator. `undefined' reflects the fact that request is successful
+%% because the regulator is below its minimum concurrency limit. `SojournTime'
+%% is the time spent in the message queue of the regulator, in `native' time
+%% units.
 %%
 %% @see ask/1
 -spec nb_ask(Regulator) -> Go | Retry when
       Regulator :: regulator(),
-      Go :: {go, Ref, Pid, 0, SojournTime},
+      Go :: {go, Ref, Pid, undefined, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
       SojournTime :: non_neg_integer(),
@@ -303,9 +307,10 @@ async_ask(Regulator, Tag) ->
 -spec await(Tag, Timeout) -> Go | Drop when
       Tag :: any(),
       Timeout :: timeout(),
-      Go :: {go, Ref, Pid, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
       Pid :: pid(),
+      RelativeTime :: non_neg_integer() | undefined,
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 await(Tag, Timeout) ->
@@ -362,7 +367,7 @@ done(Regulator, Ref, Timeout) ->
         {retry, SojournTime},
       Ref2 :: reference(),
       Pid :: pid(),
-      RelativeTime :: integer(),
+      RelativeTime :: integer() | undefined,
       SojournTime :: non_neg_integer();
       (Regulator, Ref, Response) -> NResponse when
       Regulator :: regulator(),
@@ -371,9 +376,11 @@ done(Regulator, Ref, Timeout) ->
       SojournTime :: non_neg_integer(),
       NResponse :: {dropped | retry | not_found, NSojournTime},
       NSojournTime :: non_neg_integer().
+update(_, _, {go, _, _, undefined, _} = Response) ->
+    Response;
 update(Regulator, _, {go, _, _, RelativeTime, _} = Response) ->
     RelSojournTime = max(RelativeTime, 0),
-    gen_fsm:send_event(Regulator, {sojourn, RelSojournTime}),
+    sbroker_util:send_event(Regulator, {sojourn, RelSojournTime}),
     Response;
 update(Regulator, Ref, {drop, SojournTime}) ->
     {Result, SojournTime2} = sbroker_util:sync_send_event(Regulator,
@@ -413,7 +420,7 @@ drop(Regulator, Ref) ->
       Ref :: reference(),
       Timeout :: timeout().
 ensure_dropped(Regulator, Ref, Timeout) ->
-    gen_fsm:sync_send_event(Regulator, {ensure_dropped, Ref}, Timeout).
+    sbroker_util:sync_send_event(Regulator, {ensure_dropped, Ref}, Timeout).
 
 %% @doc Change the configuration of the regulator. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason', is the reason for failure.
@@ -489,8 +496,8 @@ init({Module, Args}) ->
     end.
 
 %% @private
-empty({sojourn, Sojourn}, State) ->
-    empty_sojourn(Sojourn, State);
+empty({{sojourn, Sojourn}, Start}, State) ->
+    empty_sojourn(Start, Sojourn, State);
 empty({ask, Start, From}, State) ->
     empty_ask(Start, From, State);
 empty(timeout, State) ->
@@ -504,10 +511,10 @@ empty({{drop, Ref}, Start}, From, #state{active=Active} = State) ->
         false ->
             not_found(Start, From, empty, State)
     end;
-empty({ensure_dropped, Ref}, From, #state{active=Active} = State) ->
+empty({{ensure_dropped, Ref}, Start}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
-            empty_ensure_dropped(Ref, From, State);
+            empty_ensure_dropped(Ref, Start, From, State);
         false ->
             {reply, {error, not_found}, empty, State}
     end;
@@ -524,8 +531,8 @@ empty({done, Ref}, _, #state{active=Active} = State) ->
     end.
 
 %% @private
-open({sojourn, Sojourn}, State) ->
-    open_sojourn(Sojourn, State);
+open({{sojourn, Sojourn}, Start}, State) ->
+    open_sojourn(Start, Sojourn, State);
 open({ask, Start, From}, State) ->
     open_ask(Start, From, State);
 open(timeout, State) ->
@@ -539,10 +546,10 @@ open({{drop, Ref}, Start}, From, #state{active=Active} = State) ->
         false ->
             not_found(Start, From, open, State)
     end;
-open({ensure_dropped, Ref}, From, #state{active=Active} = State) ->
+open({{ensure_dropped, Ref}, Start}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
-            open_ensure_dropped(Ref, From, State);
+            open_ensure_dropped(Ref, Start, From, State);
         false ->
             {reply, {error, not_found}, open, State}
     end;
@@ -561,8 +568,8 @@ open({done, Ref}, From, #state{active=Active} = State) ->
     end.
 
 %% @private
-closed({sojourn, Sojourn}, State) ->
-    closed_sojourn(Sojourn, State);
+closed({{sojourn, Sojourn}, Start}, State) ->
+    closed_sojourn(Start, Sojourn, State);
 closed({ask, Start, From}, State) ->
     closed_ask(Start, From, State);
 closed(timeout, State) ->
@@ -576,10 +583,10 @@ closed({{drop, Ref}, Start}, From, #state{active=Active} = State) ->
         false ->
             not_found(Start, From, closed, State)
     end;
-closed({ensure_dropped, Ref}, From, #state{active=Active} = State) ->
+closed({{ensure_dropped, Ref}, Start}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
-            closed_ensure_dropped(Ref, From, State);
+            closed_ensure_dropped(Ref, Start, From, State);
         false ->
             {reply, {error, not_found}, closed, State}
     end;
@@ -703,13 +710,14 @@ start_intervals(Interval) ->
             {error, {bad_milli_seconds, MilliSeconds}}
     end.
 
-empty_sojourn(Sojourn, State) ->
-    {next_state, empty, handle_closed_sojourn(Sojourn, State)}.
+empty_sojourn(OutTime, Sojourn, State) ->
+    {next_state, empty, handle_closed_sojourn(OutTime, Sojourn, State)}.
 
-open_sojourn(Sojourn, #state{valve=V, active=Active} = State) ->
+open_sojourn(OutTime, Sojourn, #state{valve=V, active=Active} = State) ->
     Time = sbroker_time:native(),
-    case sregulator_valve:sojourn(Time, Sojourn, V) of
-        {{RelativeTime, SojournTime, {Ref, From}}, NV} ->
+    case sregulator_valve:sojourn(Time, OutTime, Sojourn, V) of
+        {{SojournTime, {Ref, From}}, NV} ->
+            RelativeTime = max(SojournTime - (Time-OutTime), 0),
             go(From, Ref, RelativeTime, SojournTime),
             NActive = gb_sets:insert(Ref, Active),
             open_increased(State#state{valve=NV, active=NActive});
@@ -717,12 +725,12 @@ open_sojourn(Sojourn, #state{valve=V, active=Active} = State) ->
             {next_state, open, State#state{valve=NV}}
     end.
 
-closed_sojourn(Sojourn, State) ->
-    {next_state, closed, handle_closed_sojourn(Sojourn, State)}.
+closed_sojourn(OutTime, Sojourn, State) ->
+    {next_state, closed, handle_closed_sojourn(OutTime, Sojourn, State)}.
 
-handle_closed_sojourn(Sojourn, #state{valve=V} = State) ->
+handle_closed_sojourn(OutTime, Sojourn, #state{valve=V} = State) ->
     Time = sbroker_time:native(),
-    {closed, NV} = sregulator_valve:sojourn(Time, Sojourn, V),
+    {closed, NV} = sregulator_valve:sojourn(Time, OutTime, Sojourn, V),
     State#state{valve=NV}.
 
 open_increased(#state{max=Max, valve=V, active=Active} = State) ->
@@ -734,10 +742,10 @@ open_increased(#state{max=Max, valve=V, active=Active} = State) ->
     end.
 
 empty_ask(Start, {Pid, _} = From,
-             #state{min=Min, max=Max, valve=V, active=Active} = State) ->
+          #state{min=Min, max=Max, valve=V, active=Active} = State) ->
     Ref = monitor(process, Pid),
     Time = sbroker_time:native(),
-    go(From, Ref, 0, Time-Start),
+    go(From, Ref, undefined, Time-Start),
     NActive = gb_sets:insert(Ref, Active),
     NState = State#state{active=NActive},
     case gb_sets:size(NActive) of
@@ -759,58 +767,60 @@ enqueue_ask(Start, From, #state{valve=V} = State) ->
     Time = sbroker_time:native(),
     State#state{valve=sregulator_valve:in(Time, Start, From, V)}.
 
-empty_drop(Start, From, State) ->
-    {next_state, empty, closed_drop(Start, From, State)}.
+empty_drop(DropTime, From, State) ->
+    {next_state, empty, closed_drop(DropTime, From, State)}.
 
-open_drop(Ref, Start, From, #state{active=Active, min=Min} = State) ->
+open_drop(Ref, DropTime, From, #state{active=Active, min=Min} = State) ->
     case gb_sets:size(Active) of
         Min ->
-            open_min_drop(Start, From, State);
+            open_min_drop(DropTime, From, State);
         _ ->
-            do_open_drop(Ref, Start, From, State)
+            do_open_drop(Ref, DropTime, From, State)
     end.
 
-open_min_drop(Start, From, #state{valve=V, active=Active} = State) ->
+open_min_drop(DropTime, From, #state{valve=V, active=Active} = State) ->
     Time = sbroker_time:native(),
-    retry(From, Time - Start),
-    case sregulator_valve:dropped(Time, V) of
-        {{RelativeTime, SojournTime, {Ref2, From2}}, NV} ->
-            go(From2, Ref2, RelativeTime, SojournTime),
+    SojournTime = Time - DropTime,
+    retry(From, SojournTime),
+    case sregulator_valve:dropped(Time, DropTime, V) of
+        {{SojournTime2, {Ref2, From2}}, NV} ->
+            RelativeTime = max(SojournTime2 - SojournTime, 0),
+            go(From2, Ref2, RelativeTime, SojournTime2),
             NActive = gb_sets:insert(Ref2, Active),
             open_increased(State#state{valve=NV, active=NActive});
         {_, NV} ->
             {next_state, open, State#state{valve=NV}}
     end.
 
-do_open_drop(Ref, Start, From, State) ->
-    case handle_drop(Ref, Start, From, State) of
+do_open_drop(Ref, DropTime, From, State) ->
+    case handle_drop(Ref, DropTime, From, State) of
         {steady, NState} ->
             {next_state, open, NState};
         {decreased, NState} ->
             open_decreased(NState)
     end.
 
-closed_drop(Ref, Start, From,
+closed_drop(Ref, DropTime, From,
             #state{min=Min, max=Max, active=Active} = State) ->
     case gb_sets:size(Active) of
         Min ->
-            {next_state, closed, closed_drop(Start, From, State)};
+            {next_state, closed, closed_drop(DropTime, From, State)};
         Max ->
-            closed_max_drop(Ref, Start, From, State);
+            closed_max_drop(Ref, DropTime, From, State);
         _ ->
-            {_, NState} = handle_drop(Ref, Start, From, State),
+            {_, NState} = handle_drop(Ref, DropTime, From, State),
             {next_state, closed, NState}
     end.
 
-closed_drop(Start, From, #state{valve=V} = State) ->
+closed_drop(DropTime, From, #state{valve=V} = State) ->
     Time = sbroker_time:native(),
-    retry(From, Time-Start),
-    {closed, NV} = sregulator_valve:dropped(Time, V),
+    retry(From, Time-DropTime),
+    {closed, NV} = sregulator_valve:dropped(Time, DropTime, V),
     State#state{valve=NV}.
 
-closed_max_drop(Ref, Start, From, #state{valve=V} = State) ->
+closed_max_drop(Ref, DropTime, From, #state{valve=V} = State) ->
     NState = State#state{valve=sregulator_valve:open(V)},
-    case handle_drop(Ref, Start, From, NState) of
+    case handle_drop(Ref, DropTime, From, NState) of
         {steady, #state{valve=NV} = NState2} ->
             NState3 = NState2#state{valve=sregulator_valve:close(NV)},
             {next_state, closed, NState3};
@@ -818,13 +828,15 @@ closed_max_drop(Ref, Start, From, #state{valve=V} = State) ->
             {next_state, open, NState2}
     end.
 
-handle_drop(Ref, Start, From, #state{valve=V, active=Active} = State) ->
+handle_drop(Ref, DropTime, From, #state{valve=V, active=Active} = State) ->
     demonitor(Ref, [flush]),
     Time = sbroker_time:native(),
-    dropped(From, Time - Start),
-    case sregulator_valve:dropped(Time, V) of
-        {{RelativeTime,SojournTime, {Ref2, From2}}, NV} ->
-            go(From2, Ref2, RelativeTime, SojournTime),
+    SojournTime = Time - DropTime,
+    dropped(From, SojournTime),
+    case sregulator_valve:dropped(Time, DropTime, V) of
+        {{SojournTime2, {Ref2, From2}}, NV} ->
+            RelativeTime = max(SojournTime2 - SojournTime, 0),
+            go(From2, Ref2, RelativeTime, SojournTime2),
             NActive = gb_sets:insert(Ref2, gb_sets:delete(Ref, Active)),
             {steady, State#state{valve=NV, active=NActive}};
         {_, NV} ->
@@ -856,17 +868,20 @@ not_found(Start, From, StateName, State) ->
     not_found(From, Time-Start),
     {next_state, StateName, State}.
 
-empty_ensure_dropped(Ref, From, State) ->
-    {_, NState} = handle_ensure_dropped(Ref, From, State),
+empty_ensure_dropped(Ref, DropTime, From, State) ->
+    {_, NState} = handle_ensure_dropped(Ref, DropTime, From, State),
     {next_state, empty, NState}.
 
-handle_ensure_dropped(Ref, From, #state{valve=V, active=Active} = State) ->
+handle_ensure_dropped(Ref, DropTime, From,
+                      #state{valve=V, active=Active} = State) ->
     demonitor(Ref, [flush]),
     gen_fsm:reply(From, ok),
     Time = sbroker_time:native(),
-    case sregulator_valve:dropped(Time, V) of
-        {{RelativeTime, SojournTime, {Ref2, From2}}, NV} ->
-            go(From2, Ref2, RelativeTime, SojournTime),
+    case sregulator_valve:dropped(Time, DropTime, V) of
+        {{SojournTime2, {Ref2, From2}}, NV} ->
+            SojournTime = Time - DropTime,
+            RelativeTime = max(SojournTime2 - SojournTime, 0),
+            go(From2, Ref2, RelativeTime, SojournTime2),
             NActive = gb_sets:insert(Ref2, gb_sets:delete(Ref, Active)),
             {steady, State#state{valve=NV, active=NActive}};
         {_, NV} ->
@@ -874,28 +889,30 @@ handle_ensure_dropped(Ref, From, #state{valve=V, active=Active} = State) ->
             {decreased, State#state{valve=NV, active=NActive}}
     end.
 
-open_ensure_dropped(Ref, From, #state{active=Active, min=Min} = State) ->
+open_ensure_dropped(Ref, DropTime, From,
+                    #state{active=Active, min=Min} = State) ->
     case gb_sets:size(Active) of
         Min ->
-            open_min_dropped(Ref, From, State);
+            open_min_dropped(Ref, DropTime, From, State);
         _ ->
-            {_, NState} = handle_ensure_dropped(Ref, From, State),
+            {_, NState} = handle_ensure_dropped(Ref, DropTime, From, State),
             {next_state, open, NState}
     end.
 
-open_min_dropped(Ref, From, State) ->
+open_min_dropped(Ref, DropTime, From, State) ->
     case handle_replace(Ref, From, State) of
-        {steady, NState} ->
-            open_min_dropped(NState);
-        {empty, #state{valve=NV} = NState} ->
+        {steady, Time, NState} ->
+            open_min_dropped(Time, DropTime, NState);
+        {empty, Time, #state{valve=NV} = NState} ->
             NV2 = sregulator_valve:close(NV),
-            {closed, NV3} = sregulator_valve:dropped(NV2),
+            {closed, NV3} = sregulator_valve:dropped(Time, DropTime, NV2),
             {next_state, empty, NState#state{valve=NV3}}
     end.
 
-open_min_dropped(#state{valve=V, active=Active} = State) ->
-    case sregulator_valve:dropped(V) of
-        {{RelativeTime, SojournTime, {Ref, From}}, NV} ->
+open_min_dropped(Time, DropTime, #state{valve=V, active=Active} = State) ->
+    case sregulator_valve:dropped(Time, DropTime, V) of
+        {{SojournTime, {Ref, From}}, NV} ->
+            RelativeTime = max(SojournTime - (Time-DropTime), 0),
             go(From, Ref, RelativeTime, SojournTime),
             NActive = gb_sets:insert(Ref, Active),
             open_increased(State#state{valve=NV, active=NActive});
@@ -908,30 +925,31 @@ handle_replace(Ref, From, #state{valve=V, active=Active} = State) ->
     gen_fsm:reply(From, ok),
     Time = sbroker_time:native(),
     case sregulator_valve:out(Time, V) of
-        {{RelativeTime, SojournTime, {Ref2, From2}}, NV} ->
-            go(From2, Ref2, RelativeTime, SojournTime),
+        {{SojournTime2, {Ref2, From2}}, NV} ->
+            go(From2, Ref2, undefined, SojournTime2),
             NActive = gb_sets:insert(Ref2, gb_sets:delete(Ref, Active)),
-            {steady, State#state{valve=NV, active=NActive}};
+            {steady, Time, State#state{valve=NV, active=NActive}};
         {empty, NV} ->
             NActive = gb_sets:delete(Ref, Active),
-            {empty, State#state{valve=NV, active=NActive}}
+            {empty, Time, State#state{valve=NV, active=NActive}}
     end.
 
-closed_ensure_dropped(Ref, From,
+closed_ensure_dropped(Ref, DropTime, From,
                       #state{min=Min, max=Max, active=Active} = State) ->
     case gb_sets:size(Active) of
         Min ->
-            closed_min_dropped(Ref, From, State);
+            closed_min_dropped(Ref, DropTime, From, State);
         Max ->
-            closed_max_dropped(Ref, From, State);
+            closed_max_dropped(Ref, DropTime, From, State);
         _ ->
-            {_, NState} = handle_ensure_dropped(Ref, From, State),
+            {_, NState} = handle_ensure_dropped(Ref, DropTime, From, State),
             {next_state, closed, NState}
     end.
 
-closed_min_dropped(Ref, From, State) ->
-    {Status, NState} = handle_replace(Ref, From, State),
-    {closed, NV2} = sregulator_valve:dropped(NState#state.valve),
+closed_min_dropped(Ref, DropTime, From, State) ->
+    {Status, Time, NState} = handle_replace(Ref, From, State),
+    {closed, NV2} = sregulator_valve:dropped(Time, DropTime,
+                                             NState#state.valve),
     NState2 = NState#state{valve=NV2},
     case Status of
         steady ->
@@ -940,9 +958,9 @@ closed_min_dropped(Ref, From, State) ->
             {next_state, empty, NState2}
     end.
 
-closed_max_dropped(Ref, From, #state{valve=V} = State) ->
+closed_max_dropped(Ref, DropTime, From, #state{valve=V} = State) ->
     NState = State#state{valve=sregulator_valve:open(V)},
-    case handle_ensure_dropped(Ref, From, NState) of
+    case handle_ensure_dropped(Ref, DropTime, From, NState) of
         {steady, #state{valve=NV} = NState2} ->
             NState3 = NState2#state{valve=sregulator_valve:close(NV)},
             {next_state, closed, NState3};
@@ -1007,8 +1025,8 @@ handle_down(Ref, #state{valve=V, active=Active} = State) ->
     NActive = gb_sets:delete(Ref, Active),
     Time = sbroker_time:native(),
     case sregulator_valve:out(Time, V) of
-        {{RelativeTime, SojournTime, {Ref2, From}}, NV} ->
-            go(From, Ref2, RelativeTime, SojournTime),
+        {{SojournTime2, {Ref2, From2}}, NV} ->
+            go(From2, Ref2, undefined, SojournTime2),
             NActive2 = gb_sets:insert(Ref2, NActive),
             {steady, State#state{valve=NV, active=NActive2}};
         {empty, NV} ->
@@ -1102,11 +1120,11 @@ dequeue(#state{min=Min, valve=V, active=Active, max=Max} = State) ->
 
 dequeue_loop({empty, V}, Active, _) ->
     {V, Active};
-dequeue_loop({{RelativeTime, SojournTime, {Ref, From}}, V}, Active, 1) ->
-    go(From, Ref, RelativeTime, SojournTime),
+dequeue_loop({{SojournTime, {Ref, From}}, V}, Active, 1) ->
+    go(From, Ref, undefined, SojournTime),
     {V, gb_sets:insert(Ref, Active)};
-dequeue_loop({{RelativeTime, SojournTime, {Ref, From}}, V}, Active, N) ->
-    go(From, Ref, RelativeTime, SojournTime),
+dequeue_loop({{SojournTime, {Ref, From}}, V}, Active, N) ->
+    go(From, Ref, undefined, SojournTime),
     dequeue_loop(sregulator_valve:out(V), gb_sets:insert(Ref, Active), N-1).
 
 dequeue_down(Ref, #state{active=Active} = State) ->

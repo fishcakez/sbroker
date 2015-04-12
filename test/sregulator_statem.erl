@@ -270,7 +270,11 @@ spawn_client_post(_, [_, nb_ask], Ask) ->
 
 update() ->
     Go = ?LET(SojournTime, choose(0, 5),
-              {go, choose(-3, SojournTime), SojournTime}),
+              begin
+                  RelativeTime = frequency([{10, choose(-3, SojournTime)},
+                                            {1, undefined}]),
+                  {go, RelativeTime, SojournTime}
+              end),
     frequency([{10, Go},
                {5, {drop, choose(0, 5)}},
                {1, {retry, choose(0, 5)}}]).
@@ -285,14 +289,16 @@ update_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
                                    {1, undefined}]), update()]
     end.
 
-update(Regulator, Ref, {go, RelSojournTime, SojournTime}) ->
-    Go = {go, make_ref(), self(), RelSojournTime, SojournTime},
+update(Regulator, Ref, {go, RelativeTime, SojournTime}) ->
+    Go = {go, make_ref(), self(), RelativeTime, SojournTime},
     sregulator:update(Regulator, Ref, Go);
 update(Regulator, undefined, Response) ->
     sregulator:update(Regulator, make_ref(), Response);
 update(_, Client, Response) ->
     client_call(Client, {update, Response}).
 
+update_next(State, _, [_, _, {go, undefined, _}]) ->
+    State;
 update_next(State, _, [_, _, {go, _, _}]) ->
     update_next(State);
 update_next(State, _, [_, _, {retry, _}]) ->
@@ -319,6 +325,13 @@ update_next(State) ->
             ask_out_next(NState)
     end.
 
+update_post(_, [_, _, {go, undefined, SojournTime}], Result) ->
+    case Result of
+        {go, Ref, Pid, undefined, SojournTime} ->
+          is_reference(Ref) andalso is_pid(Pid);
+        _ ->
+            false
+    end;
 update_post(State, [_, _, {go, RelSojournTime, SojournTime}], Result) ->
     case Result of
         {go, _, _, RelSojournTime, SojournTime} ->
@@ -706,15 +719,17 @@ drops_post([Client | Drops]) ->
 
 go_post(Client, Regulator) ->
     case result(Client) of
-        {go, Ref, Regulator, IntSojournTime, SojournTime}
+        {go, Ref, Regulator, undefined, SojournTime}
           when is_reference(Ref) ->
-            is_integer(IntSojournTime) andalso IntSojournTime >= 0 andalso
-            is_integer(SojournTime) andalso SojournTime >= IntSojournTime;
+            is_integer(SojournTime) andalso SojournTime >= 0;
+        {go, Ref, Regulator, RelativeTime, SojournTime}
+          when is_reference(Ref) ->
+            is_integer(RelativeTime) andalso RelativeTime >= 0 andalso
+            is_integer(SojournTime) andalso SojournTime >= RelativeTime;
         Other ->
             ct:pal("~p Go: ~p", [Client, Other]),
             false
     end.
-
 
 retry_post(Client) ->
     case result(Client) of

@@ -33,9 +33,8 @@
 -export([timeout/2]).
 -export([open/1]).
 -export([close/1]).
--export([sojourn/3]).
--export([dropped/2]).
--export([dropped/1]).
+-export([sojourn/4]).
+-export([dropped/3]).
 
 %% types
 
@@ -47,8 +46,7 @@
                      drop :: drop | drop_r,
                      size :: non_neg_integer() | infinity,
                      len = 0 :: non_neg_integer(),
-                     svalve :: svalve:svalve({integer(),
-                                              {reference(), {pid(), any()}}})}).
+                     svalve :: svalve:svalve({reference(), {pid(), any()}})}).
 
 -type tag() :: any().
 -type queue_spec() ::
@@ -87,7 +85,7 @@ in(Time, InTime, From, #drop_valve{size=0, len=0} = Q) ->
 in(Time, InTime, {Pid, _} = From,
    #drop_valve{drop=Drop, size=Size, len=Len, svalve=V} = Q) ->
     Ref = monitor(process, Pid),
-    {Drops, NV} = svalve:in(Time, InTime, {Time, {Ref, From}}, V),
+    {Drops, NV} = svalve:in(Time, InTime, {Ref, From}, V),
     case Len - drops(Drops) + 1 of
         NLen when NLen > Size ->
             {Dropped, NV2} = drop_loop(Drop, NLen - Size, NV),
@@ -98,8 +96,7 @@ in(Time, InTime, {Pid, _} = From,
 
 -spec out(Q) -> {Result, NQ} when
       Q :: drop_valve(),
-      Result :: empty | {RelativeTime, SojournTime, {Ref, From}},
-      RelativeTime :: non_neg_integer(),
+      Result :: empty | {SojournTime, {Ref, From}},
       SojournTime :: non_neg_integer(),
       Ref ::  reference(),
       From :: {pid(), tag()},
@@ -109,16 +106,14 @@ out(#drop_valve{out=Out, len=Len, svalve=V} = Q) ->
         {empty, Drops, NV} ->
             {empty, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})};
         {Item, Drops, NV} ->
-            Time = svalve:time(NV),
             NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ}
+            {Item, NQ}
     end.
 
 -spec out(Time, Q) -> {Result, NQ} when
       Time :: integer(),
       Q :: drop_valve(),
-      Result :: empty | {RelativeTime, SojournTime, {Ref, From}},
-      RelativeTime :: non_neg_integer(),
+      Result :: empty | {SojournTime, {Ref, From}},
       SojournTime :: non_neg_integer(),
       Ref ::  reference(),
       From :: {pid(), tag()},
@@ -129,7 +124,7 @@ out(Time, #drop_valve{out=Out, len=Len, svalve=V} = Q) ->
             {empty, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})};
         {Item, Drops, NV} ->
             NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ}
+            {Item, NQ}
     end.
 
 -spec cancel(Time, Tag, Q) -> {Cancelled, NQ} when
@@ -139,7 +134,7 @@ out(Time, #drop_valve{out=Out, len=Len, svalve=V} = Q) ->
       Cancelled :: pos_integer() | false,
       NQ :: drop_valve().
 cancel(Time, Tag, #drop_valve{len=Len, svalve=V} = Q) ->
-    Cancel = fun({_, {Ref, {_, Tag2}}}) when Tag2 =:= Tag ->
+    Cancel = fun({Ref, {_, Tag2}}) when Tag2 =:= Tag ->
                      demonitor(Ref, [flush]),
                      false;
                 (_) ->
@@ -162,7 +157,7 @@ cancel(Time, Tag, #drop_valve{len=Len, svalve=V} = Q) ->
       Q :: drop_valve(),
       NQ :: drop_valve().
 down(Time, Ref, #drop_valve{svalve=V} = Q) ->
-    Down = fun({_, {Ref2, _}}) -> Ref2 =/= Ref end,
+    Down = fun({Ref2, _}) -> Ref2 =/= Ref end,
     {Drops, NV} = svalve:filter(Time, Down, V),
     _ = drops(Drops),
     maybe_drop(Q#drop_valve{len=svalve:len(NV), svalve=NV}).
@@ -216,91 +211,62 @@ open(#drop_valve{svalve=V} = Q) ->
 close(#drop_valve{svalve=V} = Q) ->
     Q#drop_valve{svalve=svalve:close(V)}.
 
--spec sojourn(Time, SojournTime, Q) -> {Result, NQ} when
+-spec sojourn(Time, OutTime, SojournTime, Q) -> {Result, NQ} when
       Time :: integer(),
+      OutTime :: integer(),
       SojournTime :: non_neg_integer(),
       Q :: drop_valve(),
-      Result :: closed | empty | {RelativeTime, SojournTime, {Ref, From}},
-      RelativeTime :: non_neg_integer(),
+      Result :: closed | empty | {SojournTime, {Ref, From}},
       SojournTime :: non_neg_integer(),
       Ref ::  reference(),
       From :: {pid(), tag()},
       NQ :: drop_valve().
-sojourn(Time, SojournTime, #drop_valve{out=out, len=Len, svalve=V} = Q) ->
-    case svalve:sojourn(Time, SojournTime, V) of
+sojourn(Time, OutTime, SojournTime,
+        #drop_valve{out=out, len=Len, svalve=V} = Q) ->
+    case svalve:sojourn(Time, OutTime, SojournTime, V) of
         {{_, _} = Item, Drops, NV} ->
             NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ};
+            {Item, NQ};
         {Result, Drops, NV} ->
             {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
     end;
-sojourn(Time, SojournTime, #drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
-    case svalve:sojourn_r(Time, SojournTime, V) of
+sojourn(Time, OutTime, SojournTime,
+        #drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
+    case svalve:sojourn_r(Time, OutTime, SojournTime, V) of
         {{_, _} = Item, Drops, NV} ->
             NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ};
+            {Item, NQ};
         {Result, Drops, NV} ->
             {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
     end.
 
--spec dropped(Time, Q) -> {Result, NQ} when
+-spec dropped(Time, DropTime, Q) -> {Result, NQ} when
       Time :: integer(),
+      DropTime :: integer(),
       Q :: drop_valve(),
-      Result :: closed | empty | {RelativeTime, SojournTime, {Ref, From}},
-      RelativeTime :: non_neg_integer(),
+      Result :: closed | empty | {SojournTime, {Ref, From}},
       SojournTime :: non_neg_integer(),
       Ref ::  reference(),
       From :: {pid(), tag()},
       NQ :: drop_valve().
-dropped(Time, #drop_valve{out=out, len=Len, svalve=V} = Q) ->
-    case svalve:dropped(Time, V) of
+dropped(Time, DropTime, #drop_valve{out=out, len=Len, svalve=V} = Q) ->
+    case svalve:dropped(Time, DropTime, V) of
         {{_, _} = Item, Drops, NV} ->
             NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ};
+            {Item, NQ};
         {Result, Drops, NV} ->
             {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
     end;
-dropped(Time, #drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
-    case svalve:dropped_r(Time, V) of
+dropped(Time, DropTime, #drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
+    case svalve:dropped_r(Time, DropTime, V) of
         {{_, _} = Item, Drops, NV} ->
             NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ};
-        {Result, Drops, NV} ->
-            {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
-    end.
-
--spec dropped(Q) -> {Result, NQ} when
-      Q :: drop_valve(),
-      Result :: closed | empty | {RelativeTime, SojournTime, {Ref, From}},
-      RelativeTime :: non_neg_integer(),
-      SojournTime :: non_neg_integer(),
-      Ref ::  reference(),
-      From :: {pid(), tag()},
-      NQ :: drop_valve().
-dropped(#drop_valve{out=out, len=Len, svalve=V} = Q) ->
-    case svalve:dropped(V) of
-        {{_, _} = Item, Drops, NV} ->
-            Time = svalve:time(NV),
-            NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ};
-        {Result, Drops, NV} ->
-            {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
-    end;
-dropped(#drop_valve{out=out_r, len=Len, svalve=V} = Q) ->
-    case svalve:dropped_r(V) of
-        {{_, _} = Item, Drops, NV} ->
-            Time = svalve:time(NV),
-            NQ = maybe_drop(Q#drop_valve{len=Len-drops(Drops)-1, svalve=NV}),
-            {item(Time, Item), NQ};
+            {Item, NQ};
         {Result, Drops, NV} ->
             {Result, maybe_drop(Q#drop_valve{len=Len-drops(Drops), svalve=NV})}
     end.
 
 %% Internal
-
-item(Time, {SojournTime, {IntStart, {Ref, From}}}) ->
-    %% Time >= IntStart as both are monotonic time, read on regulator.
-    {Time-IntStart, SojournTime, {Ref, From}}.
 
 drop_loop(Drop, ToDrop, S) ->
     drop_loop(svalve:Drop(S), Drop, ToDrop, 0).
@@ -322,7 +288,7 @@ drops([Item | Rest], N) ->
 drops([], N) ->
     N.
 
-drop({SojournTime, {_, {Ref, From}}}) ->
+drop({SojournTime, {Ref, From}}) ->
     demonitor(Ref, [flush]),
     drop(From, SojournTime).
 
