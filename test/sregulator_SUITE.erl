@@ -40,6 +40,10 @@
 -export([ask/1]).
 -export([len/1]).
 -export([size/1]).
+-export([await_go/1]).
+-export([await_drop/1]).
+-export([await_continue/1]).
+-export([await_not_found/1]).
 -export([await_timeout/1]).
 -export([await_down/1]).
 -export([statem/1]).
@@ -54,7 +58,8 @@ suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{simple, [ask, len, size, await_timeout, await_down]},
+    [{simple, [ask, len, size, await_go, await_drop, await_continue,
+               await_not_found, await_timeout, await_down]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -118,6 +123,61 @@ size(_) ->
     Ref = make_ref(),
     {await, Ref, Regulator} = sregulator:async_ask(Regulator, Ref),
     1 = sregulator:size(Regulator, ?TIMEOUT),
+    ok.
+
+await_go(_) ->
+    {ok, Regulator} = sregulator_test:start_link(),
+
+    {await, MRef, Regulator} = sregulator:async_ask(Regulator),
+    {go, Ref, Regulator, undefined, _} = sregulator:await(MRef, ?TIMEOUT),
+    true = demonitor(MRef, [flush, info]),
+
+    ok = sregulator:done(Regulator, Ref, ?TIMEOUT),
+
+    Tag = make_ref(),
+    {await, Tag, Regulator} = sregulator:async_ask(Regulator, Tag),
+    {go, Ref2, Regulator, undefined, _} = sregulator:await(Tag, ?TIMEOUT),
+
+    ok = sregulator:done(Regulator, Ref2, ?TIMEOUT),
+
+    ok.
+
+await_drop(_) ->
+    {ok, Regulator} = sregulator_test:start_link(),
+    {go, _, Regulator, _, _} = sregulator:ask(Regulator),
+
+    {await, MRef, Regulator} = sregulator:async_ask(Regulator),
+    {drop, _} = sregulator:await(MRef, ?TIMEOUT),
+    true = demonitor(MRef, [flush, info]),
+
+    Tag = make_ref(),
+    {await, Tag, Regulator} = sregulator:async_ask(Regulator, Tag),
+    {drop, _} = sregulator:await(Tag, ?TIMEOUT),
+
+    ok.
+
+await_continue(_) ->
+    {ok, Regulator} = sregulator_test:start_link(),
+    {go, Ref, Regulator, _, _} = sregulator:ask(Regulator),
+
+    {await, MRef, Regulator} = sregulator:async_update(Regulator, Ref, 1),
+    {continue, Ref, Regulator, _} = sregulator:await(MRef, ?TIMEOUT),
+    true = demonitor(MRef, [flush, info]),
+
+    Tag = make_ref(),
+    {await, Tag, Regulator} = sregulator:async_update(Regulator, Ref, 1, Tag),
+    {continue, Ref, Regulator, _} = sregulator:await(Tag, ?TIMEOUT),
+
+    ok.
+
+await_not_found(_) ->
+    {ok, Regulator} = sregulator_test:start_link(),
+
+    Ref = make_ref(),
+    Tag = make_ref(),
+    {await, Tag, Regulator} = sregulator:async_update(Regulator, Ref, 1, Tag),
+    {not_found, _} = sregulator:await(Tag, ?TIMEOUT),
+
     ok.
 
 await_timeout(_) ->

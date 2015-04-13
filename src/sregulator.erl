@@ -33,34 +33,41 @@
 %% an `sbroker', or similar process.
 %%
 %% Before commencing work a worker calls `sregulator:ask/1'. If the regulator
-%% returns a `go' tuple, i.e. `{go, Ref, RegulatorPid, SojournTime}', the
-%% worker may continue. `Ref', the lock reference, and `RegulatorPid', the pid
-%% of the regulator, are used for future communication with the regulator.
-%% `SojournTime' is the time spent waiting in the internal queue of the
-%% regulator process. The regulator may also return a `drop' tuple, i.e.
-%% `{drop, SojournTime}'. This means that work can not begin as a lock was not
-%% acquired.
+%% returns a `go' tuple, i.e. `{go, Ref, RegulatorPid, Relative, SojournTime}',
+%% the worker may continue. `Ref', the lock reference, and `RegulatorPid', the
+%% pid of the regulator, are used for future communication with the regulator.
+%% `RelativeTime' is `undefined' if the regulator grants the lock due to the
+%% level of concurrency going below the minimum limit. Otherwise `RelativeTime'
+%% is the time (in `native' time units) spent waiting for the regulator's valve
+%% to dequeue the request after discounting time spent waiting for the regulator
+%% to handle requests. `SojournTime' is the time spent in both the regulator's
+%% message queue and internal queue, in `native' time units.
 %%
-%% The worker uses `update/3' to report and update the result of an enqueuing
-%% attempt. For example:
+%% The regulator may also return a `drop' tuple, i.e. `{drop, SojournTime}'.
+%% This means that work can not begin as a lock was not acquired.
+%%
+%% The worker uses `update/4' to report and update the result of a successful
+%% enqueuing attempt against a sbroker (or another sregulator). For example:
 %% ```
-%% {go, Ref, Regulator, _} = sregulator:ask(Regulator),
-%% AskResult = sbroker:ask(Broker),
-%% AskResult2 = sregulator:update(Regulator, Ref, AskResult).
+%% {go, Ref, Regulator, _, _} = sregulator:ask(Regulator),
+%% {go, _, _, RelativeTime, _} = sbroker:ask(Broker),
+%% {continue, Ref, _, _} = sregulator:update(Regulator, Ref, RelativeTime, 500).
 %% '''
-%% In the case of a `go' or `retry' tuple the result is unchanged. However for a
-%% `drop' tuple the regulator will change the result. The regulator may allow
-%% the worker to continue working with its current lock and change the `drop'
-%% tuple to a `retry' tuple, e.g. `{drop, 100}' to `{retry, 100}'. Or it may
-%% drop the worker, removing the worker's concurrency lock, by changing the
-%% `drop' tuple to a `dropped' tuple, e.g. `{drop, 100}' to `{dropped, 100}'.
-%% If the lock reference does not exist the `drop' tuple is changed to a
-%% `not_found' tuple, e.g. `{drop, 100}' to `{not_found, 100}'.
-%%
-%% `update/3' may be used in combination with `sbroker:ask/1',
-%% `sbroker:ask_r/1', `sregulator:ask/1', `sbroker:nb_ask/1',
-%% `sbroker:nb_ask_r/1', `sregulator:nb_ask/1', `sbroker:await/2' and
-%% `sregulator:await/2'.
+%% Or `drop/2' in the case of a failure:
+%% ```
+%  {go, Ref, Regulator, _, _} = sregulator:ask(Regulator),
+%% {drop, _} = sbroker:ask(Broker),
+%% case sregulator:drop(Regulator, Ref) of
+%%     {dropped, _} -> dropped;
+%%     {retry, _} -> retry
+%%  end.
+%%  '''
+%% If `drop/2' returns `{dropped, SojournTime}' the work lock is lost and the
+%% process should stop working. However if it returns `{retry, SojournTime}' the
+%% process should continue because dropping it would bring the number of active
+%% workers below the concurrency limit. The regulator will always favour active
+%% workers over queued workers, so a drop request can return a `retry' tuple
+%% even when workers are queued waiting for a lock.
 %%
 %% The lock reference can be released using `done(Regulator, Ref)' or will be
 %% automatically released when a worker exits.
@@ -115,14 +122,20 @@
 %% done(Ref) ->
 %%     sregulator:done(?MODULE, Ref).
 %%
-%% update(Ref, AskResult) ->
-%%     sregulator:update(?MODULE, Ref, AskResult).
+%% update(Ref, RelativeTime) ->
+%%     sregulator:update(?MODULE, Ref, RelativeTime, 500).
+%%
+%% drop(Ref) ->
+%%     sregulator:drop(?MODULE, Ref).
 %%
 %% init([]) ->
-%%     QueueSpec = {squeue_timeout, 5000, out_r, infinity, drop},
-%%     ValveSpec = {svalve_codel_r, {5, 100}, 8, 64},
-%%     Interval = 200,
-%%     {ok, {QueueSpec, ValveSpec, Interval}}.
+%%     Timeout = sbroker_time:milli_seconds_to_native(5000),
+%%     Target = sbroker_time:milli_seconds_to_native(5),
+%%     ValveInternal = sbroker_time:milli_second_to_native(100),
+%%     QueueSpec = {squeue_timeout, Timeout, out_r, infinity, drop},
+%%     ValveSpec = {svalve_codel_r, {Target, ValveInternal}, 8, 64},
+%%     RegInterval = 200,
+%%     {ok, {QueueSpec, ValveSpec, RegInterval}}.
 %% '''
 -module(sregulator).
 
@@ -137,7 +150,9 @@
 -export([await/2]).
 -export([cancel/3]).
 -export([done/3]).
--export([update/3]).
+-export([update/4]).
+-export([async_update/3]).
+-export([async_update/4]).
 -export([drop/2]).
 -export([ensure_dropped/3]).
 -export([change_config/2]).
@@ -304,7 +319,7 @@ async_ask(Regulator, Tag) ->
 %%
 %% @see async_ask/2
 %% @see async_ask_r/2
--spec await(Tag, Timeout) -> Go | Drop when
+-spec await(Tag, Timeout) -> Go | Drop | Continue | NotFound when
       Tag :: any(),
       Timeout :: timeout(),
       Go :: {go, Ref, Pid, RelativeTime, SojournTime},
@@ -312,12 +327,18 @@ async_ask(Regulator, Tag) ->
       Pid :: pid(),
       RelativeTime :: non_neg_integer() | undefined,
       SojournTime :: non_neg_integer(),
-      Drop :: {drop, SojournTime}.
+      Drop :: {drop, SojournTime},
+      Continue :: {continue, Ref, Pid, SojournTime},
+      NotFound :: {not_found, SojournTime}.
 await(Tag, Timeout) ->
     receive
         {Tag, {go, _, _, _, _} = Reply} ->
             Reply;
         {Tag, {drop, _} = Reply} ->
+            Reply;
+        {Tag, {continue, _, _, _} = Reply} ->
+            Reply;
+        {Tag, {not_found, _} = Reply} ->
             Reply;
         {'DOWN', Tag, _, _, Reason} when is_reference(Tag) ->
             exit({Reason, {?MODULE, await, [Tag, Timeout]}})
@@ -351,43 +372,75 @@ cancel(Regulator, Tag, Timeout) ->
 done(Regulator, Ref, Timeout) ->
     gen_fsm:sync_send_event(Regulator, {done, Ref}, Timeout).
 
-%% @doc Report the queue response and update the status of the lock. Returns
-%% `Response' if it is of the form `{go, Ref, Pid, RelativeTime, SojournTime}'
-%% or `{retry, SojournTime}'. If `Response' is of the form `{drop, SojournTime}'
-%% returns either `{dropped, NSojournTime}' if the lock is lost due to being
-%% dropped, `{retry, NSojournTime}' if the lock is maintained. or
-%% `{not_found, NSojournTime}' if the lock does not exist on the regulator.
-%% `NSojournTime' is `SojournTime' plus the time taken to update the regulator.
+%% @doc Update the regulator, `Regulator', with a relative sojourn time,
+%% `RelativeTime', in `native' time units. `Ref' is the lock reference and
+%% `Timeout' is the time to wait in milliseconds for a reply. Returns
+%% `{continue, Ref, Pid, SojournTime}' if the lock reference, `Ref', exists on
+%% the regulator. `Pid' is the pid of the regulator and `SojournTime' is the
+%% time spent waiting for the regulator to handle the request. If the lock
+%% reference, `Ref', does not exist returns `{not_found, SojournTime}'.
 %%
-%% @see ask/1
--spec update(Regulator, Ref, Response) -> Response when
+%% The relative sojourn time, `RelativeTime', is used as the sojourn time in a
+%% a `svalve:sojourn/4' or `svalve:sojourn_r/4' call on the valve in the
+%% regulator.
+-spec update(Regulator, Ref, RelativeTime, Timeout) -> Continue | NotFound when
       Regulator :: regulator(),
       Ref :: reference(),
-      Response :: {go, Ref2, Pid, RelativeTime, SojournTime} |
-        {retry, SojournTime},
-      Ref2 :: reference(),
+      RelativeTime :: integer(),
+      Timeout :: timeout(),
+      Continue :: {continue, Ref, Pid, SojournTime},
       Pid :: pid(),
-      RelativeTime :: integer() | undefined,
-      SojournTime :: non_neg_integer();
-      (Regulator, Ref, Response) -> NResponse when
+      SojournTime :: non_neg_integer(),
+      NotFound :: {not_found, SojournTime}.
+update(Regulator, Ref, RelativeTime, Timeout) when is_integer(RelativeTime) ->
+    Sojourn = max(RelativeTime, 0),
+    sbroker_util:sync_send_event(Regulator, {update, Ref, Sojourn}, Timeout).
+
+%% @doc Asynchronously update the regulator, `Regulator', with a relative
+%% sojourn time, `RelativeTime', in `native' time units. Returns
+%% `{await, Tag, Pid}', where `Tag' is a monitor reference of the regulator
+%% and `Pid' is the pid of the regulator. A reply is sent by the regulator
+%% idenitified by the `Tag'.
+%%
+%% The reply if of the form `{Tag, {continue, Ref, Pid, SojournTime}}' or
+%% `{Tag, {not_found, SojournTime}}'. `SojournTime' is the time between sending
+%% the update request and the regulator sending a reply.
+%%
+%% This function is intended to allow back pressure while not blocking the
+%% worker. An update request is assumed to occur at the moment a dequeue event
+%% occurs. If the regulator is overloaded and has not replied to a previous
+%% asynchronous update request a worker should skip updating the regulator
+%% rather than delay sending the update.
+-spec async_update(Regulator, Ref, RelativeTime) -> {await, Ref2, Pid} when
       Regulator :: regulator(),
       Ref :: reference(),
-      Response :: {drop, SojournTime},
-      SojournTime :: non_neg_integer(),
-      NResponse :: {dropped | retry | not_found, NSojournTime},
-      NSojournTime :: non_neg_integer().
-update(_, _, {go, _, _, undefined, _} = Response) ->
-    Response;
-update(Regulator, _, {go, _, _, RelativeTime, _} = Response) ->
-    RelSojournTime = max(RelativeTime, 0),
-    sbroker_util:send_event(Regulator, {sojourn, RelSojournTime}),
-    Response;
-update(Regulator, Ref, {drop, SojournTime}) ->
-    {Result, SojournTime2} = sbroker_util:sync_send_event(Regulator,
-                                                          {drop, Ref}),
-    {Result, SojournTime + SojournTime2};
-update(_, _, {retry, _} = Response) ->
-    Response.
+      RelativeTime :: integer(),
+      Ref2 :: reference(),
+      Pid :: pid().
+async_update(Regulator, Ref, RelativeTime) when is_integer(RelativeTime) ->
+    Sojourn = max(RelativeTime, 0),
+    sbroker_util:async_send_event(Regulator, {update, Ref, Sojourn}).
+
+%% @doc Asynchronous update the regulator, `Regulator', with a relative sojourn
+%% time, `RelativeTime', in `native' time units. Returns `{await, Tag, Pid}',
+%% where `Pid' is the pid of the regulator.
+%%
+%% The reply if of the form `{Tag, {continue, Ref, Pid, SojournTime}}' or
+%% `{Tag, {not_found, SojournTime}}'. `SojournTime' is the time between sending
+%% the update request and the regulator sending a reply.
+%%
+%% This function behaves the same as `async_update/3' except the regulator is
+%% not monitored and the supplied tag, `Tag', is used in the reply. If the
+%% regulator exits there is no guarantee of a reply.
+-spec async_update(Regulator, Ref, RelativeTime, Tag) -> {await, Tag, Pid} when
+      Regulator :: regulator(),
+      Ref :: reference(),
+      RelativeTime :: integer(),
+      Tag :: any(),
+      Pid :: pid().
+async_update(Regulator, Ref, RelativeTime, Tag) when is_integer(RelativeTime) ->
+    Sojourn = max(RelativeTime, 0),
+    sbroker_util:async_send_event(Regulator, {update, Ref, Sojourn}, Tag).
 
 %% @doc Signal a drop. Returns `ok' if the lock is released, `{error, retry}' if
 %% the lock is maintained and `{error, not_found}' if the lock does not exist on
@@ -496,14 +549,26 @@ init({Module, Args}) ->
     end.
 
 %% @private
-empty({{sojourn, Sojourn}, Start}, State) ->
-    empty_sojourn(Start, Sojourn, State);
+empty({{update, Ref, Sojourn}, Start, From}, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            empty_update(Start, Ref, Sojourn, From, State);
+        false ->
+            not_found(Start, From, empty, State)
+    end;
 empty({ask, Start, From}, State) ->
     empty_ask(Start, From, State);
 empty(timeout, State) ->
     {next_state, empty, handle_timeout(State)}.
 
 %% @private
+empty({{update, Ref, Sojourn}, Start}, From, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            empty_update(Start, Ref, Sojourn, From, State);
+        false ->
+            not_found(Start, From, empty, State)
+    end;
 empty({{drop, Ref}, Start}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
@@ -531,14 +596,26 @@ empty({done, Ref}, _, #state{active=Active} = State) ->
     end.
 
 %% @private
-open({{sojourn, Sojourn}, Start}, State) ->
-    open_sojourn(Start, Sojourn, State);
+open({{update, Ref, Sojourn}, Start, From}, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            open_update(Start, Ref, Sojourn, From, State);
+        false ->
+            not_found(Start, From, open, State)
+    end;
 open({ask, Start, From}, State) ->
     open_ask(Start, From, State);
 open(timeout, State) ->
     {next_state, open, handle_timeout(State)}.
 
 %% @private
+open({{update, Ref, Sojourn}, Start}, From, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            open_update(Start, Ref, Sojourn, From, State);
+        false ->
+            not_found(Start, From, open, State)
+    end;
 open({{drop, Ref}, Start}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
@@ -568,14 +645,26 @@ open({done, Ref}, From, #state{active=Active} = State) ->
     end.
 
 %% @private
-closed({{sojourn, Sojourn}, Start}, State) ->
-    closed_sojourn(Start, Sojourn, State);
+closed({{update, Ref, Sojourn}, Start, From}, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            closed_update(Start, Ref, Sojourn, From, State);
+        false ->
+            not_found(Start, From, closed, State)
+    end;
 closed({ask, Start, From}, State) ->
     closed_ask(Start, From, State);
 closed(timeout, State) ->
     {next_state, closed, handle_timeout(State)}.
 
 %% @private
+closed({{update, Ref, Sojourn}, Start}, From, #state{active=Active} = State) ->
+    case gb_sets:is_element(Ref, Active) of
+        true ->
+            closed_update(Start, Ref, Sojourn, From, State);
+        false ->
+            not_found(Start, From, closed, State)
+    end;
 closed({{drop, Ref}, Start}, From, #state{active=Active} = State) ->
     case gb_sets:is_element(Ref, Active) of
         true ->
@@ -710,26 +799,32 @@ start_intervals(Interval) ->
             {error, {bad_milli_seconds, MilliSeconds}}
     end.
 
-empty_sojourn(OutTime, Sojourn, State) ->
-    {next_state, empty, handle_closed_sojourn(OutTime, Sojourn, State)}.
+empty_update(OutTime, Ref, Sojourn, From, State) ->
+    NState = handle_closed_update(OutTime, Ref, Sojourn, From, State),
+    {next_state, empty, NState}.
 
-open_sojourn(OutTime, Sojourn, #state{valve=V, active=Active} = State) ->
+open_update(OutTime, Ref, Sojourn, From,
+            #state{valve=V, active=Active} = State) ->
     Time = sbroker_time:native(),
+    SojournTime = Time - OutTime,
+    continue(From, Ref, SojournTime),
     case sregulator_valve:sojourn(Time, OutTime, Sojourn, V) of
-        {{SojournTime, {Ref, From}}, NV} ->
-            RelativeTime = max(SojournTime - (Time-OutTime), 0),
-            go(From, Ref, RelativeTime, SojournTime),
-            NActive = gb_sets:insert(Ref, Active),
+        {{SojournTime2, {Ref2, From2}}, NV} ->
+            RelativeTime = max(SojournTime2 - SojournTime, 0),
+            go(From2, Ref2, RelativeTime, SojournTime2),
+            NActive = gb_sets:insert(Ref2, Active),
             open_increased(State#state{valve=NV, active=NActive});
        {_, NV} ->
             {next_state, open, State#state{valve=NV}}
     end.
 
-closed_sojourn(OutTime, Sojourn, State) ->
-    {next_state, closed, handle_closed_sojourn(OutTime, Sojourn, State)}.
+closed_update(OutTime, Ref, Sojourn, From, State) ->
+    NState = handle_closed_update(OutTime, Ref, Sojourn, From, State),
+    {next_state, closed, NState}.
 
-handle_closed_sojourn(OutTime, Sojourn, #state{valve=V} = State) ->
+handle_closed_update(OutTime, Ref, Sojourn, From, #state{valve=V} = State) ->
     Time = sbroker_time:native(),
+    continue(From, Ref, Time - OutTime),
     {closed, NV} = sregulator_valve:sojourn(Time, OutTime, Sojourn, V),
     State#state{valve=NV}.
 
@@ -1044,6 +1139,9 @@ dropped(From, SojournTime) ->
 
 not_found(From, SojournTime) ->
     gen_fsm:reply(From, {not_found, SojournTime}).
+
+continue(From, Ref, SojournTime) ->
+    gen_fsm:reply(From, {continue, Ref, self(), SojournTime}).
 
 handle_timeout(#state{valve=V} = State) ->
     Time = sbroker_time:native(),

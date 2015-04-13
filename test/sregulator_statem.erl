@@ -37,6 +37,7 @@
 -export([init/1]).
 -export([spawn_client/2]).
 -export([update/3]).
+-export([drop/2]).
 -export([done/2]).
 -export([ensure_dropped/2]).
 -export([cancel/2]).
@@ -83,9 +84,10 @@ initial_state() ->
 command(#state{sregulator=undefined} = State) ->
     {call, ?MODULE, start_link, start_link_args(State)};
 command(State) ->
-    frequency([{25, {call, ?MODULE, update, update_args(State)}},
+    frequency([{10, {call, ?MODULE, update, update_args(State)}},
                {10, {call, ?MODULE, spawn_client,
                      spawn_client_args(State)}},
+               {7, {call, ?MODULE, drop, drop_args(State)}},
                {6, {call, ?MODULE, done, done_args(State)}},
                {4, {call, ?MODULE, ensure_dropped, ensure_dropped_args(State)}},
                {4, {call, ?MODULE, cancel, cancel_args(State)}},
@@ -108,6 +110,8 @@ next_state(State, Value, {call, _, spawn_client, Args}) ->
     spawn_client_next(State, Value, Args);
 next_state(State, Value, {call, _, update, Args}) ->
     update_next(State, Value, Args);
+next_state(State, Value, {call, _, drop, Args}) ->
+    drop_next(State, Value, Args);
 next_state(State, Value, {call, _, done, Args}) ->
     done_next(State, Value, Args);
 next_state(State, Value, {call, _, ensure_dropped, Args}) ->
@@ -127,6 +131,8 @@ postcondition(State, {call, _, spawn_client, Args}, Result) ->
     spawn_client_post(State, Args, Result);
 postcondition(State, {call, _, update, Args}, Result) ->
     update_post(State, Args, Result);
+postcondition(State, {call, _, drop, Args}, Result) ->
+    drop_post(State, Args, Result);
 postcondition(State, {call, _, done, Args}, Result) ->
     done_post(State, Args, Result);
 postcondition(State, {call, _, ensure_dropped, Args}, Result) ->
@@ -268,48 +274,26 @@ spawn_client_post(State, [_, async_ask], Ask) ->
 spawn_client_post(_, [_, nb_ask], Ask) ->
     retry_post(Ask).
 
-update() ->
-    Go = ?LET(SojournTime, choose(0, 5),
-              begin
-                  RelativeTime = frequency([{10, choose(-3, SojournTime)},
-                                            {1, undefined}]),
-                  {go, RelativeTime, SojournTime}
-              end),
-    frequency([{10, Go},
-               {5, {drop, choose(0, 5)}},
-               {1, {retry, choose(0, 5)}}]).
-
 update_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
                    cancels=Cancels}) ->
+    RelativeTime = choose(-10, 10),
     case Asks ++ Active ++ Done ++ Cancels of
         [] ->
-            [Regulator, undefined, update()];
+            [Regulator, undefined, RelativeTime];
         Clients ->
             [Regulator, frequency([{9, elements(Clients)},
-                                   {1, undefined}]), update()]
+                                   {1, undefined}]), RelativeTime]
     end.
 
-update(Regulator, Ref, {go, RelativeTime, SojournTime}) ->
-    Go = {go, make_ref(), self(), RelativeTime, SojournTime},
-    sregulator:update(Regulator, Ref, Go);
-update(Regulator, undefined, Response) ->
-    sregulator:update(Regulator, make_ref(), Response);
-update(_, Client, Response) ->
-    client_call(Client, {update, Response}).
+update(Regulator, undefined, RelativeTime) ->
+    sregulator:update(Regulator, make_ref(), RelativeTime, ?TIMEOUT);
+update(_, Client, RelativeTime) ->
+    client_call(Client, {update, RelativeTime}).
 
-update_next(State, _, [_, _, {go, undefined, _}]) ->
-    State;
-update_next(State, _, [_, _, {go, _, _}]) ->
-    update_next(State);
-update_next(State, _, [_, _, {retry, _}]) ->
-    State;
-update_next(#state{active=Active, min=Min} = State, _,
-            [_, Client, {drop, _}]) ->
+update_next(#state{active=Active} = State, _, [_, Client, _]) ->
     case lists:member(Client, Active) of
-        true when length(Active) =< Min ->
-            update_next(State);
         true ->
-            update_next(State#state{active=Active--[Client]});
+            update_next(State);
         false ->
             dequeue_next(State)
     end.
@@ -325,47 +309,16 @@ update_next(State) ->
             ask_out_next(NState)
     end.
 
-update_post(_, [_, _, {go, undefined, SojournTime}], Result) ->
+update_post(#state{sregulator=Regulator, active=Active} = State ,
+            [_, Client, _], Result) ->
     case Result of
-        {go, Ref, Pid, undefined, SojournTime} ->
-          is_reference(Ref) andalso is_pid(Pid);
-        _ ->
-            false
-    end;
-update_post(State, [_, _, {go, RelSojournTime, SojournTime}], Result) ->
-    case Result of
-        {go, _, _, RelSojournTime, SojournTime} ->
-            update_post(State);
-        _ ->
-            false
-    end;
-update_post(_, [_, _, {retry, _} = Response], Result) ->
-    Response =:= Result;
-update_post(State, [_, undefined, {drop, SojournTime}], Result) ->
-    case Result of
-        {not_found, NSojournTime} ->
-            is_integer(NSojournTime) andalso NSojournTime >= SojournTime andalso
-            dequeue_post(State);
-        _ ->
-            false
-    end;
-update_post(#state{active=Active, min=Min} = State,
-            [_, Client, {drop, SojournTime}], Result) ->
-    case Result of
-        {_, NSojournTime}
-          when not (is_integer(NSojournTime) andalso
-                    NSojournTime >= SojournTime) ->
-            false;
-        {retry, _} ->
-            lists:member(Client, Active) andalso length(Active) =< Min andalso
-            update_post(State);
-        {dropped, _} ->
-            lists:member(Client, Active) andalso length(Active) > Min andalso
-            update_post(State);
-        {not_found, _} ->
-            (not lists:member(Client, Active)) andalso dequeue_post(State);
-        _ ->
-            false
+        {continue, Ref, Regulator, SojournTime}
+          when is_reference(Ref) andalso is_integer(SojournTime) andalso
+               SojournTime >= 0 ->
+            lists:member(Client, Active) andalso update_post(State);
+        {not_found, SojournTime}
+          when is_integer(SojournTime) andalso SojournTime >= 0 ->
+            (not lists:member(Client, Active)) andalso dequeue_post(State)
     end.
 
 update_post(#state{asks=[_ | _], active=Active, min=Min} = State)
@@ -382,6 +335,45 @@ update_post(State) ->
             ask_post(NState, fun(NState2) -> {true, NState2} end);
         {open, NState} ->
             ask_out_post(NState)
+    end.
+
+drop_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
+                 cancels=Cancels}) ->
+    case Asks ++ Active ++ Done ++ Cancels of
+        [] ->
+            [Regulator, undefined];
+        Clients ->
+            [Regulator, frequency([{9, elements(Clients)},
+                                   {1, undefined}])]
+    end.
+
+drop(Regulator, undefined) ->
+    sregulator:drop(Regulator, make_ref());
+drop(_, Client) ->
+    client_call(Client, drop).
+
+drop_next(#state{active=Active, min=Min} = State, _, [_, Client]) ->
+    case lists:member(Client, Active) of
+        true when length(Active) =< Min ->
+            update_next(State);
+        true ->
+            update_next(State#state{active=Active--[Client]});
+        false ->
+            dequeue_next(State)
+    end.
+
+drop_post(#state{active=Active, min=Min} = State, [_, Client], Result) ->
+    case Result of
+        {retry, _} ->
+            lists:member(Client, Active) andalso length(Active) =< Min andalso
+            update_post(State);
+        {dropped, _} ->
+            lists:member(Client, Active) andalso length(Active) > Min andalso
+            update_post(State);
+        {not_found, _} ->
+            (not lists:member(Client, Active)) andalso dequeue_post(State);
+        _ ->
+            false
     end.
 
 done_args(#state{sregulator=Regulator, asks=Asks, active=Active, done=Done,
@@ -880,8 +872,12 @@ client_loop(MRef, Regulator, Tag, Ref, State, Froms) ->
                     gen:reply(From, Error),
                     client_loop(MRef, Regulator, Tag, Ref, State, Froms)
             end;
-        {MRef, From, {update, Response}} ->
-            case sregulator:update(Regulator, Ref, Response) of
+        {MRef, From, {update, RelativeTime}} ->
+            Result = sregulator:update(Regulator, Ref, RelativeTime, ?TIMEOUT),
+            gen:reply(From, Result),
+            client_loop(MRef, Regulator, Tag, Ref, State, Froms);
+        {MRef, From, drop} ->
+            case sregulator:drop(Regulator, Ref) of
                 {dropped, _} = Dropped ->
                     gen:reply(From, Dropped),
                     client_loop(MRef, Regulator, Tag, Ref, dropped, Froms);
