@@ -38,8 +38,8 @@
 %% current time of the queue, if `Time' is greater than (or equal) to the
 %% queue's previous time.
 %%
-%% `squeue' includes 3 queue management algorithms: `squeue_naive',
-%% `squeue_timeout', `squeue_codel' and `squeue_codel_timeout'
+%% `squeue' includes 4 queue management algorithms: `squeue_naive',
+%% `squeue_timeout', `squeue_codel' and `squeue_codel_timeout'.
 %%
 %% A custom queue management algorithm must implement the `squeue' behaviour.
 %% The first callback is `init/2':

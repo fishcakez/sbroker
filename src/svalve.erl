@@ -29,17 +29,112 @@
 %% `svalve_codel_r', using an empty `squeue' managed by `squeue_naive'.
 %%
 %% The underlying `squeue' queue can be retrieved and replaced with `squeue/1'
-%% and `squeue/2'. `sojourn/2' and `sojourn/3' signal the feedback loop to
-%% dequeue from the head of the queue. `dropped/1' and `dropped/2' signal a drop
-%% and can also result in a dequeue from the head. Alternatively `sojourn_r/2',
-%% `sojourn_r/3', `dropped_r/1' and `dropped_r/2' are used to dequeue from the
-%% tail.
+%% and `squeue/2'. `sojourn/2,3,4' signal the feedback loop to dequeue from the
+%% head of the queue. `dropped/1,2,3' signal a drop and can also result in a
+%% dequeue from the head. Alternatively `sojourn_r/2,3,4' and `dropped_r/1,2,3'
+%% are used to dequeue from the tail.
 %%
-%% To close the valve, and prevent `sojourn/2,3' and `dropped/2,3' from
-%% dequeuing items, `close/1'. To open the valve `open/1'.
+%% To close the valve `close/1', and prevent `sojourn/2,3,4',
+%% `sojourn_r/2,3,4,', `dropped/1,2,3' and `dropped_r/1,2,3' from dequeuing
+%% items. To open the valve `open/1', and allow items to be dequeued by the
+%% feedback loop.
 %%
+%% All other functions are equivalent to those of the same name and arity in
+%% `squeue'.
 %%
-%% All other functions are equivalent to `squeue'.
+%% `svalve' includes 3 feedback loop algorithms: `svalve_naive',
+%% `svalve_timeout' and `svalve_codel_r'.
+%%
+%% A custom queue management algorithm must implement the `svalve' behaviour.
+%% The first callback is `init/2':
+%% ```
+%% -callback init(Time :: integer(), Args :: any()) -> State :: any().
+%% '''
+%% `Time' is the time of the feedback loop, which may be less than the time of
+%% the squeue. It is `0' for `new/2,3'. `Time' can be positive or negative. All
+%% other callbacks will receive the current time of queue as the first argument.
+%% It is monotonically increasing, so subsequent calls will use the same or a
+%% greater time.
+%%
+%% `Args' is the last argument passed to `new/2' or `new/3'. It can be any term.
+%%
+%% The feedback loop is called for every signal sent to the queue and should
+%% either dequeue an item with `squeue:out/1' or `squeue:out_r/1', or apply
+%% active queue management with `squeue:timeout/1'. As the `squeue' uses a
+%% different time the other variants should not be used.
+%%
+%% When the valve is open and a sojourn is signaled to dequeue from the head
+%% using `sojourn/2,3,4' the callback function is `handle_sojourn/4':
+%% ```
+%% -callback handle_sojourn(Time ::integer(),
+%%                          SojournTime :: non_neg_integer(),
+%%                          S :: squeue:squeue(Item), State :: any()) ->
+%%     {empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+%%      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+%%      NS :: squeue:squeue(Item), NState :: any()}.
+%% '''
+%% `SojournTime' is the time an item spent in another queue. `S' is the internal
+%% `squeue' and `NS' is that `squeue' after dropping items and dequeuing (or
+%% not) an item.
+%%
+%% `closed' means the feedback loop is closed. `empty' means the feedback loop
+%% is open and would have dequeued an item if the queue was not empty.
+%% `{ItemSojournTime, Item}' is the item and its sojourn time from the head of
+%% the queue as returned by `squeue:out/1'.
+%%
+%% `State' is the state of the callback module, and `NState' is the new state
+%% after handling the signal.
+%%
+%% `Drops' is a list of dropped items returned by `squeue:out/1' or
+%% `squeue:timeout/1'.
+%%
+%% Similarly when the valve is open and a sojourn is signalled to dequeue from
+%% the tail using `sojourn_r/2,3,4' the callback function is
+%% `handle_sojourn_r/4':
+%% ```
+%% -callback handle_sojourn_r(Time ::integer(),
+%%                            SojournTime :: non_neg_integer(),
+%%                            S :: squeue:squeue(Item), State :: any()) ->
+%%     {empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+%%      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+%%      NS :: squeue:squeue(Item), NState :: any()}.
+%% '''
+%% This callback should behave the same as `handle_sojourn/4' except use
+%% `squeue:out_r/1' instead of `squeue:out/1'.
+%%
+%% When the valve is closed and a sojourn is signalled using either
+%% `sojourn/2,3,4' or `sojourn_r/2,3,4' the callback function is
+%% `handle_sojourn_closed/4':
+%% ```
+%% -callback handle_sojourn_closed(Time ::integer(),
+%%                                 SojournTime :: non_neg_integer(),
+%%                                 S :: squeue:squeue(Item), State :: any()) ->
+%%     {closed, Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+%%      NS :: squeue:squeue(Item), NState :: any()}.
+%% '''
+%% As the valve is closed no items should be dequeued and active queue
+%% management should be applied using `squeue:timeout/1'.
+%%
+%% Similarly when a drop is signalled, using `dropped/1,2,3' and
+%% `dropped_r/1,2,3', except there is no `SojournTime' argument:
+%% ```
+%% -callback handle_dropped(Time ::integer(),
+%%                          S :: squeue:squeue(Item), State :: any()) ->
+%%     {empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+%%      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+%%      NS :: squeue:squeue(Item), NState :: any()}.
+%% -callback handle_dropped_r(Time ::integer(),
+%%                            S :: squeue:squeue(Item), State :: any()) ->
+%%     {empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
+%%      Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+%%      NS :: squeue:squeue(Item), NState :: any()}.
+%% -callback handle_dropped_closed(Time ::integer(),
+%%                                 S :: squeue:squeue(Item), State :: any()) ->
+%%     {closed, Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
+%%      NS :: squeue:squeue(Item), NState :: any()}.
+%% '''
+%%
+%% @see squeue
 %% @see svalve_naive
 %% @see svalve_timeout
 %% @see svalve_codel_r
