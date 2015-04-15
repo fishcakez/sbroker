@@ -76,29 +76,31 @@
 %% callback, `init/1', with single argument `Args'. `init/1' should return
 %% `{ok, {QueueSpec, ValveSpec, Interval})' or `ignore'. `QueueSpec' is the
 %% queue specification for the queue and `Valve' is the valve specification for
-%% the queue. `Interval' is the interval in `native' time units that the queue
-%% is polled. This ensures that the active queue management strategy is applied
+%% the queue. `Interval' is the interval in milliseconds that the queue is
+%% polled. This ensures that the active queue management strategy is applied
 %% even if no processes are enqueued/dequeued. In the case of `ignore' the
 %% regulator is not started and `start_link' returns `ignore'.
 %%
 %% A queue specification takes the following form:
 %% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
 %% and `Args' are its arguments. The queue is created using
-%% `squeue:new(Module, Arg)'. `Out' defines the method of dequeuing, it is
-%% either the atom `out' (dequeue items from the head, i.e. FIFO), or the
-%% atom `out_r' (dequeue items from the tail, i.e. LIFO). `Size' is the maximum
-%% size of the queue, it is either a `non_neg_integer()' or `infinity'. `Drop'
-%% defines the strategy to take when the maximum size, `Size', of the queue is
-%% exceeded. It is either the atom `drop' (drop from the head of the queue, i.e.
-%% head drop) or `drop_r' (drop from the tail of the queue, i.e. tail drop)
+%% `squeue:new(Time, Module, Args)', where `Time' is the current time in
+%% `native' time units. `Out' defines the method of dequeuing, it is either the
+%% atom `out' (dequeue items from the head, i.e. FIFO), or the atom `out_r'
+%% (dequeue items from the tail, i.e. LIFO). `Size' is the maximum size of the
+%% queue, it is either a `non_neg_integer()' or `infinity'. `Drop' defines the
+%% strategy to take when the maximum size, `Size', of the queue is exceeded. It
+%% is either the atom `drop' (drop from the head of the queue, i.e. head drop)
+%% or `drop_r' (drop from the tail of the queue, i.e. tail drop).
 %%
 %% A valve specification takes the following form:
 %% `{Module, Args, Min, Max}'. `Module' is the `svalve' callback module and
 %% `Args' are its arguments. The valve is created using
-%% `svalve:new(Module, Args)'. `Min' is the minimum desired level of
-%% concurrency, a `non_neg_integer()'. `Max' is the maximum desired level of
-%% concurrency and is a `non_neg_integer()' or `infinity'. The maximum must be
-%% greater than or equal to the minimum.
+%% `svalve:new(Time, Module, Args)', where `Time' is the current time in
+%% `native' time units. `Min' is the minimum desired level of concurrency, a
+%% `non_neg_integer()'. `Max' is the maximum desired level of concurrency and is
+%% a `non_neg_integer()' or `infinity'. The maximum must be greater than or
+%% equal to the minimum.
 %%
 %% For example:
 %%
@@ -161,7 +163,7 @@
 -export([start_link/2]).
 -export([start_link/3]).
 
-%% timer api
+%% test api
 
 -export([timeout/1]).
 
@@ -204,9 +206,11 @@
                 args :: any(),
                 min :: non_neg_integer(),
                 max :: non_neg_integer() | infinity,
-                timer :: timer:tref(),
+                timer :: reference(),
+                interval :: timeout(),
                 valve :: sregulator_valve:drop_valve(),
                 active = gb_sets:new() :: gb_sets:set(reference())}).
+
 %% public api
 
 %% @doc Tries to gain a work lock with the regulator. Returns
@@ -525,9 +529,9 @@ start_link(Module, Args) ->
 start_link(Name, Module, Args) ->
     gen_fsm:start_link(Name, ?MODULE, {Module, Args}, []).
 
-%% timer api
+%% test api
 
-%% @private
+%% @hidden
 -spec timeout(Regulator) -> ok when
       Regulator :: regulator().
 timeout(Regulator) ->
@@ -558,6 +562,10 @@ empty({{update, Ref, Sojourn}, Start, From}, #state{active=Active} = State) ->
     end;
 empty({ask, Start, From}, State) ->
     empty_ask(Start, From, State);
+empty({timeout, TRef}, #state{timer=TRef, interval=Interval} = State) ->
+    NState = handle_timeout(State),
+    start_timer(Interval, TRef),
+    {next_state, empty, NState};
 empty(timeout, State) ->
     {next_state, empty, handle_timeout(State)}.
 
@@ -605,6 +613,10 @@ open({{update, Ref, Sojourn}, Start, From}, #state{active=Active} = State) ->
     end;
 open({ask, Start, From}, State) ->
     open_ask(Start, From, State);
+open({timeout, TRef}, #state{timer=TRef, interval=Interval} = State) ->
+    NState = handle_timeout(State),
+    start_timer(Interval, TRef),
+    {next_state, open, NState};
 open(timeout, State) ->
     {next_state, open, handle_timeout(State)}.
 
@@ -654,6 +666,10 @@ closed({{update, Ref, Sojourn}, Start, From}, #state{active=Active} = State) ->
     end;
 closed({ask, Start, From}, State) ->
     closed_ask(Start, From, State);
+closed({timeout, TRef}, #state{timer=TRef, interval=Interval} = State) ->
+    NState = handle_timeout(State),
+    start_timer(Interval, TRef),
+    {next_state, closed, NState};
 closed(timeout, State) ->
     {next_state, closed, handle_timeout(State)}.
 
@@ -761,7 +777,13 @@ handle_info({'DOWN', Ref, _, _, _}, StateName, #state{active=Active} = State) ->
             dequeue(NState);
         false ->
             {next_state, StateName, handle_ask_down(Ref, State)}
-    end.
+    end;
+handle_info({'EXIT', _, _}, StateName, State) ->
+    {next_state, StateName, State};
+handle_info(Msg, StateName, State) ->
+    error_logger:error_msg("sregulator ~p received unexpected message: ~p~n",
+                           [self(), Msg]),
+    {next_state, StateName, State}.
 
 %% @private
 code_change(_OldVsn, StateName, State, _Extra) ->
@@ -776,12 +798,13 @@ terminate(_Reason, _StateName, _State) ->
 init(Module, Args, QueueSpec, {VModule, VArgs, Min, Max}, Interval)
   when is_integer(Min) andalso Min >= 0 andalso
        ((is_integer(Max) andalso Max >= Min) orelse Max =:= infinity) ->
-    {ok, Timer} = start_intervals(Interval),
+    TRef = make_ref(),
+    start_timer(Interval, TRef),
     Time = sbroker_time:native(),
     V = sregulator_valve:new(Time, {VModule, VArgs, QueueSpec}),
     NV = sregulator_valve:close(V),
-    State = #state{module=Module, args=Args, min=Min, max=Max,
-                   timer=Timer, valve=NV},
+    State = #state{module=Module, args=Args, min=Min, max=Max, timer=TRef,
+                   interval=Interval, valve=NV},
     case Min of
         0 when Max =:= 0 ->
             {ok, closed, State};
@@ -791,13 +814,9 @@ init(Module, Args, QueueSpec, {VModule, VArgs, Min, Max}, Interval)
             {ok, empty, State}
     end.
 
-start_intervals(Interval) ->
-    case sbroker_time:native_to_milli_seconds(Interval) of
-        NInterval when NInterval > 0 ->
-            timer:apply_interval(NInterval, sregulator, timeout, [self()]);
-        MilliSeconds ->
-            {error, {bad_milli_seconds, MilliSeconds}}
-    end.
+start_timer(Timeout, TRef) ->
+    _ = gen_fsm:send_event_after(Timeout, {timeout, TRef}),
+    ok.
 
 empty_update(OutTime, Ref, Sojourn, From, State) ->
     NState = handle_closed_update(OutTime, Ref, Sojourn, From, State),
@@ -1181,13 +1200,13 @@ config_change(StateName, #state{module=Module, args=Args} = State) ->
     end.
 
 config_change(QueueSpec, {VModule, VArgs, Min, Max}, Interval,
-              #state{timer=Timer, valve=V, active=Active} = State)
+              #state{valve=V, active=Active} = State)
   when is_integer(Min) andalso Min >= 0 andalso
-       ((is_integer(Max) andalso Max >= Min) orelse Max =:= infinity) ->
+       ((is_integer(Max) andalso Max >= Min) orelse Max =:= infinity) andalso
+       ((is_integer(Interval) andalso Interval >= 0) orelse
+        Interval =:= infinity) ->
     NV = sregulator_valve:config_change({VModule, VArgs, QueueSpec}, V),
-    {ok, NTimer} = start_intervals(Interval),
-    {ok, cancel} = timer:cancel(Timer),
-    NState = State#state{timer=NTimer, min=Min, max=Max},
+    NState = State#state{min=Min, max=Max, interval=Interval},
     case gb_sets:size(Active) of
         Size when Size < Min ->
             {ok, dequeue, NState#state{valve=sregulator_valve:close(NV)}};

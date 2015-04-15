@@ -201,13 +201,7 @@ start_link(Init) ->
 
 init([]) ->
     {ok, Result} = application:get_env(sbroker, ?MODULE),
-    case Result of
-        {ok, {AskSpec, ValveSpec, Interval}} ->
-            NInterval = sbroker_time:milli_seconds_to_native(Interval),
-            {ok, {AskSpec, ValveSpec, NInterval}};
-        Other ->
-            Other
-    end.
+    Result.
 
 start_link_pre(#state{sregulator=Regulator}, _) ->
     Regulator =:= undefined.

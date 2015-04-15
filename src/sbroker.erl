@@ -43,8 +43,8 @@
 %% callback, `init/1', with single argument `Args'. `init/1' should return
 %% `{ok, {AskQueueSpec, AskRQueueSpec, Interval})' or `ignore'. `AskQueuSpec' is
 %% the queue specification for the `ask' queue and `AskRQueueSpec' is the queue
-%% specification for the `ask_r' queue. `Interval' is the internval in `native'
-%% time units that the active queue is polled. This ensures that the active
+%% specification for the `ask_r' queue. `Interval' is the interval in
+%% milliseconds that the active queue is polled. This ensures that the active
 %% queue management strategy is applied even if no processes are
 %% enqueued/dequeued. In the case of `ignore' the broker is not started and
 %% `start_link' returns `ignore'.
@@ -52,13 +52,14 @@
 %% A queue specifcation takes the following form:
 %% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
 %% and `Args' are its arguments. The queue is created using
-%% `squeue:new(Module, Arg)'. `Out' defines the method of dequeuing, it is
-%% either the atom `out' (dequeue items from the head, i.e. FIFO), or the
-%% atom `out_r' (dequeue items from the tail, i.e. LIFO). `Size' is the maximum
-%% size of the queue, it is either a `non_neg_integer()' or `infinity'. `Drop'
-%% defines the strategy to take when the maximum size, `Size', of the queue is
-%% exceeded. It is either the atom `drop' (drop from the head of the queue, i.e.
-%% head drop) or `drop_r' (drop from the tail of the queue, i.e. tail drop)
+%% `squeue:new(Time, Module, Args)', where `Time' is chte current time in
+%% `native' time units. `Out' defines the method of dequeuing, it is either the
+%% atom `out' (dequeue items from the head, i.e. FIFO), or the atom `out_r'
+%% (dequeue items from the tail, i.e. LIFO). `Size' is the maximum size of the
+%% queue, it is either a `non_neg_integer()' or `infinity'. `Drop' defines the
+%% strategy to take when the maximum size, `Size', of the queue is exceeded. It
+%% is either the atom `drop' (drop from the head of the queue, i.e. head drop)
+%% or `drop_r' (drop from the tail of the queue, i.e. tail drop).
 %%
 %% For example:
 %%
@@ -109,7 +110,7 @@
 -export([start_link/2]).
 -export([start_link/3]).
 
-%% timer api
+%% test api
 
 -export([timeout/1]).
 
@@ -143,7 +144,8 @@
 
 -record(state, {module :: module(),
                 args :: any(),
-                timer :: timer:tref(),
+                timer :: reference(),
+                interval :: timeout(),
                 bidding :: sbroker_queue:drop_queue(),
                 asking :: sbroker_queue:drop_queue()}).
 
@@ -402,9 +404,9 @@ start_link(Module, Args) ->
 start_link(Name, Module, Args) ->
     gen_fsm:start_link(Name, ?MODULE, {Module, Args}, []).
 
-%% timer api
+%% test api
 
-%% @private
+%% @hidden
 -spec timeout(Broker) -> ok when
       Broker :: broker().
 timeout(Broker) ->
@@ -433,6 +435,10 @@ bidding({bid, Start, Bid}, State) ->
     bidding_bid(Start, Bid, State);
 bidding({ask, Start, Ask}, State) ->
     bidding_ask(Start, Ask, State);
+bidding({timeout, TRef}, #state{timer=TRef, interval=Interval} = State) ->
+    NState = bidding_timeout(State),
+    start_timer(Interval, TRef),
+    {next_state, bidding, NState};
 bidding(timeout, State) ->
     {next_state, bidding, bidding_timeout(State)}.
 
@@ -455,6 +461,10 @@ asking({bid, Start, Bid}, State) ->
     asking_bid(Start, Bid, State);
 asking({ask, Start, Ask}, State) ->
     asking_ask(Start, Ask, State);
+asking({timeout, TRef}, #state{timer=TRef, interval=Interval} = State) ->
+    NState = asking_timeout(State),
+    start_timer(Interval, TRef),
+    {next_state, asking, NState};
 asking(timeout, State) ->
     {next_state, asking, asking_timeout(State)}.
 
@@ -494,6 +504,8 @@ handle_info({'DOWN', MRef, _, _, _}, bidding, State) ->
     {next_state, bidding, bidding_down(MRef, State)};
 handle_info({'DOWN', MRef, _, _, _}, asking, State) ->
     {next_state, asking, asking_down(MRef, State)};
+handle_info({'EXIT', _, _}, StateName, State) ->
+    {next_state, StateName, State};
 handle_info(Msg, StateName, State) ->
     error_logger:error_msg("sbroker ~p received unexpected message: ~p~n",
                            [self(), Msg]),
@@ -510,20 +522,18 @@ terminate(_Reason, _StateName, _State) ->
 %% Internal
 
 init(Module, Args, AskQueueSpec, AskRQueueSpec, Interval) ->
-    {ok, Timer} = start_intervals(Interval),
+    TRef = make_ref(),
+    _ = gen_fsm:send_event_after(Interval, {timeout, TRef}),
     Time = sbroker_time:native(),
     A = sbroker_queue:new(Time, AskQueueSpec),
     B = sbroker_queue:new(Time, AskRQueueSpec),
-    State = #state{module=Module, args=Args, timer=Timer, asking=A, bidding=B},
+    State = #state{module=Module, args=Args, timer=TRef, asking=A,
+                   bidding=B},
     {ok, bidding, State}.
 
-start_intervals(Interval) ->
-    case sbroker_time:native_to_milli_seconds(Interval) of
-        NInterval when NInterval > 0 ->
-            timer:apply_interval(NInterval, sbroker, timeout, [self()]);
-        MilliSeconds ->
-            {error, {bad_milli_seconds, MilliSeconds}}
-    end.
+start_timer(Timeout, TRef) ->
+    _ = gen_fsm:send_event_after(Timeout, {timeout, TRef}),
+    ok.
 
 bidding_bid(Start, Bid, #state{bidding=B} = State) ->
     Time = sbroker_time:native(),
@@ -657,9 +667,9 @@ config_change(#state{module=Module, args=Args} = State) ->
     end.
 
 config_change(AskQueueSpec, AskRQueueSpec, Interval,
-              #state{timer=Timer, asking=A, bidding=B} = State) ->
+              #state{asking=A, bidding=B} = State)
+  when (is_integer(Interval) andalso Interval >= 0) orelse
+       Interval =:= infinity ->
     NA = sbroker_queue:config_change(AskQueueSpec, A),
     NB = sbroker_queue:config_change(AskRQueueSpec, B),
-    {ok, NTimer} = start_intervals(Interval),
-    {ok, cancel} = timer:cancel(Timer),
-    State#state{timer=NTimer, asking=NA, bidding=NB}.
+    State#state{interval=Interval, asking=NA, bidding=NB}.

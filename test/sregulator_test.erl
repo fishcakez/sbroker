@@ -42,5 +42,5 @@ init(undefined) ->
     Timeout = sbroker_time:milli_seconds_to_native(200),
     QSpec = {squeue_timeout, Timeout, out, infinity, drop},
     VSpec = {svalve_naive, undefined, 1, 1},
-    Interval = sbroker_time:milli_seconds_to_native(100),
+    Interval = 100,
     {ok, {QSpec, VSpec, Interval}}.
