@@ -145,24 +145,20 @@
 
 %% squeue API
 
-%% @doc Returns an empty queue, `V', with the `svalve_naive' feedback loop,
-%% using an `squeue' managed by `squeue_naive' and time of `0'.
+%% @equiv new(0, svalve_naive, undefined)
 -spec new() -> V when
       V :: svalve().
 new() ->
     new(svalve_naive, undefined).
 
-%% @doc Returns an empty queue, `V', with the `svalve_naive' feedback loop,
-%% using an `squeue' managed by `squeue_naive' and time of `Time'.
+%% @equiv new(Time, svalve_naive, undefined)
 -spec new(Time) -> V when
       Time :: integer(),
       V :: svalve().
 new(Time) ->
     new(Time, svalve_naive, undefined).
 
-%% @doc Returns an empty queue, `V', with the `Module' feedback loop started
-%% with arguments `Args', using an `squeue' managed by `squeue_naive' and time
-%% of `0'.
+%% @equiv new(0, Module, Args)
 -spec new(Module, Args) -> V when
       Module :: module(),
       Args :: any(),
@@ -173,6 +169,7 @@ new(Module, Args) ->
 %% @doc Returns an empty queue, `V', with the `Module' feedback loop started
 %% with arguments `Args', using an `squeue' managed by `squeue_naive' and time
 %% of `Time'.
+%% @see squeue:new/3
 -spec new(Time, Module, Args) -> V when
       Time :: integer(),
       Module :: module(),
@@ -184,6 +181,7 @@ new(Time, Module, Args) ->
 
 %% @doc Tests if a term, `Term', is an `svalve' queue, returns `true' if is,
 %% otherwise `false'.
+%% @see squeue:is_queue/1
 -spec is_queue(Term) -> Bool when
       Term :: any(),
       Bool :: boolean().
@@ -193,16 +191,14 @@ is_queue(_Other) ->
     false.
 
 %% @doc Returns the length of the queue, `V'.
+%% @see squeue:len/1
 -spec len(V) -> Len when
       V :: svalve(),
       Len :: non_neg_integer().
 len(#svalve{squeue=S}) ->
     squeue:len(S).
 
-%% @doc Drop items, `Drops', from the queue, `V', and then inserts the item,
-%% `Item', at the tail of queue, `V'. Returns `{Drops, NV}', where `Drops' is
-%% the list of dropped items and their sojourn times and `NV' is the resulting
-%% queue without `Drops' and with `Item'.
+%% @equiv in(time(V), time(V), Item, V)
 -spec in(Item, V) -> {Drops, NV} when
       V :: svalve(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
@@ -211,12 +207,7 @@ in(Item, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:in(Item, S),
     {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Advances the queue, `V', to time `Time' and drops item, then inserts
-%% the item, `Item', at the tail of queue, `V'. Returns a tuple containing the
-%% dropped items and their sojourn times, `Drops', and resulting queue, `NV'.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @equiv in(Time, Time, Item, V)
 -spec in(Time, Item, V) -> {Drops, NV} when
       Time :: integer(),
       V :: svalve(Item),
@@ -226,19 +217,9 @@ in(Time, Item, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:in(Time, Item, S),
     {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Advances the queue, `V', to time `Time' and drops item, then inserts
-%% the item, `Item', with time `InTime' at the tail of queue, `V'. Returns a
-%% tuple containing the dropped items and their sojourn times, `Drops', and
-%% resulting queue, `NV'.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
-%%
-%% If `InTime' is less than the last time an item was inserted at the tail of
-%% the queue, the item is inserted with the same time as the last item. This
-%% time may be before the current time of the queue.
-%%
-%% This function raises the error `badarg' if `InTime' is greater than `Time'.
+%% @doc Advances the queue, `V', to time `Time' and inserts the item, `Item',
+%% with time `InTime' at the tail of queue, `V'.
+%% @see squeue:in/4
 -spec in(Time, InTime, Item, V) -> {Drops, NV} when
       Time :: integer(),
       InTime :: integer(),
@@ -249,16 +230,7 @@ in(Time, InTime, Item, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:in(Time, InTime, Item, S),
     {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Drops items, `Drops', from the queue, `V', and then removes the item,
-%% `Item', from the head of the remaining queue. Returns
-%% `{{SojournTime, Item}, Drops, NV}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times and `NV' is the resulting queue without `Drops' and
-%% `Item'. If `V' is empty after dropping items `{empty, Drops, V}' is returned.
-%%
-%% This function is different from `queue:out/1', as the sojourn time
-%% is included in the result in the place of the atom `value' and the return
-%% value is a 3-tuple with the drop items, `Drops', instead of a 2-tuple.
+%% @equiv out(time(V), V)
 -spec out(V) -> {Result, Drops, NV} when
       V :: svalve(Item),
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
@@ -268,20 +240,9 @@ out(#svalve{squeue=S} = V) ->
     {Result, Drops, NS} = squeue:out(S),
     {Result, Drops, V#svalve{squeue=NS}}.
 
-%% @doc Advances the queue, `V', to time `Time' and drops items, `Drops', then
-%% removes the item, `Item', from the head of queue, `V'. Returns
-%% `{{SojournTime, Item}, Drops, NV}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times, and `NV' is the resulting queue without the removed and
-%% dropped items, If the queue is empty after dropping items
-%% `{empty, Drops, NV}' is returned.
-%%
-%% This function is slightly different from `queue:out/1', as the sojourn time
-%% is included in the result in the place of the atom `value' and items can be
-%% dropped.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @doc Advances the queue, `V', to time `Time' and removes the item, `Item',
+%% from the head of queue, `V'.
+%% @see squeue:out/2
 -spec out(Time, V) -> {Result, Drops, NV} when
       Time :: integer(),
       V :: svalve(Item),
@@ -292,16 +253,7 @@ out(Time, #svalve{squeue=S} = V) ->
     {Result, Drops, NS} = squeue:out(Time, S),
     {Result, Drops, V#svalve{squeue=NS}}.
 
-%% @doc Drops items, `Drops', from the queue, `V', and then removes the item,
-%% `Item', from the tail of the remaining queue. Returns
-%% `{{SojournTime, Item}, Drops, NV}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times and `NV' is the resulting queue without `Drops' and
-%% `Item'. If `V' is empty after dropping items `{empty, Drops, V}' is returned.
-%%
-%% This function is different from `queue:out_r/1', as the sojourn time
-%% is included in the result in the place of the atom `value' and the return
-%% value is a 3-tuple with the drop items, `Drops', instead of a 2-tuple.
+%% @equiv out_r(time(V), V)
 -spec out_r(V) -> {Result, Drops, NV} when
       V :: svalve(Item),
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
@@ -311,20 +263,9 @@ out_r(#svalve{squeue=S} = V) ->
     {Result, Drops, NS} = squeue:out_r(S),
     {Result, Drops, V#svalve{squeue=NS}}.
 
-%% @doc Advances the queue, `V', to time `Time' and drops items, `Drops', then
-%% removes the item, `Item', from the tail of queue, `V'. Returns
-%% `{{SojournTime, Item}, Drops, NV}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times and `NV' is the resulting queue without the removed and
-%% dropped items, If the queue is empty after dropping items
-%% `{empty, Drops, NV}' is returned.
-%%
-%% This function is slightly different from `queue:out_r/1', as the sojourn time
-%% is included in the result in the place of the atom `value' and items can be
-%% dropped.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @doc Advances the queue, `V', to time `Time' and removes the item, `Item',
+%% from the tail of queue, `V'.
+%% @see squeue:out/2
 -spec out_r(Time, V) -> {Result, Drops, NV} when
       Time :: integer(),
       V :: svalve(Item),
@@ -335,17 +276,7 @@ out_r(Time, #svalve{squeue=S} = V) ->
     {Result, Drops, NS} = squeue:out_r(Time, S),
     {Result, Drops, V#svalve{squeue=NS}}.
 
-%% @doc Drops items, `Drops', from the queue, `V'. Returns `{Drops, NV}',
-%% where `Drops' is the list of dropped items and their sojourn times and `NV'
-%% is the resulting queue without `Drops'. If `V' is empty raises an `empty'
-%% error.
-%%
-%% If the active queue management callback module does not drop any items, the
-%% item at the head of the queue is dropped.
-%%
-%% This function is different from `queue:drop/1', as the return value is a
-%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
-%% just the new queue.
+%% @equiv drop(time(V), V)
 -spec drop(V) -> {Drops, NV} when
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
@@ -355,19 +286,8 @@ drop(#svalve{squeue=S} = V) ->
     {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Advances the queue, `V', to time `Time' and drops items, `Drops', from
-%% the queue. Returns `{Drops, NV}', where `Drops' is the list of dropped items
-%% and their sojourn times, and `NV' is the resulting queue without the dropped
-%% items. If `V' is empty rauses an `empty' error.
-%%
-%% If the active queue management callback module does not drop any items, the
-%% item at the head of the queue is dropped.
-%%
-%% This function is different from `queue:drop/1', as the return value is a
-%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
-%% just the new queue.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% the queue.
+%% @see squeue:drop/2
 -spec drop(Time, V) -> {Drops, NV} when
       Time :: non_neg_integer(),
       V :: svalve(Item),
@@ -377,18 +297,7 @@ drop(Time, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:drop(Time, S),
     {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Drops items, `Drops', from the queue, `V'. Returns `{Drops, NV}',
-%% where `Drops' is the list of dropped items and their sojourn times and `NV'
-%% is the resulting queue without `Drops'. If `V' is empty raises an `empty'
-%% error.
-%%
-%% If the active queue management callback module does not drop any items, the
-%% item at the tail of the queue is dropped.
-%%
-%% This function is different from `queue:drop/1', as the return value is a
-%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
-%% just the new queue. Also the dropped item or items may not be from the tail
-%% of the queue.
+%% @equiv drop_r(time(V), V)
 -spec drop_r(V) -> {Drops, NV} when
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
@@ -398,20 +307,8 @@ drop_r(#svalve{squeue=S} = V) ->
     {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Advances the queue, `V', to time `Time' and drops items, `Drops', from
-%% the queue. Returns `{Drops, NV}', where `Drops' is the list of dropped items
-%% and their sojourn times, and `NV' is the resulting queue without the dropped
-%% items. If `V' is empty rauses an `empty' error.
-%%
-%% If the active queue management callback module does not drop any items, the
-%% item at the tail the queue is dropped.
-%%
-%% This function is different from `queue:drop_r/1', as the return value is a
-%% 2-tuple with the dropped items, `Drops' and the new queue , `NV', instead of
-%% just the new queue. Also the dropped item or items may not be from the tail
-%% of the queue.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% the queue.
+%% @see squeue:drop_r/2
 -spec drop_r(Time, V) -> {Drops, NV} when
       Time :: non_neg_integer(),
       V :: svalve(Item),
@@ -422,9 +319,7 @@ drop_r(Time, #svalve{squeue=S} = V) ->
     {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Returns a list of items, `List', in the queue, `V'.
-%%
-%% The order of items in `List' matches their order in the queue, `V', so that
-%% the item at the head of the queue is at the head of the list.
+%% @see squeue:to_list/1
 -spec to_list(V) -> List when
       V :: svalve(Item),
       List :: [Item].
@@ -433,31 +328,16 @@ to_list(#svalve{squeue=S}) ->
 
 %% @doc Joins two queues, `V1' and `V2', into one queue, `VS', with the items in
 %% `V1' at the head and the items in `V2' at the tail.
-%%
-%% This function raises the error `badarg' if any item in queue `V1' was added
-%% after any item in queue `V2'.
-%%
-%% This function raises the error `badarg' if the current time of the queues,
-%% `V1' and `V2', are not the same.
+%% @see squeue:join/2
 -spec join(V1, V2) -> NV when
       V1 :: svalve(Item),
       V2 :: svalve(Item),
       NV :: svalve(Item).
-%% To merge two queues they must have the same Time.
 join(#svalve{time=Time1, squeue=S1} = V1, #svalve{time=Time2, squeue=S2}) ->
     NS = squeue:join(S1, S2),
     V1#svalve{time=max(Time1, Time2), squeue=NS}.
 
-%% @doc Applys a fun, `Filter', to all items in the queue, `V', and returns the
-%% resulting queue, `NV'.
-%%
-%% If `Filter(Item)' returns `true', the item appears in the new queue.
-%%
-%% If `Filter(Item)' returns `false', the item does not appear in the new
-%% queue.
-%%
-%% If `Filter(Item)' returns a list of items, these items appear in the new
-%% queue with all items having the start time of the origin item, `Item'.
+%% @equiv filter(time(V), Filter, V)
 -spec filter(Filter, V) -> {Drops, NV} when
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
       V :: svalve(Item),
@@ -467,21 +347,9 @@ filter(Filter, #svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:filter(Filter, S),
     {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Advances the queue, `V', to time `Time'  and drops items, then applys a
-%% fun, `Filter', to all remaining items in the queue. Returns a tuple
-%% containing the dropped items and their sojourn times, `Drops', and the new
-%% queue, `NV'.
-%%
-%% If `Filter(Item)' returns `true', the item appears in the new queue.
-%%
-%% If `Filter(Item)' returns `false', the item does not appear in the new
-%% queue.
-%%
-%% If `Filter(Item)' returns a list of items, these items appear in the new
-%% queue with all items having the start time of the origin item, `Item'.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @doc Advances the queue, `V', to time `Time'  and applies a filter fun,
+%% `Filter', to all items in the queue.
+%% @see squeue:filter/3
 -spec filter(Time, Filter, V) -> {Drops, NV} when
       Time :: integer(),
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
@@ -493,14 +361,16 @@ filter(Time, Filter, #svalve{squeue=S} = V) ->
     {Drops, V#svalve{squeue=NS}}.
 
 %% @doc Returns the current time, `Time', of the queue, `V'.
+%% @see squeue:time/1
 -spec time(V) -> Time when
       V :: svalve(),
       Time :: integer().
 time(#svalve{squeue=S}) ->
     squeue:time(S).
 
-%% @doc Advances the queue, `V', to time `Time', without dropping items. Returns
-%% the new queue, `NV'.
+%% @doc Advances the queue, `V', to time `Time', without applying active queue
+%% management.
+%% @see squeue:time/2
 -spec time(Time, V) -> NV when
       Time :: integer(),
       V :: svalve(Item),
@@ -508,9 +378,7 @@ time(#svalve{squeue=S}) ->
 time(Time, #svalve{squeue=S} = V) ->
     V#svalve{squeue=squeue:time(Time, S)}.
 
-%% @doc The time of the queue, `V', remains unchanged and may drop items.
-%% Returns a tuple containing the dropped items and their sojourn times,
-%% `Drops', and resulting queue, `NV'.
+%% @equiv timeout(time(V), V)
 -spec timeout(V) -> {Drops, NV} when
       V :: svalve(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
@@ -519,12 +387,8 @@ timeout(#svalve{squeue=S} = V) ->
     {Drops, NS} = squeue:timeout(S),
     {Drops, V#svalve{squeue=NS}}.
 
-%% @doc Advances the queue, `V', to time `Time' and drops item. Returns a tuple
-%% containing the dropped items and their sojourn times, `Drops', and resulting
-%% queue, `NV'.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @doc Advances the queue, `V', to time `Time'.
+%% @see squeue:timeout/2
 -spec timeout(Time, V) -> {Drops, NV} when
       Time :: integer(),
       V :: svalve(Item),
@@ -573,8 +437,7 @@ open(V) ->
 close(V) ->
     V#svalve{status=closed}.
 
-%% @doc Signal the sojourn time, `SojournTime', of another queue to trigger a
-%% dequeue from the head of the queue, `V'.
+%% @equiv sojourn(time(V), time(V), SojournTime, V)
 -spec sojourn(SojournTime, V) -> {Result, Drops, NV} when
       SojournTime :: non_neg_integer(),
       V :: svalve(Item),
@@ -585,9 +448,7 @@ sojourn(SojournTime, #svalve{squeue=S} = V) ->
     Time = squeue:time(S),
     sojourn(Time, Time, SojournTime, V).
 
-%% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
-%% `SojournTime', of another queue to trigger a dequeue from the head of the
-%% queue, `V'.
+%% @equiv sojourn(Time, Time, SojournTime, V)
 -spec sojourn(Time, SojournTime, V) -> {Result, Drops, NV} when
       Time :: integer(),
       SojournTime :: non_neg_integer(),
@@ -600,7 +461,20 @@ sojourn(Time, SojournTime, V) ->
 
 %% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
 %% `SojournTime', at time `OutTime' of another queue to trigger a dequeue from
-%% the head of the queue, `V'.
+%% the head of the queue, `V'. Returns `{Result, Drops, NS}', where `Result'
+%% is `closed' if the feedback loop is closed, `empty' if the feedback loop is
+%% open but the queue is empty and `{SojournTime, Item}' if `Item' is dequeued
+%% from the head of the queue. `SojournTime' is the time length of time `Item'
+%% spent in the queue. `Drops' is the list of dropped items and their sojourn
+%% times, and `NS' is the resulting queue without the removed and dropped items.
+%%
+%% If `OutTime' is less than the last time a sojourn time or drop was signalled
+%% to the feedback loop, the sojourn time is signalled with the same time as the
+%% last signal. This time may be before the current time of the queue.
+%%
+%% This function raises the error `badarg' if `OutTime' is greater than `Time'.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec sojourn(Time, OutTime, SojournTime, V) -> {Result, Drops, NV} when
       Time :: integer(),
       OutTime :: integer(),
@@ -617,8 +491,7 @@ sojourn(Time, OutTime, SojournTime, V) ->
             Result
     end.
 
-%% @doc Signal the sojourn time, `SojournTime', of another queue to trigger a
-%% dequeue from the tail of the queue, `V'.
+%% @equiv sojourn_r(time(V), time(V), SojournTime, V)
 -spec sojourn_r(SojournTime, V) -> {Result, Drops, NV} when
       SojournTime :: non_neg_integer(),
       V :: svalve(Item),
@@ -629,9 +502,7 @@ sojourn_r(SojournTime, #svalve{squeue=S} = V) ->
     Time = squeue:time(S),
     sojourn_r(Time, Time, SojournTime, V).
 
-%% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
-%% `SojournTime', of another queue to trigger a dequeue from the tail of the
-%% queue, `V'.
+%% @equiv sojourn_r(Time, Time, SojournTime, V)
 -spec sojourn_r(Time, SojournTime, V) -> {Result, Drops, NV} when
       Time :: integer(),
       SojournTime :: non_neg_integer(),
@@ -645,6 +516,9 @@ sojourn_r(Time, SojournTime, V) ->
 %% @doc Advance time of the queue, `V', to `Time' and signal the sojourn time,
 %% `SojournTime', at time `OutTime' of another queue to trigger a dequeue from
 %% the tail of the queue, `V'.
+%%
+%% Except for dequeuing from the tail behaves the same as `sojourn/4'.
+%% @see sojourn/4
 -spec sojourn_r(Time, OutTime, SojournTime, V) -> {Result, Drops, NV} when
       Time :: integer(),
       OutTime :: integer(),
@@ -661,8 +535,7 @@ sojourn_r(Time, OutTime, SojournTime, V) ->
             Result
     end.
 
-%% @doc Signal the dropping of an item to trigger a dequeue from the head of the
-%% queue, `V'.
+%% @equiv dropped(time(V), time(V), V)
 -spec dropped(V) -> {Result, Drops, NV} when
       V :: svalve(Item),
       Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
@@ -672,8 +545,7 @@ dropped(#svalve{squeue=S} = V) ->
     Time = squeue:time(S),
     dropped(Time, Time, V).
 
-%% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
-%% item to trigger a dequeue from the head of the queue, `V'.
+%% @equiv dropped(Time, Time, V)
 -spec dropped(Time, V) -> {Result, Drops, NV} when
       Time :: integer(),
       V :: svalve(Item),
@@ -685,7 +557,16 @@ dropped(Time, V) ->
 
 %% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
 %% item, at time `DropTime', to trigger a dequeue from the head of the queue,
-%% `V'.
+%% `V'. Returns the same values as `sojourn/4'.
+%%
+%% If `DropTime' is less than the last time a sojourn time or drop was signalled
+%% to the feedback loop, the drop is signalled with the same time as the last
+%% signal. This time may be before the current time of the queue.
+%%
+%% This function raises the error `badarg' if `DropTime' is greater than `Time'.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
+%% @see sojourn/4
 -spec dropped(Time, DropTime, V) -> {Result, Drops, NV} when
       Time :: integer(),
       DropTime :: integer(),
@@ -701,8 +582,7 @@ dropped(Time, DropTime, V) ->
             Result
     end.
 
-%% @doc Signal the dropping of an item to trigger a dequeue from the tail of the
-%% queue, `V'.
+%% @equiv dropped_r(time(V), time(V), V)
 -spec dropped_r(V) -> {Result, Drops, NV} when
       V :: svalve(Item),
       Result :: empty | closed | {ItemSojournTime :: non_neg_integer(), Item},
@@ -712,8 +592,7 @@ dropped_r(#svalve{squeue=S} = V) ->
     Time = squeue:time(S),
     dropped_r(Time, Time, V).
 
-%% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
-%% item to trigger a dequeue from the tail of the queue, `V'.
+%% @equiv dropped_r(Time, Time, V)
 -spec dropped_r(Time, V) -> {Result, Drops, NV} when
       Time :: integer(),
       V :: svalve(Item),
@@ -726,6 +605,9 @@ dropped_r(Time, V) ->
 %% @doc Advance time of the queue, `V', to `Time' and signal the dropping of an
 %% item, at time `DropTime', to trigger a dequeue from the tail of the queue,
 %% `V'.
+%%
+%% Except for dequeuing from the tail behaves the same as `dropped/3'.
+%% @see dropped/3
 -spec dropped_r(Time, DropTime, V) -> {Result, Drops, NV} when
       Time :: integer(),
       DropTime :: integer(),

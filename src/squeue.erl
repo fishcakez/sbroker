@@ -218,23 +218,20 @@
 
 %% Original API
 
-%% @doc Returns an empty queue, `S', with the `squeue_naive' management
-%% algorithm, and time of `0'.
+%% @equiv new(0, squeue_naive, undefined)
 -spec new() -> S when
       S :: squeue().
 new() ->
     new(squeue_naive, undefined).
 
-%% @doc Returns an empty queue, `S', with the `squeue_naive' management
-%% algorithm, and time of `Time'.
+%% @equiv new(Time, squeue_naive, undefined)
 -spec new(Time) -> S when
       Time :: integer(),
       S :: squeue().
 new(Time) ->
     new(Time, squeue_naive, undefined).
 
-%% @doc Returns an empty queue, `S', with the `Module' management algorithm
-%% started with arguments `Args' and time of `0'.
+%% @equiv new(0, Module, Args)
 -spec new(Module, Args) -> S when
       Module :: module(),
       Args :: any(),
@@ -270,10 +267,7 @@ is_queue(_Other) ->
 len(#squeue{queue=Q}) ->
     queue:len(Q).
 
-%% @doc Drop items, `Drops', from the queue, `S', and then inserts the item,
-%% `Item', at the tail of queue, `S'. Returns `{Drops, NS}', where `Drops' is
-%% the list of dropped items and their sojourn times and `NS' is the resulting
-%% queue without `Drops' and with `Item'.
+%% @equiv in(time(S), time(S), Item, S)
 -spec in(Item, S) -> {Drops, NS} when
       S :: squeue(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
@@ -281,35 +275,27 @@ len(#squeue{queue=Q}) ->
 in(Item, #squeue{time=Time} = S) ->
     in(Time, Time, Item, S).
 
-%% @doc Advances the queue, `S', to time `Time' and drops items, `Drops',
-%% then inserts the item, `Item', at the tail of queue, `S'. Returns a tuple
-%% containing the dropped items and their sojourn times, `Drops', and
-%% resulting queue, `NS'.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @equiv in(Time, Time, Item, S)
 -spec in(Time, Item, S) -> {Drops, NS} when
       Time :: integer(),
       S :: squeue(Item),
       Drops :: [{SojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-in(Time, Item, #squeue{time=PrevTime} = S) when is_integer(Time) ->
-    NTime = max(PrevTime, Time),
-    in(NTime, NTime, Item, S).
+in(Time, Item, S) ->
+    in(Time, Time, Item, S).
 
-%% @doc Advances the queue, `S', to time `Time' and drops items, `Drops',
-%% then inserts the item, `Item', with time `InTime' at the tail of queue, `S'.
-%% Returns a tuple containing the dropped items and their sojourn times,
-%% `Drops', and resulting queue, `NS'.
-%%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% @doc Advances the queue, `S', to time `Time' and then inserts the item,
+%% `Item', with time `InTime' at the tail of queue, `S'. Returns a tuple
+%% containing the dropped items and their sojourn times, `Drops', and resulting
+%% queue, `NS'.
 %%
 %% If `InTime' is less than the last time an item was inserted at the tail of
 %% the queue, the item is inserted with the same time as the last item. This
 %% time may be before the current time of the queue.
 %%
 %% This function raises the error `badarg' if `InTime' is greater than `Time'.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec in(Time, InTime, Item, S) -> {Drops, NS} when
       Time :: integer(),
       InTime :: integer(),
@@ -319,57 +305,38 @@ in(Time, Item, #squeue{time=PrevTime} = S) when is_integer(Time) ->
 in(Time, InTime, Item,
    #squeue{module=Module, state=State, time=PrevTime, tail_time=TailTime,
            queue=Q} = S)
-  when is_integer(Time) andalso is_integer(InTime) andalso Time >= InTime ->
-    NTime = max(Time, PrevTime),
+  when is_integer(Time), Time >= PrevTime, is_integer(InTime), Time >= InTime ->
     NTailTime = max(InTime, TailTime),
-    {Drops, NQ, NState} = Module:handle_timeout(NTime, Q, State),
-    NS = S#squeue{time=NTime, tail_time=NTailTime,
+    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
+    NS = S#squeue{time=Time, tail_time=NTailTime,
                   queue=queue:in({NTailTime, Item}, NQ), state=NState},
-    {sojourn_drops(NTime, Drops), NS};
-in(Time, InTime, Item, S)
-  when is_integer(Time) andalso is_integer(InTime) andalso Time < InTime ->
+    {sojourn_drops(Time, Drops), NS};
+in(Time, InTime, Item, #squeue{} = S)
+  when is_integer(Time), is_integer(InTime) ->
     error(badarg, [Time, InTime, Item, S]).
 
-%% @doc Drops items, `Drops', from the queue, `S', and then removes the item,
-%% `Item', from the head of the remaining queue. Returns
-%% `{{SojournTime, Item}, Drops, NS}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times and `NS' is the resulting queue without `Drops' and
-%% `Item'. If `S' is empty after dropping items `{empty, Drops, S}' is returned.
-%%
-%% This function is different from `queue:out/1', as the sojourn time
-%% is included in the result in the place of the atom `value' and the return
-%% value is a 3-tuple with the drop items, `Drops', instead of a 2-tuple.
+%% @equiv out(time(S), S)
 -spec out(S) -> {Result, Drops, NS} when
       S :: squeue(Item),
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    {Result, Drops, NQ, NState} = Module:handle_out(Time, Q, State),
-    Drops2 = sojourn_drops(Time, Drops),
-    NS = S#squeue{queue=NQ, state=NState},
-    case Result of
-        empty ->
-            {empty, Drops2, NS};
-        Item ->
-            {sojourn_time(Time, Item), Drops2, NS}
-    end.
+out(#squeue{time=Time} = S) ->
+    out(Time, S).
 
-%% @doc Advances the queue, `S', to time `Time' and drops items, `Drops', then
-%% removes the item, `Item', from the head of queue, `S'. Returns
-%% `{{SojournTime, Item}, Drops, NS}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times, and `NS' is the resulting queue without the removed and
-%% dropped items, If the queue is empty after dropping items
-%% `{empty, Drops, NS}' is returned.
+%% @doc Advances the queue, `S', to time `Time' and removes the item, `Item',
+%% from the head of queue, `S'. Returns `{{SojournTime, Item}, Drops, NS}',
+%% where `SojournTime' is the time length of time `Item' spent in the queue,
+%% `Drops' is the list of dropped items and their sojourn times, and `NS' is
+%% the resulting queue without the removed and dropped items. If the queue is
+%% empty after dropping items `{empty, Drops, NS}' is returned.
 %%
 %% This function is slightly different from `queue:out/1', as the sojourn time
 %% is included in the result in the place of the atom `value' and items can be
 %% dropped.
 %%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec out(Time, S) -> {Result, Drops, NS} when
       Time :: integer(),
       S :: squeue(Item),
@@ -377,7 +344,7 @@ out(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time), Time >= PrevTime ->
     {Result, Drops, NQ, NState} = Module:handle_out(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
     NS = S#squeue{time=Time, queue=NQ, state=NState},
@@ -387,19 +354,10 @@ out(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
         Item ->
             {sojourn_time(Time, Item), Drops2, NS}
     end;
-out(Time, S) when is_integer(Time) ->
-    out(S).
+out(Time, #squeue{} = S) when is_integer(Time) ->
+    error(badarg, [Time, S]).
 
-%% @doc Drops items, `Drops', from the queue, `S', and then removes the item,
-%% `Item', from the tail of the remaining queue. Returns
-%% `{{SojournTime, Item}, Drops, NS}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times and `NS' is the resulting queue without `Drops' and
-%% `Item'. If `S' is empty after dropping items `{empty, Drops, S}' is returned.
-%%
-%% This function is different from `queue:out_r/1', as the sojourn time
-%% is included in the result in the place of the atom `value' and the return
-%% value is a 3-tuple with the drop items, `Drops', instead of a 2-tuple.
+%% @equiv out_r(time(S), S)
 -spec out_r(S) -> {Result, Drops, NS} when
       S :: squeue(Item),
       Result :: empty | {SojournTime :: non_neg_integer(), Item},
@@ -416,20 +374,19 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
             {sojourn_time(Time, Item), Drops2, NS}
     end.
 
-%% @doc Advances the queue, `S', to time `Time' and drops items, `Drops', then
-%% removes the item, `Item', from the tail of queue, `S'. Returns
-%% `{{SojournTime, Item}, Drops, NS}', where `SojournTime' is the time length of
-%% time `Item' spent in the queue, `Drops' is the list of dropped items and
-%% their sojourn times and `NS' is the resulting queue without the removed and
-%% dropped items, If the queue is empty after dropping items
-%% `{empty, Drops, NS}' is returned.
+%% @doc Advances the queue, `S', to time `Time' and removes the item, `Item',
+%% from the tail of queue, `S'. Returns `{{SojournTime, Item}, Drops, NS}',
+%% where `SojournTime' is the time length of time `Item' spent in the queue,
+%% `Drops' is the list of dropped items and their sojourn times and `NS' is the
+%% resulting queue without the removed and dropped items. If the queue is empty
+%% after dropping items `{empty, Drops, NS}' is returned.
 %%
 %% This function is slightly different from `queue:out_r/1', as the sojourn time
 %% is included in the result in the place of the atom `value' and items can be
 %% dropped.
 %%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec out_r(Time, S) -> {Result, Drops, NS} when
       Time :: integer(),
       S :: squeue(Item),
@@ -437,7 +394,7 @@ out_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time), Time > PrevTime ->
     {Result, Drops, NQ, NState} = Module:handle_out_r(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
     NS = S#squeue{time=Time, queue=NQ, state=NState},
@@ -450,35 +407,13 @@ out_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
 out_r(Time, S) when is_integer(Time) ->
     out_r(S).
 
-%% @doc Drops items, `Drops', from the queue, `S'. Returns `{Drops, NS}',
-%% where `Drops' is the list of dropped items and their sojourn times and `NS'
-%% is the resulting queue without `Drops'. If `S' is empty raises an `empty'
-%% error.
-%%
-%% If the active queue management callback module does not drop any items, the
-%% item at the head of the queue is dropped.
-%%
-%% This function is different from `queue:drop/1', as the return value is a
-%% 2-tuple with the dropped items, `Drops' and the new queue , `NS', instead of
-%% just the new queue.
+%% @equiv drop(time(S), S)
 -spec drop(S) -> {Drops, NS} when
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-drop(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    case Module:handle_timeout(Time, Q, State) of
-        {[], NQ, NState} ->
-            case queue:out(NQ) of
-                {empty, _} ->
-                    error(empty, [S]);
-                {{value, Item}, NQ2} ->
-                    NS = S#squeue{queue=NQ2, state=NState},
-                    {sojourn_drops(Time, [Item]), NS}
-            end;
-        {Drops, NQ, NState} ->
-            NS = S#squeue{queue=NQ, state=NState},
-            {sojourn_drops(Time, Drops), NS}
-    end.
+drop(#squeue{time=Time} = S) ->
+    drop(Time, S).
 
 %% @doc Advances the queue, `S', to time `Time' and drops items, `Drops', from
 %% the queue. Returns `{Drops, NS}', where `Drops' is the list of dropped items
@@ -492,15 +427,15 @@ drop(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 %% 2-tuple with the dropped items, `Drops' and the new queue , `NS', instead of
 %% just the new queue.
 %%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec drop(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 drop(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time), Time >= PrevTime ->
     case Module:handle_timeout(Time, Q, State) of
         {[], NQ, NState} ->
             case queue:out(NQ) of
@@ -514,39 +449,16 @@ drop(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
             NS = S#squeue{time=Time, queue=NQ, state=NState},
             {sojourn_drops(Time, Drops), NS}
     end;
-drop(Time, S) when is_integer(Time) ->
-    drop(S).
+drop(Time, #squeue{} = S) when is_integer(Time) ->
+    error(badarg, [Time, S]).
 
-%% @doc Drops items, `Drops', from the queue, `S'. Returns `{Drops, NS}',
-%% where `Drops' is the list of dropped items and their sojourn times and `NS'
-%% is the resulting queue without `Drops'. If `S' is empty raises an `empty'
-%% error.
-%%
-%% If the active queue management callback module does not drop any items, the
-%% item at the tail of the queue is dropped.
-%%
-%% This function is different from `queue:drop/1', as the return value is a
-%% 2-tuple with the dropped items, `Drops' and the new queue , `NS', instead of
-%% just the new queue. Also the dropped item or items may not be from the tail
-%% of the queue.
+%% @equiv drop_r(time(S), S)
 -spec drop_r(S) -> {Drops, NS} when
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-drop_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    case Module:handle_timeout(Time, Q, State) of
-        {[], NQ, NState} ->
-            case queue:out_r(NQ) of
-                {empty, _} ->
-                    error(empty, [S]);
-                {{value, Item}, NQ2} ->
-                    NS = S#squeue{queue=NQ2, state=NState},
-                    {sojourn_drops(Time, [Item]), NS}
-            end;
-        {Drops, NQ, NState} ->
-            NS = S#squeue{queue=NQ, state=NState},
-            {sojourn_drops(Time, Drops), NS}
-    end.
+drop_r(#squeue{time=Time} = S) ->
+    drop_r(Time, S).
 
 %% @doc Advances the queue, `S', to time `Time' and drops items, `Drops', from
 %% the queue. Returns `{Drops, NS}', where `Drops' is the list of dropped items
@@ -561,15 +473,15 @@ drop_r(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
 %% just the new queue. Also the dropped item or items may not be from the tail
 %% of the queue.
 %%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec drop_r(Time, S) -> {Drops, NS} when
       Time :: non_neg_integer(),
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 drop_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time), Time >= PrevTime ->
     case Module:handle_timeout(Time, Q, State) of
         {[], NQ, NState} ->
             case queue:out_r(NQ) of
@@ -583,8 +495,8 @@ drop_r(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
             NS = S#squeue{time=Time, queue=NQ, state=NState},
             {sojourn_drops(Time, Drops), NS}
     end;
-drop_r(Time, S) when is_integer(Time) ->
-    drop_r(S).
+drop_r(Time, #squeue{} = S) when is_integer(Time) ->
+    error(badarg, [Time, S]).
 
 %% @doc Returns a list of items, `List', in the queue, `S'.
 %%
@@ -629,42 +541,29 @@ join(#squeue{module=Module1, time=Time, tail_time=TailTime1, queue=Q1,
 join(#squeue{} = S1, #squeue{} = S2) ->
     error(badarg, [S1, S2]).
 
-%% @doc Applys a fun, `Filter', to all items in the queue, `S', and returns the
-%% resulting queue, `NS'.
-%%
-%% If `Filter(Item)' returns `true', the item appears in the new queue.
-%%
-%% If `Filter(Item)' returns `false', the item does not appear in the new
-%% queue.
-%%
-%% If `Filter(Item)' returns a list of items, these items appear in the new
-%% queue with all items having the start time of the origin item, `Item'.
+%% @equiv filter(time(S), Filter, S)
 -spec filter(Filter, S) -> {Drops, NS} when
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-filter(Filter, #squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    Drops2 = sojourn_drops(Time, Drops),
-    NQ2 = queue:filter(make_filter(Filter), NQ),
-    {Drops2, S#squeue{queue=NQ2, state=NState}}.
+filter(Filter, #squeue{time=Time} = S) ->
+    filter(Time, Filter, S).
 
-%% @doc Advances the queue, `S', to time `Time'  and drops items, then applys a
-%% fun, `Filter', to all remaining items in the queue. Returns a tuple
-%% containing the dropped items and their sojourn times, `Drops', and the new
-%% queue, `NS'.
+%% @doc Advances the queue, `S', to time `Time'  and applies a filter fun,
+%% `Filter', to all items in the queue. Returns a tuple containing the dropped
+%% items and their sojourn times, `Drops', and the new queue, `NS'.
 %%
 %% If `Filter(Item)' returns `true', the item appears in the new queue.
 %%
 %% If `Filter(Item)' returns `false', the item does not appear in the new
-%% queue.
+%% queue or the dropped items.
 %%
 %% If `Filter(Item)' returns a list of items, these items appear in the new
 %% queue with all items having the start time of the origin item, `Item'.
 %%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec filter(Time, Filter, S) -> {Drops, NS} when
       Time :: integer(),
       Filter :: fun((Item) -> Bool :: boolean() | [Item]),
@@ -673,14 +572,14 @@ filter(Filter, #squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
       NS :: squeue(Item).
 filter(Time, Filter,
        #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+  when is_integer(Time), Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     Drops2 = sojourn_drops(Time, Drops),
     NQ2 = queue:filter(make_filter(Filter), NQ),
     NS = S#squeue{time=Time, queue=NQ2, state=NState},
     {Drops2, NS};
-filter(Time, Filter, S) when is_integer(Time) ->
-    filter(Filter, S).
+filter(Time, Filter, #squeue{} = S) when is_integer(Time) ->
+    error(badarg, [Time, Filter, S]).
 
 %% Additional API
 
@@ -691,46 +590,46 @@ filter(Time, Filter, S) when is_integer(Time) ->
 time(#squeue{time=Time}) ->
     Time.
 
-%% @doc Advances the queue, `S', to time `Time', without dropping items. Returns
-%% the new queue, `NS'.
+%% @doc Advances the queue, `S', to time `Time', without applying active queue
+%% management. Returns the new queue, `NS'.
+%%
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec time(Time, S) -> NS when
       Time :: integer(),
       S :: squeue(Item),
       NS :: squeue(Item).
-time(Time, #squeue{time=PrevTime} = S)
-  when is_integer(Time) andalso Time > PrevTime ->
+time(Time, #squeue{time=Time} = S) ->
+    S;
+time(Time, #squeue{time=PrevTime} = S) when is_integer(Time), Time > PrevTime ->
     S#squeue{time=Time};
 time(Time, #squeue{} = S) when is_integer(Time) ->
-    S.
+    error(badarg, [Time, S]).
 
-%% @doc The time of the queue, `S', remains unchanged and may drop items.
-%% Returns a tuple containing the dropped items and their sojourn times,
-%% `Drops', and resulting queue, `NS'.
+%% @equiv timeout(time(S), S)
 -spec timeout(S) -> {Drops, NS} when
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
-timeout(#squeue{module=Module, time=Time, queue=Q, state=State} = S) ->
-    {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
-    {sojourn_drops(Time, Drops), S#squeue{queue=NQ, state=NState}}.
+timeout(#squeue{time=Time} = S) ->
+    timeout(Time, S).
 
-%% @doc Advances the queue, `S', to time `Time' and drops items. Returns a tuple
-%% containing the dropped items and their sojourn times, `Drops', and resulting
-%% queue, `NS'.
+%% @doc Advances the queue, `S', to time `Time'. Returns a tuple containing the
+%% dropped items and their sojourn times, `Drops', and resulting queue, `NS'.
 %%
-%% If `Time' is less than the current time of the queue time, the current time
-%% is used instead.
+%% This function raises the error `badarg' if `Time' is less than the current
+%% time of the queue.
 -spec timeout(Time, S) -> {Drops, NS} when
       Time :: integer(),
       S :: squeue(Item),
       Drops :: [{DropSojournTime :: non_neg_integer(), Item}],
       NS :: squeue(Item).
 timeout(Time, #squeue{module=Module, time=PrevTime, queue=Q, state=State} = S)
-  when is_integer(Time) andalso Time >= PrevTime ->
+  when is_integer(Time), Time >= PrevTime ->
     {Drops, NQ, NState} = Module:handle_timeout(Time, Q, State),
     {sojourn_drops(Time, Drops), S#squeue{time=Time, queue=NQ, state=NState}};
-timeout(Time, S) when is_integer(Time) ->
-    timeout(S).
+timeout(Time, #squeue{} = S) ->
+    error(badarg, [Time, S]).
 
 %% Test API
 

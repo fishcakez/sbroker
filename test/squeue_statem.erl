@@ -141,8 +141,8 @@ item() ->
     oneof([a, b, c]).
 
 time(Time) ->
-    frequency([{10, ?LET(Incr, choose(0, 3), Time + Incr)},
-               {1, choose(-10, Time)}]).
+    oneof([Time,
+           ?LET(Incr, choose(1, 3), Time + Incr)]).
 
 new(Manager, Args) ->
     squeue:new(Manager, Args).

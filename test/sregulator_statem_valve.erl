@@ -32,30 +32,30 @@ handle_dropped_closed(Time, S, State) ->
     handle_closed(Time, S, State).
 
 
-handle(Time, S, {[], []} = State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle(_, S, {[], []} = State) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State};
 handle(Time, S, {[], Sequence}) ->
     handle(Time, S, {Sequence, Sequence});
-handle(Time, S, {[open | Rest], Sequence}) ->
-    {Result, Drops, NS} = squeue:out(Time, S),
+handle(_, S, {[open | Rest], Sequence}) ->
+    {Result, Drops, NS} = squeue:out(S),
     {Result, Drops, NS, {Rest, Sequence}};
-handle(Time, S, {[closed | Rest], Sequence}) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle(_, S, {[closed | Rest], Sequence}) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, {Rest, Sequence}}.
 
-handle_r(Time, S, {[], []} = State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_r(_, S, {[], []} = State) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State};
 handle_r(Time, S, {[], Sequence}) ->
     handle_r(Time, S, {Sequence, Sequence});
-handle_r(Time, S, {[open | Rest], Sequence}) ->
-    {Result, Drops, NS} = squeue:out_r(Time, S),
+handle_r(_, S, {[open | Rest], Sequence}) ->
+    {Result, Drops, NS} = squeue:out_r(S),
     {Result, Drops, NS, {Rest, Sequence}};
-handle_r(Time, S, {[closed | Rest], Sequence}) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_r(_, S, {[closed | Rest], Sequence}) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, {Rest, Sequence}}.
 
-handle_closed(Time, S, State) ->
-    {Drops, NS} = squeue:timeout(Time, S),
+handle_closed(_, S, State) ->
+    {Drops, NS} = squeue:timeout(S),
     {closed, Drops, NS, State}.
