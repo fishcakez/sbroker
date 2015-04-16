@@ -9,10 +9,12 @@ Introduction
 
 `sbroker` provides a simple interface to match processes. One party
 calls `sbroker:ask/1` and the counterparty `sbroker:ask_r/1`. If a match
-is found both return `{go, Ref, Pid, SojournTime}`, where `SojournTime` is
-the time spent in `native` time units waiting for a match (one will have a time
-of 0), `Pid` is the other process in the match and `Ref` is the transaction
-reference. If no match is found, returns `{drop, SojournTime}`.
+is found both return `{go, Ref, Pid, RelativeTime, SojournTime}`, where
+`SojournTime` is the time spent in `native` time units waiting for a match,
+`RelativeTime` is the theoretical sojourn time if using the sbroker had no
+overhead, in `native` time units, `Pid` is the other process in the match and
+`Ref` is the transaction reference. If no match is found, returns
+`{drop, SojournTime}`.
 
 Processes calling `sbroker:ask/1` are only matched with a process calling
 `sbroker:ask_r/1` and vice versa.
