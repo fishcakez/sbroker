@@ -527,8 +527,8 @@ init(Module, Args, AskQueueSpec, AskRQueueSpec, Interval) ->
     Time = sbroker_time:native(),
     A = sbroker_queue:new(Time, AskQueueSpec),
     B = sbroker_queue:new(Time, AskRQueueSpec),
-    State = #state{module=Module, args=Args, timer=TRef, asking=A,
-                   bidding=B},
+    State = #state{module=Module, args=Args, interval=Interval, timer=TRef,
+                   asking=A, bidding=B},
     {ok, bidding, State}.
 
 start_timer(Timeout, TRef) ->
