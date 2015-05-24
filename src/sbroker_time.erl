@@ -19,15 +19,13 @@
 %%-------------------------------------------------------------------
 %% @doc This module provides time utility functions.
 %%
-%% `sbroker' and `sregulator' use the `native' time units of the VM to measure
-%% time. Conversion functions to and from milliseconds are provided as a
-%% convenience.
+%% `sbroker' uses the `native' time units of the VM to measure time. Conversion
+%% functions to and from milliseconds are provided as a convenience.
 %%
 %% Prior to 18.0, the `native' time units will always be microseconds. For
 %% releases greater than and including 18.0 see the "Time and Time Correction"
-%% chapter in the OTP documentation for more information. `sbroker' and
-%% `sregulator' are multi time warp safe and designed to be used with multi
-%% time warps.
+%% chapter in the OTP documentation for more information. `sbroker' is multi
+%% time warp safe and designed to be used with multi time warps.
 -module(sbroker_time).
 
 -compile(nowarn_deprecated_function).
