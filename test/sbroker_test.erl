@@ -34,7 +34,7 @@
 -spec start_link() -> {ok, Pid} when
       Pid :: pid().
 start_link() ->
-    sbroker:start_link(?MODULE, undefined).
+    sbroker:start_link(?MODULE, undefined, []).
 
 %% sbroker api
 

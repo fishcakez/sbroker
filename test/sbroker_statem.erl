@@ -162,7 +162,7 @@ queue_spec() ->
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, Init),
     Trap = process_flag(trap_exit, true),
-    case sbroker:start_link(?MODULE, []) of
+    case sbroker:start_link(?MODULE, [], []) of
         {error, Reason} = Error ->
             receive
                 {'EXIT', _, Reason} ->
@@ -201,7 +201,7 @@ start_link_post(_, [{ok, _}], {ok, Broker}) when is_pid(Broker) ->
     true;
 start_link_post(_, [ignore], ignore) ->
     true;
-start_link_post(_, [bad], {error, {bad_return, {?MODULE, init, bad}}}) ->
+start_link_post(_, [bad], {error, {bad_return_value, bad}}) ->
     true;
 start_link_post(_, _, _) ->
     false.
@@ -222,7 +222,7 @@ spawn_client_next(#state{asks=[]} = State, Bid, [_, async_bid]) ->
                      NState#state{bids=NBids++[Bid]}
              end);
 spawn_client_next(#state{asks=[]} = State, _, [_, nb_bid]) ->
-    State;
+    timeout_next(State);
 spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
   when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
     ask_next(State,
@@ -244,7 +244,7 @@ spawn_client_next(#state{bids=[]} = State, Ask, [_, async_ask]) ->
                      NState#state{asks=NAsks++[Ask]}
              end);
 spawn_client_next(#state{bids=[]} = State, _, [_, nb_ask]) ->
-    State;
+    timeout_next(State);
 spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
   when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
     bid_next(State,
@@ -265,8 +265,8 @@ spawn_client_post(#state{asks=[]} = State, [_, async_bid], Bid) ->
              fun(#state{bids=NBids} = NState) ->
                      {true, NState#state{bids=NBids++[Bid]}}
              end);
-spawn_client_post(#state{asks=[]}, [_, nb_bid], Bid) ->
-    retry_post(Bid);
+spawn_client_post(#state{asks=[]} = State, [_, nb_bid], Bid) ->
+    retry_post(Bid) andalso timeout_post(State);
 spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
   when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
     ask_post(State,
@@ -287,8 +287,8 @@ spawn_client_post(#state{bids=[]} = State, [_, async_ask], Ask) ->
              fun(#state{asks=NAsks} = NState) ->
                      {true, NState#state{asks=NAsks++[Ask]}}
              end);
-spawn_client_post(#state{bids=[]}, [_, nb_ask], Ask) ->
-    retry_post(Ask);
+spawn_client_post(#state{bids=[]} = State, [_, nb_ask], Ask) ->
+    retry_post(Ask) andalso timeout_post(State);
 spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
   when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
     bid_post(State,
@@ -306,14 +306,20 @@ spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
 timeout_args(#state{sbroker=Broker}) ->
     [Broker].
 
-timeout_next(#state{asks=[]} = State, _, _) ->
+timeout_next(State, _, _) ->
+    timeout_next(State).
+
+timeout_next(#state{asks=[]} = State) ->
     bid_next(State, fun(NState) -> NState end);
-timeout_next(#state{bids=[]} = State, _, _) ->
+timeout_next(#state{bids=[]} = State) ->
     ask_next(State, fun(NState) -> NState end).
 
-timeout_post(#state{asks=[]} = State, _, _) ->
+timeout_post(State, _, _) ->
+    timeout_post(State).
+
+timeout_post(#state{asks=[]} = State) ->
     bid_post(State, fun(NState) -> {true, NState} end);
-timeout_post(#state{bids=[]} = State, _, _) ->
+timeout_post(#state{bids=[]} = State) ->
     ask_post(State, fun(NState) -> {true, NState} end).
 
 cancel_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
@@ -395,13 +401,14 @@ change_config(Broker, Init) ->
     sbroker:change_config(Broker, 100).
 
 change_config_next(State, _, [_, ignore]) ->
-    State;
+    timeout_next(State);
 change_config_next(State, _, [_, bad]) ->
-    State;
+    timeout_next(State);
 change_config_next(State, _,
                    [_, {ok, {AskQueueSpec, BidQueueSpec, _}}]) ->
     NState = ask_change(AskQueueSpec, State),
-    bid_change(BidQueueSpec, NState).
+    NState2 = bid_change(BidQueueSpec, NState),
+    timeout_next(NState2).
 
 %% If Mod Args the same the state of the squeue does not change.
 ask_change({_, AskDrops, AskOut, AskSize, AskDrop},
@@ -418,13 +425,14 @@ bid_change({_, BidDrops, BidOut, BidSize, BidDrop}, State) ->
     State#state{bid_out=BidOut, bid_drops=BidDrops, bid_state=BidDrops,
                 bid_size=BidSize, bid_drop=BidDrop}.
 
-change_config_post(_, [_, ignore], ok) ->
-    true;
-change_config_post(_, [_, bad],
-                   {error, {'EXIT', {bad_return, {?MODULE, init, bad}}}}) ->
-    true;
-change_config_post(_, [_, {ok, _}], ok) ->
-    true;
+change_config_post(State, [_, ignore], ok) ->
+    timeout_post(State);
+change_config_post(State, [_, bad], {error, {bad_return, bad}}) ->
+    timeout_post(State);
+change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}], ok) ->
+    NState = ask_change(AskQueueSpec, State),
+    NState2 = bid_change(BidQueueSpec, NState),
+    timeout_post(NState2);
 change_config_post(_, _, _) ->
     false.
 
@@ -441,7 +449,7 @@ shutdown_client_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancel
 shutdown_client(Broker, undefined) ->
     _ = Broker ! {'DOWN', make_ref(), process, self(), shutdown},
     ok;
-shutdown_client(Broker, Client) ->
+shutdown_client(_, Client) ->
     Pid = client_pid(Client),
     MRef = monitor(process, Pid),
     exit(Pid, shutdown),
@@ -449,7 +457,7 @@ shutdown_client(Broker, Client) ->
         {'DOWN', MRef, _, _, shutdown} ->
             %% Sync with broker so that the next command does not arrive before
             %% the monitor message if broker is behind.
-            _ = sys:get_status(Broker),
+            timer:sleep(50),
             ok;
         {'DOWN', MRef, _, _, Reason} ->
             exit(Reason)
