@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(squeue_timeout_statem).
+-module(sbroker_timeout_statem).
 
 -include_lib("proper/include/proper.hrl").
 
@@ -32,6 +32,7 @@
 -export([handle_timeout/3]).
 -export([handle_out/3]).
 -export([handle_out_r/3]).
+-export([config_change/3]).
 
 -export([initial_state/0]).
 -export([command/1]).
@@ -43,15 +44,15 @@ quickcheck() ->
     quickcheck([]).
 
 quickcheck(Opts) ->
-    proper:quickcheck(prop_squeue(), Opts).
+    proper:quickcheck(prop_sbroker_queue(), Opts).
 
 check(CounterExample) ->
     check(CounterExample, []).
 
 check(CounterExample, Opts) ->
-    proper:check(prop_squeue(), CounterExample, Opts).
+    proper:check(prop_sbroker_queue(), CounterExample, Opts).
 
-prop_squeue() ->
+prop_sbroker_queue() ->
     ?FORALL(Cmds, commands(?MODULE),
             ?TRAPEXIT(begin
                           {History, State, Result} = run_commands(?MODULE, Cmds),
@@ -65,13 +66,16 @@ prop_squeue() ->
                       end)).
 
 module() ->
-    squeue_timeout.
+    sbroker_timeout_queue.
 
 args() ->
-    choose(0, 3).
+    {oneof([out, out_r]),
+     oneof([choose(0, 3), infinity]),
+     oneof([drop, drop_r]),
+     oneof([choose(0, 5), infinity])}.
 
-init(Timeout) ->
-    Timeout.
+init({Out, Timeout, Drop, Max}) ->
+    {Out, Drop, Max, Timeout}.
 
 handle_timeout(_Time, L, Timeout) ->
     Drop = fun(SojournTime) -> SojournTime >= Timeout end,
@@ -83,17 +87,20 @@ handle_out(Time, L, Timeout) ->
 handle_out_r(Time, L, Timeout) ->
     handle_timeout(Time, L, Timeout).
 
+config_change(_, {Out, Timeout, Drop, Max}, _) ->
+    {Out, Drop, Max, Timeout}.
+
 initial_state() ->
-    squeue_statem:initial_state(?MODULE).
+    sbroker_queue_statem:initial_state(?MODULE).
 
 command(State) ->
-    squeue_statem:command(State).
+    sbroker_queue_statem:command(State).
 
 precondition(State, Call) ->
-    squeue_statem:precondition(State, Call).
+    sbroker_queue_statem:precondition(State, Call).
 
 next_state(State, Value, Call) ->
-    squeue_statem:next_state(State, Value, Call).
+    sbroker_queue_statem:next_state(State, Value, Call).
 
 postcondition(State, Call, Result) ->
-    squeue_statem:postcondition(State, Call, Result).
+    sbroker_queue_statem:postcondition(State, Call, Result).

@@ -19,7 +19,7 @@
 %%-------------------------------------------------------------------
 -module(sbroker_statem_queue).
 
--behaviour(squeue).
+%-behaviour(sbroker_queue).
 
 -export([init/2]).
 -export([handle_timeout/3]).
