@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(squeue_SUITE).
+-module(sbroker_queue_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -36,10 +36,9 @@
 
 %% test cases
 
--export([naive/1]).
+-export([drop/1]).
 -export([timeout/1]).
 -export([codel/1]).
--export([codel_timeout/1]).
 
 %% common_test api
 
@@ -50,10 +49,10 @@ suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{property, [parallel], [naive, timeout, codel, codel_timeout]}].
+    [{property, [parallel], [drop, timeout, codel]}].
 
 init_per_suite(Config) ->
-    QcOpts = [{numtests, 300}, long_result, {on_output, fun log/2}],
+    QcOpts = [{numtests, 1000}, long_result, {on_output, fun log/2}],
     [{quickcheck_options, QcOpts} | Config].
 
 end_per_suite(_Config) ->
@@ -88,9 +87,9 @@ end_per_testcase(_TestCase, _Config) ->
 
 %% test cases
 
-naive(Config) ->
+drop(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
-    case squeue_naive_statem:quickcheck(QcOpts) of
+    case sbroker_drop_statem:quickcheck(QcOpts) of
         true ->
             ok;
         {error, Reason} ->
@@ -103,7 +102,7 @@ naive(Config) ->
 
 timeout(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
-    case squeue_timeout_statem:quickcheck(QcOpts) of
+    case sbroker_timeout_statem:quickcheck(QcOpts) of
         true ->
             ok;
         {error, Reason} ->
@@ -115,19 +114,7 @@ timeout(Config) ->
 
 codel(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
-    case squeue_codel_statem:quickcheck(QcOpts) of
-        true ->
-            ok;
-        {error, Reason} ->
-            error(Reason);
-        CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
-            error(counterexample)
-    end.
-
-codel_timeout(Config) ->
-    QcOpts = ?config(quickcheck_options, Config),
-    case squeue_codel_timeout_statem:quickcheck(QcOpts) of
+    case sbroker_codel_statem:quickcheck(QcOpts) of
         true ->
             ok;
         {error, Reason} ->

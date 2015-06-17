@@ -17,183 +17,173 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
+%% @doc Behaviour for implement queues for `sbroker'.
+%%
+%% A custom queue must implement the `sbroker' behaviour. The first callback is
+%% `init/2', which starts the queue:
+%% ```
+%% -callback init(Time :: integer(), Args :: any()) -> State :: any().
+%% '''
+%% `Time' is the time of the queue at creation. Some other callbacks will
+%% receive the current time of the queue as the second last argument. It is
+%% monotically increasing, so subsequent calls will have the same or a greater
+%% time.
+%%
+%% `Args' is the arguments for the queue. It can be any term.
+%%
+%% `State' is the state of the queue and used in the next call.
+%%
+%% When inserting a request into the queue, `handle_in/4':
+%% ```
+%% -callback handle_in(SendTime :: integer(),
+%%                     From :: {Sender :: pid(), Tag :: any()},
+%%                     Time :: integer(), State :: any()) ->
+%%     NState :: any().
+%% '''
+%% `SendTime' is the (approximate) time a request was sent. It is always less
+%% than or equal to `Time'.
+%%
+%% `From' is a 2-tuple containing the senders pid and a response tag. `From' can
+%% be used with `drop/3' to drop a request.
+%%
+%% `Time' is the current time, `State' is the current state and `NState' is the
+%% new state.
+%%
+%% When removing a request from the queue, `handle_out/2':
+%% ```
+%% -callback handle_out(Time :: integer(), State :: any()) ->
+%%     {SendTime :: integer(), From :: {pid(), Tag :: any()}, NState :: any()} |
+%%     {empty, NState :: any()}.
+%% '''
+%%
+%% `Time' is the current time, `State' is the current state and `NState' is the
+%% new state.
+%%
+%% When a timeout occurs, `handle_timeout/2':
+%% ```
+%% -callback handle_timeout(Time :: integer(), State :: any()) ->
+%%     NState :: any().
+%% '''
+%% `Time' is the current time, `State' is the current state and `NState' is the
+%% new state.
+%%
+%% When cancelling requests, `handle_cancel/3':
+%% ```
+%% -callback handle_cancel(Tag :: any(), Time :: integer(), State :: any()) ->
+%%     {Reply :: false | pos_integer(), NState :: any()}.
+%% '''
+%% `Tag' is a response tag, which is part of the `From' tuple passed to
+%% `handle_in/4'. There may be multiple requests with the same tag and all
+%% should be removed.
+%%
+%% If no requests are cancelled the `Reply' is `false', otherwise it is the
+%% number of cancelled requests.
+%%
+%% `Time' is the current time, `State' is the current state and `NState' is the
+%% new state.
+%%
+%% When handling a message, `handle_info/3':
+%% ```
+%% -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
+%%     NState :: any().
+%% '''
+%% `Msg' is the message, and may be intended for another queue.
+%%
+%% `Time' is the current time, `State' is the current state and `NState' is the
+%% new state.
+%%
+%% When changing the configuration of a queue, `config_change/3':
+%% ```
+%% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
+%%      NState :: any().
+%% '''
+%% `Args' is the arguments to reconfigure the queue. The queue should change its
+%% configuration as if the same `Args' term was used in `init/2'.
+%%
+%% `Time' is the current time, `State' is the current state and `NState' is the
+%% new state.
+%%
+%% When returning a list of queued requests, `to_list/1':
+%% ```
+%% -callback to_list(State :: any()) ->
+%%     [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()}}].
+%% '''
+%% `State' is the current state of the queue, `SendTime' and `From' are the
+%% values from requests inserted into the queue. The list should be ordered so
+%% that the first request is at the head and last added request is at the tail.
+%% This means that `SendTime' should increase from the head to the tail of the
+%% list. This callback must be idempotent and so not drop any requests,
+%%
+%% When returning the number of queued requests, `len/1':
+%% ```
+%% -callback len(State :: any()) -> Len :: non_neg_integer().
+%% '''
+%% `State' is the current state of the queue and `Len' is the number of queued
+%% requests. This callback must be idempotent and so not drop any requests.
+%%
+%% When cleaning up the queue, `terminate/2':
+%% ```
+%% -callback terminate(Reason :: stop | {bad_return_value, Return :: any()} |
+%%                     {error | throw | exit, Reason :: any(), Stack :: list()},
+%%                     State :: any()) -> any().
+%% '''
+%% `Reason' is `stop' if the queue is being shutdown,
+%% `{bad_return_value, Return}' if a previous callback returned an invalid term
+%% or `{Class, Reason, Stack}' if a previous callback raised an exception.
+%%
+%% `State' is the current state of the queue.
+%%
+%% The process controlling the queue may not be terminating with the queue and
+%% so `terminate/2' should do any clean up required.
 %% @private
 -module(sbroker_queue).
 
 %% public api
 
--export([new/2]).
--export([in/4]).
--export([out/2]).
--export([cancel/3]).
--export([down/3]).
--export([len/1]).
--export([config_change/2]).
--export([timeout/2]).
+-export([drop/3]).
 
 %% types
 
--record(drop_queue, {module :: module(),
-                     args :: any(),
-                     out :: out | out_r,
-                     drop :: drop | drop_r,
-                     size :: non_neg_integer() | infinity,
-                     len = 0 :: non_neg_integer(),
-                     squeue :: squeue:squeue({reference(), {pid(), any()}})}).
+-callback init(Time :: integer(), Args :: any()) ->
+    State :: any().
 
--type tag() :: any().
--type spec() :: {module(), any(), out | out_r, non_neg_integer() | infinity,
-                 drop | drop_r}.
--opaque drop_queue() :: #drop_queue{}.
+-callback handle_in(SendTime :: integer(),
+                    From :: {Sender :: pid(), Tag :: any()}, Time :: integer(),
+                    State :: any()) -> NState :: any().
 
--export_type([spec/0]).
--export_type([drop_queue/0]).
+-callback handle_out(Time :: integer(), State :: any()) ->
+    {SendTime :: integer(), From :: {pid(), Tag :: any()}, NState :: any()} |
+    {empty, NState :: any()}.
+
+-callback handle_timeout(Time :: integer(), State :: any()) -> NState :: any().
+
+-callback handle_cancel(Tag :: any(), Time :: integer(), State :: any()) ->
+    {Reply :: false | pos_integer(), NState :: any()}.
+
+-callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
+    NState :: any().
+
+-callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
+    NState :: any().
+
+-callback to_list(State :: any()) ->
+    [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()}}].
+
+-callback len(State :: any()) -> Len :: non_neg_integer().
+
+-callback terminate(Reason :: stop | {bad_return_value, Return :: any()} |
+                    {error | throw | exit, Reason :: any(), Stack :: list()},
+                    State :: any()) -> any().
 
 %% public api
 
--spec new(Time, Spec) -> Q when
-      Time :: integer(),
-      Spec :: spec(),
-      Q :: drop_queue().
-new(Time, {Mod, Args, Out, Size, Drop})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) andalso
-       ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
-    #drop_queue{module=Mod, args=Args, out=Out, drop=Drop,
-                size=Size, squeue=squeue:new(Time, Mod, Args)}.
-
--spec in(Time, InTime, From, Q) -> NQ when
-      Time :: integer(),
-      InTime :: integer(),
-      From :: {pid(), tag()},
-      Q :: drop_queue(),
-      NQ :: drop_queue().
-in(Time, InTime, From, #drop_queue{size=0, len=0} = Q) ->
-    drop(From, Time-InTime),
-    Q;
-in(Time, InTime, {Pid, _} = From,
-   #drop_queue{drop=Drop, size=Size, len=Len, squeue=S} = Q) ->
-    Ref = monitor(process, Pid),
-    {Drops, NS} = squeue:in(Time, InTime, {Ref, From}, S),
-    case Len - drops(Drops) + 1 of
-        NLen when NLen > Size ->
-            {Dropped, NS2} = drop_loop(Drop, NLen - Size, NS),
-            Q#drop_queue{len=NLen-Dropped, squeue=NS2};
-        NLen ->
-            Q#drop_queue{len=NLen, squeue=NS}
-    end.
-
--spec out(Time, Q) -> {Result, NQ} when
-      Time :: integer(),
-      Q :: drop_queue(),
-      Result :: empty | {SojournTime, {Ref, From}},
-      SojournTime :: non_neg_integer(),
-      Ref ::  reference(),
-      From :: {pid(), tag()},
-      NQ :: drop_queue().
-out(Time, #drop_queue{out=Out, len=Len, squeue=S} = Q) ->
-    case squeue:Out(Time, S) of
-        {empty, Drops, NS2} ->
-            {empty, maybe_drop(Q#drop_queue{len=Len-drops(Drops), squeue=NS2})};
-        {Item, Drops, NS2} ->
-            {Item, maybe_drop(Q#drop_queue{len=Len-drops(Drops)-1, squeue=NS2})}
-    end.
-
--spec cancel(Time, Tag, Q) -> {Cancelled, NQ} when
-      Time :: integer(),
-      Tag :: tag(),
-      Q :: drop_queue(),
-      Cancelled :: pos_integer() | false,
-      NQ :: drop_queue().
-cancel(Time, Tag, #drop_queue{len=Len, squeue=S} = Q) ->
-    Cancel = fun({Ref, {_, Tag2}}) when Tag2 =:= Tag ->
-                     demonitor(Ref, [flush]),
-                     false;
-                (_) ->
-                     true
-             end,
-    {Drops, NS} = squeue:filter(Time, Cancel, S),
-    Dropped = drops(Drops),
-    NLen = squeue:len(NS),
-    NQ = maybe_drop(Q#drop_queue{len=NLen, squeue=NS}),
-    case Len - Dropped - NLen of
-        0 ->
-            {false, NQ};
-        N ->
-            {N, NQ}
-    end.
-
--spec down(Time, Ref, Q) -> NQ when
-      Time :: integer(),
-      Ref :: reference(),
-      Q :: drop_queue(),
-      NQ :: drop_queue().
-down(Time, Ref, #drop_queue{squeue=S} = Q) ->
-    {Drops, NS} = squeue:filter(Time, fun({Ref2, _}) -> Ref2 =/= Ref end, S),
-    _ = drops(Drops),
-    maybe_drop(Q#drop_queue{len=squeue:len(NS), squeue=NS}).
-
--spec len(Q) -> Len when
-      Q :: drop_queue(),
-      Len :: non_neg_integer().
-len(#drop_queue{len=Len}) ->
-    Len.
-
--spec config_change(Spec, Q) -> NQ when
-      Spec :: spec(),
-      Q :: drop_queue(),
-      NQ :: drop_queue().
-config_change({Mod, Args, Out, Size, Drop},
-              #drop_queue{module=Mod, args=Args} = Q)
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) andalso
-       ((is_integer(Size) andalso Size >= 0) orelse Size =:= infinity) ->
-    Q#drop_queue{out=Out, size=Size, drop=Drop};
-config_change(Spec, #drop_queue{len=Len, squeue=S}) ->
-    Time = squeue:time(S),
-    #drop_queue{squeue=NS} = NQ = new(Time, Spec),
-    NQ#drop_queue{len=Len, squeue=squeue:join(NS, S)}.
-
--spec timeout(Time, Q) -> NQ when
-      Time :: integer(),
-      Q :: drop_queue(),
-      NQ :: drop_queue().
-timeout(Time, #drop_queue{len=Len, squeue=S} = Q) ->
-    {Drops, NS} = squeue:timeout(Time, S),
-    maybe_drop(Q#drop_queue{len=Len-drops(Drops), squeue=NS}).
-
-%% Internal
-
-drop_loop(Drop, ToDrop, S) ->
-    drop_loop(squeue:Drop(S), Drop, ToDrop, 0).
-
-drop_loop({Drops, S}, Drop, ToDrop, Dropped) ->
-    case Dropped + drops(Drops) of
-        NDropped when NDropped < ToDrop ->
-            drop_loop(squeue:Drop(S), Drop, ToDrop, NDropped);
-        NDropped ->
-            {NDropped, S}
-    end.
-
-drops(Items) ->
-    drops(Items, 0).
-
-drops([Item | Rest], N) ->
-    drop(Item),
-    drops(Rest, N+1);
-drops([], N) ->
-    N.
-
-drop({SojournTime, {Ref, From}}) ->
-    demonitor(Ref, [flush]),
-    drop(From, SojournTime).
-
-drop(From, SojournTime) ->
-    gen_fsm:reply(From, {drop, SojournTime}).
-
-maybe_drop(#drop_queue{size=Size, len=Len, drop=Drop, squeue=S} = Q)
-  when Len > Size ->
-    {Dropped, NS} = drop_loop(Drop, Len - Size, S),
-    Q#drop_queue{len=Len-Dropped, squeue=NS};
-maybe_drop(Q) ->
-    Q.
+%% @doc Drop a request from `From', sent at `SendTime' from the queue.
+%%
+%% Call `drop/3' when dropping a request from a queue.
+-spec drop(From, SendTime, Time) -> ok when
+      From :: {pid(), Tag :: any()},
+      SendTime :: integer(),
+      Time :: integer().
+drop(From, SendTime, Time) ->
+   _ = gen:reply(From, {drop, Time-SendTime}),
+   ok.
