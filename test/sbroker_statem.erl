@@ -40,14 +40,15 @@
 -export([init/1]).
 -export([spawn_client/2]).
 -export([cancel/2]).
+-export([len/2]).
 -export([change_config/2]).
 -export([shutdown_client/2]).
 
 -export([client_init/2]).
 
--record(state, {sbroker, asks=[], ask_out, ask_drops, ask_state=[], ask_size,
-                ask_drop, bids=[], bid_out, bid_drops, bid_state=[], bid_size,
-                bid_drop, cancels=[], done=[]}).
+-record(state, {sbroker, asks=[], ask_mod, ask_out, ask_drops, ask_state=[],
+                bids=[], bid_mod, bid_out, bid_drops, bid_state=[], cancels=[],
+                done=[]}).
 
 -define(TIMEOUT, 5000).
 
@@ -87,6 +88,7 @@ command(State) ->
                      spawn_client_args(State)}},
                {4, {call, sbroker, timeout, timeout_args(State)}},
                {3, {call, ?MODULE, cancel, cancel_args(State)}},
+               {2, {call, ?MODULE, len, len_args(State)}},
                {2, {call, ?MODULE, change_config,
                     change_config_args(State)}},
                {2, {call, ?MODULE, shutdown_client,
@@ -107,6 +109,8 @@ next_state(State, Value, {call, _, timeout, Args}) ->
     timeout_next(State, Value, Args);
 next_state(State, Value, {call, _, cancel, Args}) ->
     cancel_next(State, Value, Args);
+next_state(State, Value, {call, _, len, Args}) ->
+    len_next(State, Value, Args);
 next_state(State, Value, {call, _, change_config, Args}) ->
     change_config_next(State, Value, Args);
 next_state(State, Value, {call, _, shutdown_client, Args}) ->
@@ -122,6 +126,8 @@ postcondition(State, {call, _, timeout, Args}, Result) ->
     timeout_post(State, Args, Result);
 postcondition(State, {call, _, cancel, Args}, Result) ->
     cancel_post(State, Args, Result);
+postcondition(State, {call, _, len, Args}, Result) ->
+    len_post(State, Args, Result);
 postcondition(State, {call, _, change_config, Args}, Result) ->
     change_config_post(State, Args, Result);
 postcondition(State, {call, _, shutdown_client, Args}, Result) ->
@@ -150,14 +156,13 @@ start_link_args(_) ->
     [init()].
 
 init() ->
-    frequency([{10, {ok, {queue_spec(), queue_spec(), 10000}}},
+    frequency([{30, {ok, {queue_spec(), queue_spec(), 10000}}},
                {1, ignore},
                {1, bad}]).
 
 queue_spec() ->
-    {sbroker_statem_queue, resize(4, list(oneof([0, choose(1, 2)]))),
-     oneof([out, out_r]), oneof([choose(0, 5), infinity]),
-     oneof([drop, drop_r])}.
+    {oneof([sbroker_statem_queue, sbroker_statem2_queue]),
+     {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}}.
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, Init),
@@ -185,13 +190,12 @@ start_link_pre(#state{sbroker=Broker}, _) ->
     Broker =:= undefined.
 
 start_link_next(State, Value,
-                [{ok, {{_, AskDrops, AskOut, AskSize, AskDrop},
-                       {_, BidDrops, BidOut, BidSize, BidDrop}, _}}]) ->
+                [{ok, {{AskMod, {AskOut, AskDrops}},
+                       {BidMod, {BidOut, BidDrops}}, _}}]) ->
     Broker = {call, erlang, element, [2, Value]},
-    State#state{sbroker=Broker, bid_out=BidOut, bid_drops=BidDrops,
-                bid_state=BidDrops, bid_size=BidSize, bid_drop=BidDrop,
-                ask_out=AskOut, ask_drops=AskDrops, ask_state=AskDrops,
-                ask_size=AskSize, ask_drop=AskDrop};
+    State#state{sbroker=Broker, bid_mod=BidMod, bid_out=BidOut,
+                bid_drops=BidDrops, bid_state=BidDrops, ask_mod=AskMod,
+                ask_out=AskOut, ask_drops=AskDrops, ask_state=AskDrops};
 start_link_next(State, _, [ignore]) ->
     State;
 start_link_next(State, _, [bad]) ->
@@ -213,9 +217,6 @@ spawn_client(Broker, Fun) ->
     {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Broker, Fun]),
     {Pid, MRef}.
 
-spawn_client_next(#state{asks=[], bids=[], bid_size=0} = State, _,
-                  [_, async_bid]) ->
-    State;
 spawn_client_next(#state{asks=[]} = State, Bid, [_, async_bid]) ->
     bid_next(State,
              fun(#state{bids=NBids} = NState) ->
@@ -235,9 +236,6 @@ spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
                      NState#state{asks=droplast(NAsks),
                                   done=Done++[Bid, lists:last(NAsks)]}
              end);
-spawn_client_next(#state{bids=[], asks=[], ask_size=0} = State, _,
-                  [_, async_ask]) ->
-    State;
 spawn_client_next(#state{bids=[]} = State, Ask, [_, async_ask]) ->
     ask_next(State,
              fun(#state{asks=NAsks} = NState) ->
@@ -258,49 +256,33 @@ spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
                                   done=Done++[Ask, lists:last(NBids)]}
              end).
 
-spawn_client_post(#state{asks=[], bids=[], bid_size=0}, [_, async_bid], Bid) ->
-    drop_post(Bid);
-spawn_client_post(#state{asks=[]} = State, [_, async_bid], Bid) ->
-    bid_post(State,
-             fun(#state{bids=NBids} = NState) ->
-                     {true, NState#state{bids=NBids++[Bid]}}
-             end);
+spawn_client_post(#state{asks=[]} = State, [_, async_bid], _) ->
+    bid_aqm_post(State);
 spawn_client_post(#state{asks=[]} = State, [_, nb_bid], Bid) ->
     retry_post(Bid) andalso timeout_post(State);
 spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
   when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
     ask_post(State,
              fun(#state{asks=[]} = NState) ->
-                     {spawn_client_post(NState, Args, Bid),
-                      spawn_client_next(NState, Bid, Args)};
-                (#state{asks=NAsks, ask_out=out} = NState) ->
-                     {settled_post(Bid, hd(NAsks)),
-                      NState#state{asks=dropfirst(NAsks)}};
-                (#state{asks=NAsks, ask_out=out_r} = NState) ->
-                     {settled_post(Bid, lists:last(NAsks)),
-                      NState#state{asks=droplast(NAsks)}}
+                     spawn_client_post(NState, Args, Bid);
+                (#state{asks=NAsks, ask_out=out}) ->
+                     settled_post(Bid, hd(NAsks));
+                (#state{asks=NAsks, ask_out=out_r}) ->
+                     settled_post(Bid, lists:last(NAsks))
              end);
-spawn_client_post(#state{bids=[], asks=[], ask_size=0}, [_, async_ask], Ask) ->
-    drop_post(Ask);
-spawn_client_post(#state{bids=[]} = State, [_, async_ask], Ask) ->
-    ask_post(State,
-             fun(#state{asks=NAsks} = NState) ->
-                     {true, NState#state{asks=NAsks++[Ask]}}
-             end);
+spawn_client_post(#state{bids=[]} = State, [_, async_ask], _) ->
+    ask_aqm_post(State);
 spawn_client_post(#state{bids=[]} = State, [_, nb_ask], Ask) ->
     retry_post(Ask) andalso timeout_post(State);
 spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
   when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
     bid_post(State,
              fun(#state{bids=[]} = NState) ->
-                     {spawn_client_post(NState, Args, Ask),
-                      spawn_client_next(NState, Ask, Args)};
-                (#state{bids=NBids, bid_out=out} = NState) ->
-                     {settled_post(Ask, hd(NBids)),
-                      NState#state{bids=dropfirst(NBids)}};
-                (#state{bids=NBids, bid_out=out_r} = NState) ->
-                     {settled_post(Ask, lists:last(NBids)),
-                      NState#state{bids=droplast(NBids)}}
+                     spawn_client_post(NState, Args, Ask);
+                (#state{bids=NBids, bid_out=out}) ->
+                     settled_post(Ask, hd(NBids));
+                (#state{bids=NBids, bid_out=out_r}) ->
+                     settled_post(Ask, lists:last(NBids))
              end).
 
 timeout_args(#state{sbroker=Broker}) ->
@@ -318,9 +300,9 @@ timeout_post(State, _, _) ->
     timeout_post(State).
 
 timeout_post(#state{asks=[]} = State) ->
-    bid_post(State, fun(NState) -> {true, NState} end);
+    bid_aqm_post(State);
 timeout_post(#state{bids=[]} = State) ->
-    ask_post(State, fun(NState) -> {true, NState} end).
+    ask_aqm_post(State).
 
 cancel_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
                    done=Done}) ->
@@ -362,36 +344,52 @@ cancel_next(#state{bids=[]} = State, _, [_, Client]) ->
 
 cancel_post(#state{asks=[]} = State, [_, Client], Result) ->
     bid_post(State,
-             fun(#state{bids=Bids} = NState) ->
+             fun(#state{bids=Bids}) ->
                      case lists:member(Client, Bids) of
                          true when Result =:= 1 ->
-                             {true, NState#state{bids=Bids--[Client]}};
+                             true;
                          true ->
                              ct:pal("Cancel: ~p", [Result]),
-                             {false, NState#state{bids=Bids--[Client]}};
+                             false;
                          false when Result =:= false ->
-                             {true, NState};
+                             true;
                          false ->
                              ct:pal("Cancel: ~p", [Result]),
-                             {false, NState}
+                             false
                      end
              end);
 cancel_post(#state{bids=[]} = State, [_, Client], Result) ->
     ask_post(State,
-             fun(#state{asks=Asks} = NState) ->
+             fun(#state{asks=Asks}) ->
                      case lists:member(Client, Asks) of
                          true when Result =:= 1 ->
-                             {true, NState#state{asks=Asks--[Client]}};
+                             true;
                          true ->
                              ct:pal("Cancel: ~p", [Result]),
-                             {false, NState#state{asks=Asks--[Client]}};
+                             false;
                          false when Result =:= false ->
-                             {true, NState};
+                             true;
                          false ->
                              ct:pal("Cancel: ~p", [Result]),
-                             {false, NState}
+                             false
                      end
              end).
+
+len_args(#state{sbroker=Broker}) ->
+    [Broker, oneof([ask, bid])].
+
+len(Broker, ask) ->
+    sbroker:len(Broker, ?TIMEOUT);
+len(Broker, bid) ->
+    sbroker:len_r(Broker, ?TIMEOUT).
+
+len_next(State, _, _) ->
+    timeout_next(State).
+
+len_post(#state{asks=Asks} = State, [_, ask], Len) ->
+    length(Asks) =:= Len andalso timeout_post(State);
+len_post(#state{bids=Bids} = State, [_, bid], Len) ->
+    length(Bids) =:= Len andalso timeout_post(State).
 
 change_config_args(#state{sbroker=Broker}) ->
     [Broker, init()].
@@ -406,35 +404,91 @@ change_config_next(State, _, [_, bad]) ->
     timeout_next(State);
 change_config_next(State, _,
                    [_, {ok, {AskQueueSpec, BidQueueSpec, _}}]) ->
-    NState = ask_change(AskQueueSpec, State),
-    NState2 = bid_change(BidQueueSpec, NState),
-    timeout_next(NState2).
+    NState = ask_change_next(AskQueueSpec, State),
+    bid_change_next(BidQueueSpec, NState).
 
-%% If Mod Args the same the state of the squeue does not change.
-ask_change({_, AskDrops, AskOut, AskSize, AskDrop},
-           #state{ask_drops=AskDrops} = State) ->
-    State#state{ask_out=AskOut, ask_size=AskSize, ask_drop=AskDrop};
-ask_change({_, AskDrops, AskOut, AskSize, AskDrop}, State) ->
-    State#state{ask_out=AskOut, ask_drops=AskDrops, ask_state=AskDrops,
-                ask_size=AskSize, ask_drop=AskDrop}.
+%% If module and args the same state not changed by backends.
+ask_change_next({AskMod, {AskOut, AskDrops}},
+           #state{ask_mod=AskMod, ask_drops=AskDrops} = State) ->
+    ask_aqm_next(State#state{ask_out=AskOut});
+%% If module and/or args different reset the backend state.
+ask_change_next({AskMod, {AskOut, AskDrops}}, #state{ask_mod=AskMod} = State) ->
+    ask_aqm_next(State#state{ask_mod=AskMod, ask_out=AskOut, ask_drops=AskDrops,
+                             ask_state=AskDrops});
+ask_change_next({AskMod, {AskOut, AskDrops}}, #state{asks=Asks} = State) ->
+    NState = State#state{ask_mod=AskMod, asks=[], ask_out=AskOut,
+                         ask_drops=AskDrops, ask_state=AskDrops},
+    In = fun(Client, StateAcc) ->
+                 ask_next(StateAcc,
+                          fun(#state{asks=NAsks} = NStateAcc) ->
+                                  NStateAcc#state{asks=NAsks++[Client]}
+                          end)
+         end,
+    lists:foldl(In, NState, Asks).
 
-bid_change({_, BidDrops, BidOut, BidSize, BidDrop},
-           #state{bid_drops=BidDrops} = State) ->
-    State#state{bid_out=BidOut, bid_size=BidSize, bid_drop=BidDrop};
-bid_change({_, BidDrops, BidOut, BidSize, BidDrop}, State) ->
-    State#state{bid_out=BidOut, bid_drops=BidDrops, bid_state=BidDrops,
-                bid_size=BidSize, bid_drop=BidDrop}.
+bid_change_next({BidMod, {BidOut, BidDrops}},
+           #state{bid_mod=BidMod, bid_drops=BidDrops} = State) ->
+    bid_aqm_next(State#state{bid_out=BidOut});
+bid_change_next({BidMod, {BidOut, BidDrops}}, #state{bid_mod=BidMod} = State) ->
+    bid_aqm_next(State#state{bid_mod=BidMod, bid_out=BidOut, bid_drops=BidDrops,
+                             bid_state=BidDrops});
+bid_change_next({BidMod, {BidOut, BidDrops}}, #state{bids=Bids} = State) ->
+    NState = State#state{bid_mod=BidMod, bids=[], bid_out=BidOut,
+                         bid_drops=BidDrops, bid_state=BidDrops},
+    In = fun(Client, StateAcc) ->
+                 bid_next(StateAcc,
+                          fun(#state{bids=NBids} = NStateAcc) ->
+                                  NStateAcc#state{bids=NBids++[Client]}
+                          end)
+         end,
+    lists:foldl(In, NState, Bids).
 
 change_config_post(State, [_, ignore], ok) ->
     timeout_post(State);
-change_config_post(State, [_, bad], {error, {bad_return, bad}}) ->
+change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     timeout_post(State);
 change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}], ok) ->
-    NState = ask_change(AskQueueSpec, State),
-    NState2 = bid_change(BidQueueSpec, NState),
-    timeout_post(NState2);
+    ask_change_post(AskQueueSpec, State) andalso
+    bid_change_post(BidQueueSpec, State);
 change_config_post(_, _, _) ->
     false.
+
+ask_change_post({AskMod, {AskOut, AskDrops}},
+           #state{ask_mod=AskMod, ask_drops=AskDrops} = State) ->
+    ask_aqm_post(State#state{ask_out=AskOut});
+%% If module and/or args different reset the backend state.
+ask_change_post({AskMod, {AskOut, AskDrops}}, #state{ask_mod=AskMod} = State) ->
+    ask_aqm_post(State#state{ask_mod=AskMod, ask_out=AskOut, ask_drops=AskDrops,
+                             ask_state=AskDrops});
+ask_change_post({AskMod, {AskOut, AskDrops}}, #state{asks=Asks} = State) ->
+    NState = State#state{ask_mod=AskMod, asks=[], ask_out=AskOut,
+                         ask_drops=AskDrops, ask_state=AskDrops},
+    In = fun(Client, {true, StateAcc}) ->
+                 {Drops, #state{asks=NAsks} = NStateAcc} = ask_aqm(StateAcc),
+                 {drops_post(Drops), NStateAcc#state{asks=NAsks++[Client]}};
+            (_, {false, _} = Acc) ->
+                 Acc
+         end,
+    {Result, _} = lists:foldl(In, {true, NState}, Asks),
+    Result.
+
+bid_change_post({BidMod, {BidOut, BidDrops}},
+                #state{bid_mod=BidMod, bid_drops=BidDrops} = State) ->
+    bid_aqm_post(State#state{bid_out=BidOut});
+bid_change_post({BidMod, {BidOut, BidDrops}}, #state{bid_mod=BidMod} = State) ->
+    bid_aqm_post(State#state{bid_mod=BidMod, bid_out=BidOut, bid_drops=BidDrops,
+                             bid_state=BidDrops});
+bid_change_post({BidMod, {BidOut, BidDrops}}, #state{bids=Bids} = State) ->
+    NState = State#state{bid_mod=BidMod, bids=[], bid_out=BidOut,
+                         bid_drops=BidDrops, bid_state=BidDrops},
+    In = fun(Client, {true, StateAcc}) ->
+                 {Drops, #state{bids=NBids} = NStateAcc} = ask_aqm(StateAcc),
+                 {drops_post(Drops), NStateAcc#state{bids=NBids++[Client]}};
+            (_, {false, _} = Acc) ->
+                 Acc
+         end,
+    {Result, _} = lists:foldl(In, {true, NState}, Bids),
+    Result.
 
 shutdown_client_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
                    done=Done}) ->
@@ -467,39 +521,32 @@ shutdown_client(_, Client) ->
     end.
 
 shutdown_client_next(#state{asks=[]} = State, _, [_, undefined]) ->
-    bid_next(State, fun(NState) -> NState end);
+    bid_aqm_next(State);
 shutdown_client_next(#state{bids=[]} = State, _, [_, undefined]) ->
-    ask_next(State, fun(NState) -> NState end);
+    ask_aqm_next(State);
 shutdown_client_next(#state{bids=Bids, asks=Asks, cancels=Cancels,
                             done=Done} = State, _, [_, Client]) ->
-    case {lists:member(Client, Bids), lists:member(Client, Asks)} of
-        {true, false} ->
-            #state{bids=NBids, done=NDone} = NState = bid_aqm_next(State),
-            NState2 = NState#state{bids=NBids--[Client], done=NDone--[Client]},
-            bid_pqm_next(NState2);
-        {false, true} ->
-            #state{asks=NAsks, done=NDone} = NState = ask_aqm_next(State),
-            NState2 = NState#state{asks=NAsks--[Client], done=NDone--[Client]},
-            ask_pqm_next(NState2);
-        {false, false} ->
+    case lists:member(Client, Bids) orelse lists:member(Client, Asks) of
+        true ->
+            #state{bids=NBids} = NState = bid_aqm_next(State),
+            NState2 = NState#state{bids=NBids--[Client]},
+            #state{asks=NAsks, done=NDone} = NState3 = ask_aqm_next(NState2),
+            NState3#state{asks=NAsks--[Client], done=NDone--[Client]};
+        false ->
             State#state{cancels=Cancels--[Client], done=Done--[Client]}
     end.
 
 shutdown_client_post(#state{asks=[]} = State, [_, undefined], _) ->
-    bid_post(State, fun(NState) -> {true, NState} end);
+    bid_aqm_post(State);
 shutdown_client_post(#state{bids=[]} = State, [_, undefined], _) ->
-    ask_post(State, fun(NState) -> {true, NState} end);
+    ask_aqm_post(State);
 shutdown_client_post(#state{asks=Asks, bids=Bids} = State, [_, Client], _) ->
-    case {lists:member(Client, Asks), lists:member(Client, Bids)} of
-        {true, false} ->
-            {Drops, #state{bids=NBids} = NState} = bid_aqm(State),
-            NState2 = NState#state{bids=NBids--[Client]},
-            drops_post(Drops--[Client]) andalso bid_pqm_post(NState2);
-        {false, true} ->
-            {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
-            NState2 = NState#state{asks=NAsks--[Client]},
-            drops_post(Drops--[Client]) andalso ask_pqm_post(NState2);
-        {false, false} ->
+    case lists:member(Client, Asks) orelse lists:member(Client, Bids) of
+        true ->
+            {Drops1, NState} = bid_aqm(State),
+            {Drops2, _} = ask_aqm(NState),
+            drops_post(Drops1--[Client]) andalso drops_post(Drops2--[Client]);
+        false ->
             true
     end.
 
@@ -507,23 +554,19 @@ shutdown_client_post(#state{asks=Asks, bids=Bids} = State, [_, Client], _) ->
 
 bid_next(State, Fun) ->
     NState = bid_aqm_next(State),
-    NState2 = Fun(NState),
-    bid_pqm_next(NState2).
+    Fun(NState).
 
 bid_post(State, Fun) ->
     {Drops, NState} = bid_aqm(State),
-    {Result, NState2} = Fun(NState),
-    Result andalso drops_post(Drops) andalso bid_pqm_post(NState2).
+    Fun(NState) andalso drops_post(Drops).
 
 ask_next(State, Fun) ->
     NState = ask_aqm_next(State),
-    NState2 = Fun(NState),
-    ask_pqm_next(NState2).
+    Fun(NState).
 
 ask_post(State, Fun) ->
     {Drops, NState} = ask_aqm(State),
-    {Result, NState2} = Fun(NState),
-    Result andalso drops_post(Drops) andalso ask_pqm_post(NState2).
+    Fun(NState) andalso drops_post(Drops).
 
 droplast([]) ->
     [];
@@ -539,6 +582,10 @@ dropfirst([_ | Rest]) ->
 bid_aqm_next(State) ->
     {_, NState} = bid_aqm(State),
     NState.
+
+bid_aqm_post(State) ->
+    {Drops, _} = bid_aqm(State),
+    drops_post(Drops).
 
 bid_aqm(#state{bids=[]} = State) ->
     {[], State};
@@ -556,6 +603,10 @@ ask_aqm_next(State) ->
     {_, NState} = ask_aqm(State),
     NState.
 
+ask_aqm_post(State) ->
+    {Drops, _} = ask_aqm(State),
+    drops_post(Drops).
+
 ask_aqm(#state{asks=[]} = State) ->
     {[], State};
 ask_aqm(#state{ask_state=[], ask_drops=[]} = State) ->
@@ -563,7 +614,7 @@ ask_aqm(#state{ask_state=[], ask_drops=[]} = State) ->
 ask_aqm(#state{ask_state=[], ask_drops=AskDrops} = State) ->
     ask_aqm(State#state{ask_state=AskDrops});
 ask_aqm(#state{asks=Asks, ask_state=[AskDrop | NAskState],
-                done=Done} = State) ->
+               done=Done} = State) ->
     AskDrop2 = min(length(Asks), AskDrop),
     {Drops, NAsks} = lists:split(AskDrop2, Asks),
     {Drops, State#state{asks=NAsks, ask_state=NAskState, done=Done++Drops}}.
@@ -608,66 +659,6 @@ retry_post(Client) ->
 
 result(Client) ->
     client_call(Client, result).
-
-bid_pqm_next(#state{bids=Bids, bid_size=BidSize, bid_drop=BidDrop} = State)
-  when length(Bids) > BidSize ->
-    {Drops, #state{bids=NBids} = NState} = bid_aqm(State),
-    case Drops of
-        [] when BidDrop =:= drop ->
-            bid_pqm_next(NState#state{bids=dropfirst(NBids)});
-        [] when BidDrop =:= drop_r ->
-            bid_pqm_next(NState#state{bids=droplast(NBids)});
-        _ ->
-            bid_pqm_next(NState)
-    end;
-bid_pqm_next(State) ->
-    State.
-
-bid_pqm_post(#state{bids=Bids, bid_size=BidSize, bid_drop=BidDrop} = State)
-  when length(Bids) > BidSize ->
-    {Drops, #state{bids=NBids} = NState} = bid_aqm(State),
-    case Drops of
-        [] when BidDrop =:= drop ->
-            drops_post(Drops) andalso
-            bid_pqm_post(NState#state{bids=dropfirst(NBids)});
-        [] when BidDrop =:= drop_r ->
-            drops_post(Drops) andalso
-            bid_pqm_post(NState#state{bids=droplast(NBids)});
-        _ ->
-            drops_post(Drops) andalso bid_pqm_post(NState)
-    end;
-bid_pqm_post(_) ->
-    true.
-
-ask_pqm_next(#state{asks=Asks, ask_size=AskSize, ask_drop=AskDrop} = State)
-  when length(Asks) > AskSize ->
-    {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
-    case Drops of
-        [] when AskDrop =:= drop ->
-            ask_pqm_next(NState#state{asks=dropfirst(NAsks)});
-        [] when AskDrop =:= drop_r ->
-            ask_pqm_next(NState#state{asks=droplast(NAsks)});
-        _ ->
-            ask_pqm_next(NState)
-    end;
-ask_pqm_next(State) ->
-    State.
-
-ask_pqm_post(#state{asks=Asks, ask_size=AskSize, ask_drop=AskDrop} = State)
-  when length(Asks) > AskSize ->
-    {Drops, #state{asks=NAsks} = NState} = ask_aqm(State),
-    case Drops of
-        [] when AskDrop =:= drop ->
-            drops_post(Drops) andalso
-            ask_pqm_post(NState#state{asks=dropfirst(NAsks)});
-        [] when AskDrop =:= drop_r ->
-            drops_post(Drops) andalso
-            ask_pqm_post(NState#state{asks=droplast(NAsks)});
-        _ ->
-            drops_post(Drops) andalso ask_pqm_post(NState)
-    end;
-ask_pqm_post(_) ->
-    true.
 
 %% client
 

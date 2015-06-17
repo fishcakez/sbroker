@@ -34,12 +34,10 @@
 -spec start_link() -> {ok, Pid} when
       Pid :: pid().
 start_link() ->
-    sbroker:start_link(?MODULE, undefined, []).
+    sbroker:start_link(?MODULE, undefined, [{time_unit, milli_seconds}]).
 
 %% sbroker api
 
 init(undefined) ->
-    Timeout = sbroker_time:milli_seconds_to_native(200),
-    QSpec = {squeue_timeout, Timeout, out, infinity, drop},
-    Interval = 100,
-    {ok, {QSpec, QSpec, Interval}}.
+    QSpec = {sbroker_timeout_queue, {out, 200, drop, infinity}},
+    {ok, {QSpec, QSpec, 200}}.

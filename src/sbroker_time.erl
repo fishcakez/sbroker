@@ -17,74 +17,77 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @doc This module provides time utility functions.
+%% @doc This module provides a behaviour for reading the time and utility
+%% functions to get the current time.
 %%
-%% `sbroker' uses the `native' time units of the VM to measure time. Conversion
-%% functions to and from milliseconds are provided as a convenience.
+%% The `sbroker_time' behaviour has two callbacks:
+%% ```
+%% -callback monotonic_time() :: Time :: integer().
+%% -callback monotonic_time(TimeUnit :: unit()) -> Time :: integer().
+%% '''
+%% `monotonic_time/1' should return the time in the given time unit as an
+%% integer. `monotonic_time/0' should be equivalent to `monotonic_time(native)'.
 %%
-%% Prior to 18.0, the `native' time units will always be microseconds. For
+%% The `TimeUnit' is a named time unit: `native', `nano_seconds',
+%% `micro_seconds', `milli_seconds' or `seconds', or a `pos_integer()', which
+%% is the integer increment for a second. For example `1000' is equivalent to
+%% `milli_seconds' and `1000000' is equivalent to `micro_seconds'.
+%%
+%% Prior to 18.0, the `native' time units will always be `micro_seconds'. For
 %% releases greater than and including 18.0 see the "Time and Time Correction"
 %% chapter in the OTP documentation for more information. `sbroker' is multi
 %% time warp safe and designed to be used with multi time warps.
 -module(sbroker_time).
 
--compile(nowarn_deprecated_function).
+%% public api
 
--export([native/0]).
--export([milli_seconds/0]).
--export([native_to_milli_seconds/1]).
--export([milli_seconds_to_native/1]).
+-export([monotonic_time/0]).
+-export([monotonic_time/1]).
 
-%% @doc Get the time, `Native', as an `integer()' in the `native' time units.
--spec native() -> Native when
-      Native :: integer().
-native() ->
+%% types
+
+-type unit() ::
+    native | nano_seconds | micro_seconds | milli_seconds | seconds |
+    pos_integer().
+
+-export_type([unit/0]).
+
+-callback monotonic_time() -> Time :: integer().
+-callback monotonic_time(TimeUnit :: unit()) -> Time :: integer().
+
+%% @doc Get the time, `Time', as an `integer()' in the `native' time units.
+%%
+%% Uses `erlang:monotonic_time/0' if it is exported, otherwise falls back to
+%% `sbroker_legacy:monotonic_time/0'.
+%%
+%% @see erlang:monotonic_time/0
+%% @see sbroker_legacy:monotonic_time/0
+-spec monotonic_time() -> Time when
+      Time :: integer().
+monotonic_time() ->
     try erlang:monotonic_time() of
-        Native ->
-            Native
-    catch
-        error:undef ->
-            {Mega, Sec, Micro} = erlang:now(),
-            ((Mega * 1000000 + Sec) * 1000000) + Micro
-    end.
-
-%% @doc Get the time, `MilliSeconds', as an `integer()' in milliseconds.
--spec milli_seconds() -> MilliSeconds when
-      MilliSeconds :: integer().
-milli_seconds() ->
-    try erlang:monotonic_time(milli_seconds) of
-        MilliSeconds ->
-            MilliSeconds
-    catch
-        error:undef ->
-            {Mega, Sec, Micro} = erlang:now(),
-            ((Mega * 1000000 + Sec) * 1000) + (Micro div 1000)
-    end.
-
-%% @doc Convert a time, `Native', in `native' time units to milliseconds,
-%% `MilliSeconds'.
--spec native_to_milli_seconds(Native) -> MilliSeconds when
-      Native :: integer(),
-      MilliSeconds :: integer().
-native_to_milli_seconds(Native) ->
-    try erlang:convert_time_unit(Native, native, milli_seconds) of
-        MilliSeconds ->
-            MilliSeconds
-    catch
-        error:undef ->
-            Native div 1000
-    end.
-
-%% @doc Convert a time, `MilliSeconds', in milliseconds to `native' time units,
-%% `Native'.
--spec milli_seconds_to_native(MilliSeconds) -> Native when
-      Native :: integer(),
-      MilliSeconds :: integer().
-milli_seconds_to_native(MilliSeconds) ->
-    try erlang:convert_time_unit(MilliSeconds, milli_seconds, native) of
         Time ->
             Time
     catch
         error:undef ->
-            MilliSeconds * 1000
+            sbroker_legacy:monotonic_time()
+    end.
+
+%% @doc Get the time, `Time', as an `integer()' in the `TimeUnit' time units.
+%%
+%% Use `erlang:monotonic_time/1' if it is exported, otherwise falls back to
+%% `sbroker_legacy:monotonic_time/1'.
+%%
+%% @see erlang:monotonic_time/1
+%% @see sbroker_legacy:monotonic_time/1
+-spec monotonic_time(TimeUnit) -> Time when
+      TimeUnit :: unit(),
+      Time :: integer().
+monotonic_time(TimeUnit) ->
+    try erlang:monotonic_time(TimeUnit) of
+        Time ->
+            Time
+    catch
+        error:undef ->
+            sbroker_legacy:monotonic_time(TimeUnit)
     end.

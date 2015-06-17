@@ -41,25 +41,16 @@
 %%
 %% A broker requires a callback module. The callback modules implements one
 %% callback, `init/1', with single argument `Args'. `init/1' should return
-%% `{ok, {AskQueueSpec, AskRQueueSpec, Interval})' or `ignore'. `AskQueuSpec' is
+%% `{ok, {AskQueueSpec, AskRQueueSpec, Timeout})' or `ignore'. `AskQueuSpec' is
 %% the queue specification for the `ask' queue and `AskRQueueSpec' is the queue
-%% specification for the `ask_r' queue. `Interval' is the interval in
-%% milliseconds that the active queue is polled. This ensures that the active
-%% queue management strategy is applied even if no processes are
-%% enqueued/dequeued. In the case of `ignore' the broker is not started and
-%% `start_link' returns `ignore'.
+%% specification for the `ask_r' queue. `Timeout' is the timeout in
+%% milliseconds that the active queue is polled when the broker is idle. This
+%% ensures that the active queue management strategy is applied even if no
+%% processes are enqueued/dequeued. In the case of `ignore' the broker is not
+%% started and `start_link' returns `ignore'.
 %%
-%% A queue specifcation takes the following form:
-%% `{Module, Args, Out, Size, Drop}'. `Module' is the `squeue' callback module
-%% and `Args' are its arguments. The queue is created using
-%% `squeue:new(Time, Module, Args)', where `Time' is chte current time in
-%% `native' time units. `Out' defines the method of dequeuing, it is either the
-%% atom `out' (dequeue items from the head, i.e. FIFO), or the atom `out_r'
-%% (dequeue items from the tail, i.e. LIFO). `Size' is the maximum size of the
-%% queue, it is either a `non_neg_integer()' or `infinity'. `Drop' defines the
-%% strategy to take when the maximum size, `Size', of the queue is exceeded. It
-%% is either the atom `drop' (drop from the head of the queue, i.e. head drop)
-%% or `drop_r' (drop from the tail of the queue, i.e. tail drop).
+%% A queue specifcation takes the following form: `{Module, Args}'. `Module' is
+%% the `sbroker' callback module and `Args' are its arguments.
 %%
 %% For example:
 %%
@@ -83,10 +74,10 @@
 %%     sbroker:ask_r(?MODULE).
 %%
 %% init([]) ->
-%%     AskQueueSpec = {squeue_codel, {5, 100}, out, 64, drop},
-%%     AskRQueueSpec = {squeue_timeout, 5000, out_r, infinity, drop},
-%%     Interval = 200,
-%%     {ok, {AskQueueSpec, AskRQueueSpec, Interval}}.
+%%     AskQueueSpec = {sbroker_codel_queue, {out, 5, 100, drop_r, 64}},
+%%     AskRQueueSpec = {sbroker_timeout_queue, {out_r, 5000, drop, infinity}},
+%%     Timeout = 200,
+%%     {ok, {AskQueueSpec, AskRQueueSpec, Timeout}}.
 %% '''
 -module(sbroker).
 
@@ -100,6 +91,7 @@
 -export([async_ask/2]).
 -export([async_ask_r/1]).
 -export([async_ask_r/2]).
+
 -export([await/2]).
 -export([cancel/3]).
 -export([change_config/2]).
@@ -138,13 +130,11 @@
 -type debug_option() ::
     trace | log | {log, pos_integer()} | statistics |
     {log_to_file, file:filename()} | {install, {fun(), any()}}.
--type time_unit() ::
-    native | nano_seconds | micro_seconds | milli_seconds | seconds |
-    pos_integer().
 -type start_option() ::
     {debug, debug_option()} | {timeout, timeout()} |
     {spawn_opt, [proc_lib:spawn_option()]} | {time_module, module()} |
-    {time_unit, time_unit()}.
+    {time_unit, sbroker_time:unit()} |
+    {read_time_after, non_neg_integer() | infinity}.
 -type start_return() :: {ok, pid()} | ignore | {error, any()}.
 -type queue_spec() :: {module(), any(), out | out_r,
                        non_neg_integer() | infinity, drop | drop_r}.
@@ -161,8 +151,13 @@
                  dbg :: [sys:dbg_opt()],
                  name :: name() | pid(),
                  time_mod :: module(),
-                 time_unit :: time_unit(),
+                 time_unit :: sbroker_time:unit(),
+                 read_time_after :: non_neg_integer() | infinity,
+                 ask_mod :: module(),
+                 bid_mod :: module(),
                  timeout :: timeout()}).
+
+-dialyzer(no_return).
 
 %% public api
 
@@ -171,10 +166,10 @@
 %% or `{drop, SojournTime}'.
 %%
 %% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
-%% matched process. `RelativeTime' is the time (in `native' time units) spent
+%% matched process. `RelativeTime' is the time (in the broker's time unit) spent
 %% waiting for a match after discounting time spent waiting for the broker to
 %% handle requests. `SojournTime' is the time spent in both the broker's message
-%% queue and internal queue, in `native' time units.
+%% queue and internal queue.
 %%
 %% `RelativeTime' represents the `SojournTime' without the overhead of the
 %% broker. The value measures the level of queue congestion without being
@@ -183,19 +178,18 @@
 %% If `RelativeTime' is positive, the request was enqueued in the internal
 %% queue awaiting a match with another request sent approximately `RelativeTime'
 %% after this request was sent. Therefore `SojournTime' minus `RelativeTime'
-%% is the latency, or overhead, of the broker in `native' time units.
+%% is the latency, or overhead, of the broker.
 %%
 %% If `RelativeTime' is negative, the request dequeued a request in the internal
 %% queue that was sent approximately `RelativeTime' before this request was
-%% sent. Therefore `SojournTime' is the latency, or overhead, of the broker in
-%% `native' time units.
+%% sent. Therefore `SojournTime' is the latency, or overhead, of the broker.
 %%
 %% If `RelativeTime' is `0', the request was matched with a request sent at
 %% approximately the same time. Therefore `SojournTime' is the latency, or
-%% overhead, of the broker in `native' time units.
+%% overhead, of the broker.
 %%
-%% The sojourn time for `Pid' (in `native' time units) can be approximated by
-%% `SojournTime' minus `RelativeTime'.
+%% The sojourn time for `Pid' can be approximated by `SojournTime' minus
+%% `RelativeTime'.
 -spec ask(Broker) -> Go | Drop when
       Broker :: broker(),
       Go :: {go, Ref, Pid, RelativeTime, SojournTime},
@@ -227,10 +221,9 @@ ask_r(Broker) ->
 %% `{retry, SojournTime}'.
 %%
 %% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
-%% matched process. `RelativeTime' is the time (in `native' time units) spent
-%% waiting for a match after discounting time spent waiting for the broker to
-%% handle requests. `SojournTime' is the time spent in the broker's message
-%% queue in `native' time units.
+%% matched process. `RelativeTime' is the time spent waiting for a match after
+%% discounting time spent waiting for the broker to handle requests.
+%% `SojournTime' is the time spent in the broker's message queue.
 %%
 %% @see ask/1
 -spec nb_ask(Broker) -> Go | Retry when
@@ -401,7 +394,19 @@ len(Broker, Timeout) ->
 len_r(Broker, Timeout) ->
     call(Broker, len_bid, undefined, Timeout).
 
-%% @doc Starts a broker with callback module `Module' and argument `Args'.
+%% @doc Starts a broker with callback module `Module' and argument `Args', and
+%% broker options `Opts'.
+%%
+%% `Opts' is a `proplist' and supports `debug', `timeout' and `spawn_opt' used
+%% by `gen_server' and `gen_fsm'. `time_module' sets the `sbroker_time'
+%% callback module, which defaults to `erlang' if `erlang:monotonic_time/1' is
+%% exported, otherwise `sbroker_legacy', which uses `erlang:now/0'. The time
+%% units are set with `time_unit', which defaults to `native'. `read_time_after'
+%% sets the number of requests when a cached time is stale and the time is read
+%% again. Its value is a `non_neg_integer()' or `infinity' and defaults to `16'.
+%%
+%% @see gen_server:start_link/3
+%% @see sbroker_time
 -spec start_link(Module, Args, Opts) -> StartReturn when
       Module :: module(),
       Args :: any(),
@@ -411,7 +416,9 @@ start_link(Mod, Args, Opts) ->
     gen:start(?MODULE, link, Mod, Args, Opts).
 
 %% @doc Starts a broker with name `Name', callback module `Module' and argument
-%% `Args'.
+%% `Args', and broker options `Opts'.
+%%
+%% @see start_link/3
 -spec start_link(Name, Module, Args, Opts) -> StartReturn when
       Name :: name(),
       Module :: module(),
@@ -440,13 +447,14 @@ init_it(Starter, self, Name, Mod, Args, Opts) ->
 init_it(Starter, Parent, Name, Mod, Args, Opts) ->
     DbgOpts = proplists:get_value(debug, Opts, []),
     Dbg = sys:debug_options(DbgOpts),
-    {TimeMod, TimeUnit} = time_options(Opts),
+    {TimeMod, TimeUnit, ReadAfter} = time_options(Opts),
     _ = put('$initial_call', {Mod, init, 1}),
     try Mod:init(Args) of
-        {ok, {AskArgs, BidArgs, Timeout}} ->
+        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, Timeout}} ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
                              name=Name, time_mod=TimeMod, time_unit=TimeUnit,
-                             timeout=Timeout},
+                             read_time_after=ReadAfter, ask_mod=AskMod,
+                             bid_mod=BidMod, timeout=Timeout},
             init_asks(Starter, AskArgs, BidArgs, Config);
         ignore ->
             init_stop(Starter, Name, ignore, normal);
@@ -473,28 +481,24 @@ system_continue(Parent, Dbg, [State, _, Send, Asks, Bids, Config]) ->
     end.
 
 %% @private
-system_code_change([State, Time, Send, Asks, Bids, Config], _, _, _) ->
-    try config_change(Time, Asks, Bids, Config) of
-        {ok, {NAsks, NBids, NConfig}} ->
-            {ok, [State, Send, NAsks, NBids, NConfig]};
-        {error, _} = Error ->
-            Error
-    catch
-        Class:Reason ->
-            Stack = erlang:get_stacktrace(),
-            {error, reason(Class, Reason, Stack)}
-    end.
+system_code_change(Misc, _, _, _) ->
+    {ok, Misc}.
 
 %% @private
-system_get_state([_, _, _, Asks, Bids, _]) ->
-    {ok, [{ask, Asks}, {ask_r, Bids}]}.
+system_get_state([_, _, _, Asks, Bids,
+                  #config{ask_mod=AskMod, bid_mod=BidMod}]) ->
+    Callbacks = [{AskMod, ask_queue, Asks},
+                 {BidMod, ask_r_queue, Bids}],
+    {ok, Callbacks}.
 
 %% @private
-system_replace_state(Replace, [State, Time, Send, Asks, Bids, Config]) ->
-    {ask, NAsks} = Replace({ask, Asks}),
-    {ask_r, NBids} = Replace({ask_r, Bids}),
-    {ok, [{ask, NAsks}, {ask_r, NBids}],
-     [State, Time, Send, NAsks, NBids, Config]}.
+system_replace_state(Replace,
+                     [State, Time, Send, Asks, Bids,
+                      #config{ask_mod=AskMod, bid_mod=BidMod} = Config]) ->
+    {AskMod, ask_queue, NAsks} = AskRes = Replace({AskMod, ask_queue, Asks}),
+    BidRes = Replace({BidMod, ask_r_queue, Bids}),
+    {BidMod, ask_r_queue, NBids} = BidRes,
+    {ok, [AskRes, BidRes], [State, Time, Send, NAsks, NBids, Config]}.
 
 %% @private
 system_terminate(Reason, _, _, _) ->
@@ -548,7 +552,8 @@ send(Broker, Msg) ->
 time_options(Opts) ->
     TimeMod = proplists:get_value(time_module, Opts, time_module()),
     TimeUnit = proplists:get_value(time_unit, Opts, native),
-    {TimeMod, TimeUnit}.
+    ReadAfter = proplists:get_value(read_time_after, Opts, ?READ_TIME_AFTER),
+    {TimeMod, TimeUnit, ReadAfter}.
 
 time_module() ->
     case erlang:function_exported(erlang, monotonic_time, 1) of
@@ -573,37 +578,39 @@ unregister_name({via, Mod, Name}) ->
 unregister_name(Self) when is_pid(Self) ->
     ok.
 
-init_exception(Starter, Name, Class, Reason, Stack) ->
-    NReason = reason(Class, Reason, Stack),
-    init_stop(Starter, Name, {error, NReason}, NReason).
-
-reason(throw, Value, Stack) ->
-    {{nocatch, Value}, Stack};
-reason(exit, Reason, _) ->
-    Reason;
-reason(error, Reason, Stack) ->
-    {Reason, Stack}.
-
-init_asks(Starter, AskArgs, BidArgs, #config{name=Name} = Config) ->
+init_asks(Starter, AskArgs, BidArgs, #config{ask_mod=AskMod} = Config) ->
     Time = monotonic_time(Config),
-    try sbroker_queue:new(Time, AskArgs) of
+    try AskMod:init(Time, AskArgs) of
         Asks ->
             init_bids(Starter, Time, Asks, BidArgs, Config)
     catch
         Class:Reason ->
             Stack = erlang:get_stacktrace(),
-            init_exception(Starter, Name, Class, Reason, Stack)
+            init_exception(Starter, Class, Reason, Stack, [], Config)
     end.
 
-init_bids(Starter, Time, Asks, BidArgs, #config{name=Name} = Config) ->
-    try sbroker_queue:new(Time, BidArgs) of
+init_bids(Starter, Time, Asks, BidArgs,
+          #config{bid_mod=BidMod, ask_mod=AskMod} = Config) ->
+    try BidMod:init(Time, BidArgs) of
         Bids ->
             enter_loop(Starter, Asks, Bids, Config)
     catch
         Class:Reason ->
             Stack = erlang:get_stacktrace(),
-            init_exception(Starter, Name, Class, Reason, Stack)
+            Callbacks = [{AskMod, stop, Asks}],
+            init_exception(Starter, Class, Reason, Stack, Callbacks, Config)
     end.
+
+init_exception(Starter, Name, Class, Reason, Stack) ->
+    Reason2 = reason({Class, Reason, Stack}),
+    init_stop(Starter, Name, {error, Reason2}, Reason2).
+
+init_exception(Starter, Class, Reason, Stack, Callbacks,
+               #config{name=Name} = Config) ->
+    Reason2 = {Class, Reason, Stack},
+    NReason = terminate(Reason2, Callbacks, Config),
+    NReason2 = reason(NReason),
+    init_stop(Starter, Name, {error, NReason2}, NReason2).
 
 enter_loop(Starter, Asks, Bids, Config) ->
     proc_lib:init_ack(Starter, {ok, self()}),
@@ -636,8 +643,8 @@ asking_idle(Asks, Bids, #config{timeout=Timeout} = Config) ->
             asking_timeout(Now, Now, 0, Asks, Bids, Config)
     end.
 
-asking_timeout(Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:timeout(Now, Asks) of
+asking_timeout(Now, Send, Seq, Asks, Bids, #config{ask_mod=AskMod} = Config) ->
+    try AskMod:handle_timeout(Now, Asks) of
         NAsks ->
             asking(Now, Send, Seq, NAsks, Bids, Config)
     catch
@@ -645,7 +652,8 @@ asking_timeout(Now, Send, Seq, Asks, Bids, Config) ->
             asking_exception(Class, Reason, Asks, Bids, Config)
     end.
 
-asking(_, Send, ?READ_TIME_AFTER, Asks, Bids, Config) ->
+asking(_, Send, ReadAfter, Asks, Bids,
+       #config{read_time_after=ReadAfter} = Config) ->
     receive
         Msg ->
             Now = monotonic_time(Config),
@@ -657,21 +665,25 @@ asking(Now, Send, Seq, Asks, Bids, Config) ->
             asking(Msg, Now, Send, Seq + 1, Asks, Bids, Config)
     end.
 
-asking({ask, Ask, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:in(Now, Send, Ask, Asks) of
+asking({ask, Ask, _}, Now, Send, Seq, Asks, Bids,
+       #config{ask_mod=AskMod} = Config) ->
+    try AskMod:handle_in(Send, Ask, Now, Asks) of
         NAsks ->
             asking(Now, Send, Seq, NAsks, Bids, Config)
     catch
         Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
     end;
-asking({bid, Bid, _} = Msg, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:out(Now, Asks) of
-        {{AskSojourn, {Ref, Ask}}, NAsks} ->
-            settle(Now, Ref, Now - AskSojourn, Ask, Send, Bid),
+asking({bid, Bid, _} = Msg, Now, Send, Seq, Asks, Bids,
+       #config{ask_mod=AskMod} = Config) ->
+    try AskMod:handle_out(Now, Asks) of
+        {AskSojourn, Ask, NAsks} ->
+            settle(Now, Now - AskSojourn, Ask, Send, Bid),
             asking(Now, Send, Seq, NAsks, Bids, Config);
         {empty, NAsks} ->
-            bidding(Msg, Now, Send, Seq, NAsks, Bids, Config)
+            bidding(Msg, Now, Send, Seq, NAsks, Bids, Config);
+        Other ->
+            asking_return(Other, Asks, Bids, Config)
     catch
         Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
@@ -679,23 +691,29 @@ asking({bid, Bid, _} = Msg, Now, Send, Seq, Asks, Bids, Config) ->
 asking({nb_ask, Ask, _}, Now, Send, Seq, Asks, Bids, Config) ->
     retry(Ask, Now, Send),
     asking_timeout(Now, Send, Seq, Asks, Bids, Config);
-asking({nb_bid, Bid, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:out(Now, Asks) of
-        {{AskSojourn, {Ref, Ask}}, NAsks} ->
-            settle(Now, Ref, Now - AskSojourn, Ask, Send, Bid),
+asking({nb_bid, Bid, _}, Now, Send, Seq, Asks, Bids,
+       #config{ask_mod=AskMod} = Config) ->
+    try AskMod:handle_out(Now, Asks) of
+        {AskSojourn, Ask, NAsks} ->
+            settle(Now, Now - AskSojourn, Ask, Send, Bid),
             asking(Now, Send, Seq, NAsks, Bids, Config);
         {empty, NAsks} ->
             retry(Bid, Now, Send),
-            asking_timeout(Now, Send, Seq, NAsks, Bids, Config)
+            asking_timeout(Now, Send, Seq, NAsks, Bids, Config);
+        Other ->
+            asking_return(Other, Asks, Bids, Config)
     catch
         Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
     end;
-asking({cancel, From, Tag}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:cancel(Now, Tag, Asks) of
+asking({cancel, From, Tag}, Now, Send, Seq, Asks, Bids,
+       #config{ask_mod=AskMod} = Config) ->
+    try AskMod:handle_cancel(Tag, Now, Asks) of
         {Reply, NAsks} ->
             gen:reply(From, Reply),
-            asking(Now, Send, Seq, NAsks, Bids, Config)
+            asking(Now, Send, Seq, NAsks, Bids, Config);
+        Other ->
+            asking_return(Other, Asks, Bids, Config)
     catch
         Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
@@ -714,34 +732,61 @@ asking({'EXIT', Parent, Reason}, _, _, _, _, _, #config{parent=Parent}) ->
     exit(Reason);
 asking({system, From, Msg}, Now, Send, _, Asks, Bids, Config) ->
     system(From, Msg, asking, Now, Send, Asks, Bids, Config);
-asking({'DOWN', Ref, _, _, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:down(Now, Ref, Asks) of
-        NAsks ->
-            asking(Now, Send, Seq, NAsks, Bids, Config)
+asking({change_config, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
+    config_change(From, asking, Now, Send, Seq, Asks, Bids, Config);
+asking({len_ask, From, _}, Now, Send, Seq, Asks, Bids,
+       #config{ask_mod=AskMod} = Config) ->
+    try AskMod:len(Asks) of
+        Len ->
+            gen:reply(From, Len),
+            asking_timeout(Now, Send, Seq, Asks, Bids, Config)
     catch
-         Class:Reason ->
+        Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
     end;
-asking({change_config, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    {NAsks, NBids, NConfig} = safe_config_change(From, Now, Asks, Bids, Config),
-    asking_timeout(Now, Send, Seq, NAsks, NBids, NConfig);
-asking({len_ask, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    Len = sbroker_queue:len(Asks),
-    gen:reply(From, Len),
-    asking_timeout(Now, Send, Seq, Asks, Bids, Config);
 asking({len_bid, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
     gen:reply(From, 0),
     asking_timeout(Now, Send, Seq, Asks, Bids, Config);
 asking(timeout, Now, Send, Seq, Asks, Bids, Config) ->
     asking_timeout(Now, Send, Seq, Asks, Bids, Config);
 asking(Msg, Now, Send, Seq, Asks, Bids, Config) ->
-    error_logger:error_msg("** sbroker ~p received unexpected message: ~n"
-                           "** ~p~n",
-                           [report_name(Config), Msg]),
-    asking_timeout(Now, Send, Seq, Asks, Bids, Config).
+    info_asks(Msg, asking, Now, Send, Seq, Asks, Bids, Config).
 
-asking_exception(Class, Reason, Asks, Bids, Config) ->
-    exception(Class, Reason, ask, Asks, Bids, Config).
+info_asks(Msg, State, Now, Send, Seq, Asks, Bids,
+          #config{ask_mod=AskMod} = Config) ->
+    try AskMod:handle_info(Msg, Now, Asks) of
+        NAsks ->
+            info_bids(Msg, State, Now, Send, Seq, NAsks, Bids, Config)
+    catch
+        Class:Reason ->
+            asking_exception(Class, Reason, Asks, Bids, Config)
+    end.
+
+info_bids(Msg, State, Now, Send, Seq, Asks, Bids,
+          #config{bid_mod=BidMod} = Config) ->
+    try BidMod:handle_info(Msg, Now, Bids) of
+        NBids when State =:= asking ->
+            asking(Now, Send, Seq, Asks, NBids, Config);
+        NBids when State =:= bidding ->
+            bidding(Now, Send, Seq, Asks, NBids, Config)
+    catch
+        Class:Reason ->
+            bidding_exception(Class, Reason, Asks, Bids, Config)
+    end.
+
+asking_return(Return, Asks, Bids,
+              #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    Reason = {bad_return_value, Return},
+    Callbacks = [{AskMod, Reason, Asks},
+                 {BidMod, stop, Bids}],
+    terminate(Reason, Callbacks, Config).
+
+asking_exception(Class, Reason, Asks, Bids,
+                 #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    Reason2 = {Class, Reason, erlang:get_stacktrace()},
+    Callbacks = [{AskMod, Reason2, Asks},
+                 {BidMod, stop, Bids}],
+    terminate(Reason2, Callbacks, Config).
 
 bidding_idle(Asks, Bids, #config{timeout=Timeout} = Config) ->
     receive
@@ -754,8 +799,8 @@ bidding_idle(Asks, Bids, #config{timeout=Timeout} = Config) ->
             bidding_timeout(Now, Now, 0, Asks, Bids, Config)
     end.
 
-bidding_timeout(Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:timeout(Now, Bids) of
+bidding_timeout(Now, Send, Seq, Asks, Bids, #config{bid_mod=BidMod} = Config) ->
+    try BidMod:handle_timeout(Now, Bids) of
         NBids ->
             bidding(Now, Send, Seq, Asks, NBids, Config)
     catch
@@ -763,7 +808,8 @@ bidding_timeout(Now, Send, Seq, Asks, Bids, Config) ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
     end.
 
-bidding(_, Send, ?READ_TIME_AFTER, Asks, Bids, Config) ->
+bidding(_, Send, ReadAfter, Asks, Bids,
+        #config{read_time_after=ReadAfter} = Config) ->
     receive
         Msg ->
             Now = monotonic_time(Config),
@@ -775,21 +821,25 @@ bidding(Now, Send, Seq, Asks, Bids, Config) ->
             bidding(Msg, Now, Send, Seq + 1, Asks, Bids, Config)
     end.
 
-bidding({bid, Bid, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:in(Now, Send, Bid, Bids) of
+bidding({bid, Bid, _}, Now, Send, Seq, Asks, Bids,
+        #config{bid_mod=BidMod} = Config) ->
+    try BidMod:handle_in(Send, Bid, Now, Bids) of
         NBids ->
             bidding(Now, Send, Seq, Asks, NBids, Config)
     catch
         Class:Reason ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
     end;
-bidding({ask, Ask, _} = Msg, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:out(Now, Bids) of
-        {{BidSojourn, {Ref, Bid}}, NBids} ->
-            settle(Now, Ref, Send, Ask, Now - BidSojourn, Bid),
+bidding({ask, Ask, _} = Msg, Now, Send, Seq, Asks, Bids,
+        #config{bid_mod=BidMod} = Config) ->
+    try BidMod:handle_out(Now, Bids) of
+        {BidSojourn, Bid, NBids} ->
+            settle(Now, Send, Ask, Now - BidSojourn, Bid),
             bidding(Now, Send, Seq, Asks, NBids, Config);
         {empty, NBids} ->
-            asking(Msg, Now, Send, Seq, Asks, NBids, Config)
+            asking(Msg, Now, Send, Seq, Asks, NBids, Config);
+        Other ->
+            bidding_return(Other, Asks, Bids, Config)
     catch
         Class:Reason ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
@@ -797,23 +847,29 @@ bidding({ask, Ask, _} = Msg, Now, Send, Seq, Asks, Bids, Config) ->
 bidding({nb_bid, Bid, _}, Now, Send, Seq, Asks, Bids, Config) ->
     retry(Bid, Now, Send),
     bidding_timeout(Now, Send, Seq, Asks, Bids, Config);
-bidding({nb_ask, Ask, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:out(Now, Bids) of
-        {{BidSojourn, {Ref, Bid}}, NBids} ->
-            settle(Now, Ref, Send, Ask, Now - BidSojourn, Bid),
+bidding({nb_ask, Ask, _}, Now, Send, Seq, Asks, Bids,
+        #config{bid_mod=BidMod} = Config) ->
+    try BidMod:handle_out(Now, Bids) of
+        {BidSojourn, Bid, NBids} ->
+            settle(Now, Send, Ask, Now - BidSojourn, Bid),
             bidding(Now, Send, Seq, Asks, NBids, Config);
         {empty, NBids} ->
             retry(Ask, Now, Send),
-            asking_timeout(Now, Send, Seq, Asks, NBids, Config)
+            asking_timeout(Now, Send, Seq, Asks, NBids, Config);
+        Other ->
+            bidding_return(Other, Asks, Bids, Config)
     catch
         Class:Reason ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
     end;
-bidding({cancel, From, Tag}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:cancel(Now, Tag, Bids) of
+bidding({cancel, From, Tag}, Now, Send, Seq, Asks, Bids,
+        #config{bid_mod=BidMod} = Config) ->
+    try BidMod:handle_cancel(Tag, Now, Bids) of
         {Reply, NBids} ->
             gen:reply(From, Reply),
-            bidding(Now, Send, Seq, Asks, NBids, Config)
+            bidding(Now, Send, Seq, Asks, NBids, Config);
+        Other ->
+            bidding_return(Other, Asks, Bids, Config)
     catch
         Class:Reason ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
@@ -832,75 +888,188 @@ bidding({'EXIT', Parent, Reason}, _, _, _, _, _, #config{parent=Parent}) ->
     exit(Reason);
 bidding({system, From, Msg}, Now, Send, _, Asks, Bids, Config) ->
     system(From, Msg, bidding, Now, Send, Asks, Bids, Config);
-bidding({'DOWN', Ref, _, _, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    try sbroker_queue:down(Now, Ref, Bids) of
-        NBids ->
-            bidding(Now, Send, Seq, Asks, NBids, Config)
-    catch
-         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
-    end;
 bidding({change_config, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    {NAsks, NBids, NConfig} = safe_config_change(From, Now, Asks, Bids, Config),
-    bidding_timeout(Now, Send, Seq, NAsks, NBids, NConfig);
+    config_change(From, bidding, Now, Send, Seq, Asks, Bids, Config);
 bidding({len_ask, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
     gen:reply(From, 0),
     bidding_timeout(Now, Send, Seq, Asks, Bids, Config);
-bidding({len_bid, From, _}, Now, Send, Seq, Asks, Bids, Config) ->
-    Len = sbroker_queue:len(Bids),
-    gen:reply(From, Len),
-    bidding_timeout(Now, Send, Seq, Asks, Bids, Config);
+bidding({len_bid, From, _}, Now, Send, Seq, Asks, Bids,
+        #config{bid_mod=BidMod} = Config) ->
+    try BidMod:len(Bids) of
+        Len ->
+            gen:reply(From, Len),
+            bidding_timeout(Now, Send, Seq, Asks, Bids, Config)
+    catch
+        Class:Reason ->
+            bidding_exception(Class, Reason, Asks, Bids, Config)
+    end;
 bidding(timeout, Now, Send, Seq, Asks, Bids, Config) ->
     bidding_timeout(Now, Send, Seq, Asks, Bids, Config);
 bidding(Msg, Now, Send, Seq, Asks, Bids, Config) ->
-    error_logger:error_msg("** sbroker ~p received unexpected message: ~n"
-                           "** ~p~n",
-                           [report_name(Config), Msg]),
-    bidding_timeout(Now, Send, Seq, Asks, Bids, Config).
+    info_asks(Msg, bidding, Now, Send, Seq, Asks, Bids, Config).
 
-bidding_exception(Class, Reason, Asks, Bids, Config) ->
-    exception(Class, Reason, ask_r, Asks, Bids, Config).
 
-settle(Now, MRef, BidSend, {BidPid, _} = Bid, AskSend, {AskPid, _} = Ask) ->
+bidding_return(Return, Asks, Bids,
+               #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    Reason = {bad_return_value, Return},
+    Callbacks = [{AskMod, stop, Asks},
+                 {BidMod, Reason, Bids}],
+    terminate(Reason, Callbacks, Config).
+
+bidding_exception(Class, Reason, Asks, Bids,
+                  #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    Reason2 = {Class, Reason, erlang:get_stacktrace()},
+    Callbacks = [{AskMod, stop, Asks},
+                 {BidMod, Reason2, Bids}],
+    terminate(Reason2, Callbacks, Config).
+
+settle(Now, BidSend, {BidPid, _} = Bid, AskSend, {AskPid, _} = Ask) ->
+    Ref = make_ref(),
     RelativeTime = AskSend - BidSend,
     %% Bid always messaged first.
-    gen:reply(Bid, {go, MRef, AskPid, RelativeTime, Now - BidSend}),
-    gen:reply(Ask, {go, MRef, BidPid, -RelativeTime, Now - AskSend}),
-    demonitor(MRef, [flush]).
+    gen:reply(Bid, {go, Ref, AskPid, RelativeTime, Now - BidSend}),
+    gen:reply(Ask, {go, Ref, BidPid, -RelativeTime, Now - AskSend}).
 
 retry(From, Now, Send) ->
     gen:reply(From, {retry, Now - Send}).
 
-safe_config_change(From, Now, Asks, Bids, Config) ->
-    try config_change(Now, Asks, Bids, Config) of
-        {ok, Result} ->
+config_change(From, State, Now, Send, Seq, Asks, Bids, Config) ->
+    case config_change(Config) of
+        {ok, AskMod, AskArgs, BidMod, BidArgs, NConfig} ->
             gen:reply(From, ok),
-            Result;
-        {error, _} = Error ->
-            gen:reply(From, Error),
-            {Asks, Bids, Config}
-    catch
-        Class:Reason ->
-            Stack = erlang:get_stacktrace(),
-            Error = {error, reason(Class, Reason, Stack)},
-            gen:reply(From, Error),
-            {Asks, Bids, Config}
+            {NAsks, NBids, NConfig2} = change_asks(Now, Asks, AskMod, AskArgs,
+                                                   Bids, BidMod, BidArgs,
+                                                   NConfig),
+            next(State, Now, Send, Seq, NAsks, NBids, NConfig2);
+        ignore  ->
+            gen:reply(From, ok),
+            timeout(State, Now, Send, Seq, Asks, Bids, Config);
+        {error, Reason} ->
+            gen:reply(From, {error, Reason}),
+            timeout(State, Now, Send, Seq, Asks, Bids, Config)
     end.
 
-config_change(_Now, Asks, Bids, #config{mod=Mod, args=Args} = Config) ->
+config_change(#config{mod=Mod, args=Args} = Config) ->
     try Mod:init(Args) of
-        {ok, {AskArgs, BidArgs, Timeout}} ->
-            NAsks = sbroker_queue:config_change(AskArgs, Asks),
-            NBids = sbroker_queue:config_change(BidArgs, Bids),
-            {ok, {NAsks, NBids, Config#config{timeout=Timeout}}};
+        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, Timeout}} ->
+            NConfig = Config#config{timeout=Timeout},
+            {ok, AskMod, AskArgs, BidMod, BidArgs, NConfig};
         ignore ->
-            {ok, {Asks, Bids, Config}};
+            ignore;
         Other ->
-            {error, {bad_return, Other}}
+            {error, {bad_return_value, Other}}
     catch
         Class:Reason ->
-            {error, reason(Class, Reason, erlang:get_stacktrace())}
+            {error, {Class, Reason, erlang:get_stacktrace()}}
     end.
+
+change_asks(Now, Asks, NAskMod, AskArgs, Bids, NBidMod, BidArgs,
+            #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    case change(Now, AskMod, Asks, NAskMod, AskArgs, Config) of
+        {ok, NAsks} ->
+            NConfig = Config#config{ask_mod=NAskMod},
+            change_bids(Now, NAsks, Bids, NBidMod, BidArgs, NConfig);
+        {stop, Reason, Callbacks} ->
+            NCallbacks = [{BidMod, stop, Bids} | Callbacks],
+            terminate(Reason, Config, NCallbacks)
+    end.
+
+change_bids(Now, Asks, Bids, NBidMod, BidArgs,
+            #config{bid_mod=BidMod, ask_mod=AskMod} = Config) ->
+    case change(Now, BidMod, Bids, NBidMod, BidArgs, Config) of
+        {ok, NBids} ->
+            {Asks, NBids, Config#config{bid_mod=NBidMod}};
+        {stop, Reason, Callbacks} ->
+            NCallbacks = [{AskMod, stop, Asks} | Callbacks],
+            terminate(Reason, NCallbacks, Config)
+    end.
+
+change(Now, Mod, State, Mod, Args, _) ->
+    try Mod:config_change(Args, Now, State) of
+        NState ->
+            {ok, NState}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            Callbacks = [{Mod, Reason2, State}],
+            {stop, Reason2, Callbacks}
+    end;
+change(Now, Mod1, State1, Mod2, Args2, Config) ->
+    try Mod1:to_list(State1) of
+        Items when is_list(Items) ->
+            change_init(Now, Items, Mod1, State1, Mod2, Args2, Config);
+        Other ->
+            Reason = {bad_return_value, Other},
+            {stop, Reason, [{Mod1, Reason, State1}]}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            {stop, Reason2, [{Mod1, stop, State1}]}
+    end.
+
+
+change_init(Now, Items, Mod1, State1, Mod2, Args2, Config) ->
+    try Mod2:init(Now,Args2) of
+        State2 ->
+            change_from_list(Items, Now, Mod1, State1, Mod2, State2, Config)
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            change_report(Mod2, Reason2, Args2, Config),
+            {stop, Reason2, [{Mod1, stop, State1}]}
+    end.
+
+change_report(Mod, Reason, Args, Config) ->
+    Tag = {sbroker_queue_stop, start_error},
+    Format = "~i** sbroker_queue ~p failed to install.~n"
+             "** Was installing in ~p~n"
+             "** When queue arguments == ~p~n"
+             "** Reason == ~p~n",
+    Args = [Tag, Mod, report_name(Config), Args, Reason],
+    stop_logger:format(Format, Args).
+
+change_from_list(Items, Now, Mod1, State1, Mod2, State2, Config) ->
+    In = fun(Item, Acc) -> change_in(Item, Now, Mod2, Acc) end,
+    try lists:foldl(In, State2, Items) of
+        NState2 ->
+            change_terminate(Mod1, State1, Mod2, NState2, Config)
+    catch
+        throw:{stop, Reason, Callbacks} ->
+            {stop, Reason, [{Mod1, stop, State1} | Callbacks]};
+        error:function_clause ->
+            Reason = {bad_return_value, Items},
+            {stop, Reason, [{Mod1, Reason, State1}, {Mod2, stop, State2}]}
+    end.
+
+change_in({Send, From}, Now, Mod, State) ->
+    try
+        Mod:handle_in(Send, From, Now, State)
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            throw({stop, Reason2, [{Mod, Reason2, State}]})
+    end.
+
+change_terminate(Mod1, State1, Mod2, State2, Config) ->
+    try Mod1:terminate(change, State1) of
+        _ ->
+            {ok, State2}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(Mod1, Reason2, State1, Config),
+            {error, Reason2, [{Mod2, stop, State2}]}
+    end.
+
+next(asking, Now, Send, Seq, Asks, Bids, Config) ->
+    asking(Now, Send, Seq, Asks, Bids, Config);
+next(bidding, Now, Send, Seq, Asks, Bids, Config) ->
+    bidding(Now, Send, Seq, Asks, Bids, Config).
+
+timeout(asking, Now, Send, Seq, Asks, Bids, Config) ->
+    asking_timeout(Now, Send, Seq, Asks, Bids, Config);
+timeout(bidding, Now, Send, Seq, Asks, Bids, Config) ->
+    bidding_timeout(Now, Send, Seq, Asks, Bids, Config).
 
 system(From, Msg, State, Now, Send, Asks, Bids,
        #config{parent=Parent, dbg=Dbg} = Config) ->
@@ -908,24 +1077,54 @@ system(From, Msg, State, Now, Send, Asks, Bids,
     sys:handle_system_msg(Msg, From, Parent, ?MODULE, Dbg,
                           [State, Now, Send, Asks, Bids, NConfig]).
 
-exception(Class, Reason, State, Asks, Bids, Config) ->
-    Stack = erlang:get_stacktrace(),
-    Report = report_reason(Class, Reason, Stack),
-    Format = "** sbroker ~p terminating ~n"
-             "** When state       == ~p~n"
-             "**      ask queue   == ~p~n"
-             "**      ask_r queue == ~p~n"
-             "** Reason for termination == ~n"
-             "** ~p~n",
-    Args = [report_name(Config), State, Asks, Bids, Report],
-    error_logger:format(Format, Args),
-    Exit = reason(Class, Reason, Stack),
+terminate(Reason, Callbacks, Config) ->
+    Terminate = fun(Callback, Acc) -> do_terminate(Callback, Acc, Config) end,
+    NReason = lists:foldl(Terminate, Reason, Callbacks),
+    Exit = reason(NReason),
     exit(Exit).
 
-report_reason(throw, Value, Stack) ->
+do_terminate({Mod, Info, State}, Config, Acc) ->
+    try Mod:terminate(Info, State) of
+        _ when Info =:= stop ->
+            Acc;
+        _ ->
+            maybe_report(Mod, Info, State, Config),
+            Acc
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(Mod, Reason2, State, Config),
+            Reason2
+    end.
+
+reason({throw, Value, Stack}) ->
     {{nocatch, Value}, Stack};
-report_reason(_, Reason, Stack) ->
-    {Reason, Stack}.
+reason({exit, Reason, _}) ->
+    Reason;
+reason({error, Reason, Stack}) ->
+    {Reason, Stack};
+reason({bad_return_value, _} = Bad) ->
+    Bad.
+
+maybe_report(_, {exit, normal, _}, _, _) ->
+    ok;
+maybe_report(_, {exit, shutdown, _}, _, _) ->
+    ok;
+maybe_report(_, {exit, {shutdown, _}, _}, _, _) ->
+    ok;
+maybe_report(_, {error, shutdown, _}, _, _) ->
+    ok;
+maybe_report(Mod, Reason, State, Config) ->
+    report(Mod, Reason, State, Config).
+
+report(Mod, Reason, State, Config) ->
+    Tag = {sbroker_queue_error, queue_crashed},
+    Format = "~i** sbroker_queue ~p crashed.~n"
+             "** Was installed in ~p~n"
+             "** When queue state == ~p~n"
+             "** Reason == ~p~n",
+    Args = [Tag, Mod, report_name(Config), State, Reason],
+    error_logger:format(Format, Args).
 
 report_name(#config{name={local, Name}}) ->
     Name;
