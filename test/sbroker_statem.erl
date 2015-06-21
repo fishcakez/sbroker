@@ -43,12 +43,14 @@
 -export([len/2]).
 -export([change_config/2]).
 -export([shutdown_client/2]).
+-export([replace_state/2]).
+-export([change_code/3]).
 
 -export([client_init/2]).
 
 -record(state, {sbroker, asks=[], ask_mod, ask_out, ask_drops, ask_state=[],
                 bids=[], bid_mod, bid_out, bid_drops, bid_state=[], cancels=[],
-                done=[]}).
+                done=[], sys=running, change}).
 
 -define(TIMEOUT, 5000).
 
@@ -83,7 +85,7 @@ initial_state() ->
 
 command(#state{sbroker=undefined} = State) ->
     {call, ?MODULE, start_link, start_link_args(State)};
-command(State) ->
+command(#state{sys=running} = State) ->
     frequency([{10, {call, ?MODULE, spawn_client,
                      spawn_client_args(State)}},
                {4, {call, sbroker, timeout, timeout_args(State)}},
@@ -92,11 +94,35 @@ command(State) ->
                {2, {call, ?MODULE, change_config,
                     change_config_args(State)}},
                {2, {call, ?MODULE, shutdown_client,
-                    shutdown_client_args(State)}}]).
+                    shutdown_client_args(State)}},
+               {1, {call, sys, get_status, get_status_args(State)}},
+               {1, {call, sys, get_state, get_state_args(State)}},
+               {1, {call, ?MODULE, replace_state, replace_state_args(State)}},
+               {1, {call, sys, suspend, suspend_args(State)}}]);
+command(#state{sys=suspended} = State) ->
+    frequency([{5, {call, sys, resume, resume_args(State)}},
+               {2, {call, ?MODULE, change_code, change_code_args(State)}},
+               {1, {call, sys, get_status, get_status_args(State)}},
+               {1, {call, sys, get_state, get_state_args(State)}},
+               {1, {call, ?MODULE, replace_state, replace_state_args(State)}}]).
 
 precondition(State, {call, _, start_link, Args}) ->
     start_link_pre(State, Args);
 precondition(#state{sbroker=undefined}, _) ->
+    false;
+precondition(State, {call, _, get_status, Args}) ->
+    get_status_pre(State, Args);
+precondition(State, {call, _, get_state, Args}) ->
+    get_state_pre(State, Args);
+precondition(State, {call, _, replace_state, Args}) ->
+    replace_state_pre(State, Args);
+precondition(State, {call, _, suspend, Args}) ->
+    suspend_pre(State, Args);
+precondition(State, {call, _, change_code, Args}) ->
+    change_code_pre(State, Args);
+precondition(State, {call, _, resume, Args}) ->
+    resume_pre(State, Args);
+precondition(#state{sys=suspended}, _) ->
     false;
 precondition(_State, _Call) ->
     true.
@@ -115,6 +141,18 @@ next_state(State, Value, {call, _, change_config, Args}) ->
     change_config_next(State, Value, Args);
 next_state(State, Value, {call, _, shutdown_client, Args}) ->
     shutdown_client_next(State, Value, Args);
+next_state(State, Value, {call, _, get_status, Args}) ->
+    get_status_next(State, Value, Args);
+next_state(State, Value, {call, _, get_state, Args}) ->
+    get_state_next(State, Value, Args);
+next_state(State, Value, {call, _, replace_state, Args}) ->
+    replace_state_next(State, Value, Args);
+next_state(State, Value, {call, _, suspend, Args}) ->
+    suspend_next(State, Value, Args);
+next_state(State, Value, {call, _, change_code, Args}) ->
+    change_code_next(State, Value, Args);
+next_state(State, Value, {call, _, resume, Args}) ->
+    resume_next(State, Value, Args);
 next_state(State, _Value, _Call) ->
     State.
 
@@ -132,6 +170,18 @@ postcondition(State, {call, _, change_config, Args}, Result) ->
     change_config_post(State, Args, Result);
 postcondition(State, {call, _, shutdown_client, Args}, Result) ->
     shutdown_client_post(State, Args, Result);
+postcondition(State, {call, _, get_status, Args}, Result) ->
+    get_status_post(State, Args, Result);
+postcondition(State, {call, _, get_state, Args}, Result) ->
+    get_state_post(State, Args, Result);
+postcondition(State, {call, _, replace_state, Args}, Result) ->
+    replace_state_post(State, Args, Result);
+postcondition(State, {call, _, suspend, Args}, Result) ->
+    suspend_post(State, Args, Result);
+postcondition(State, {call, _, change_code, Args}, Result) ->
+    change_code_post(State, Args, Result);
+postcondition(State, {call, _, resume, Args}, Result) ->
+    resume_post(State, Args, Result);
 postcondition(_State, _Call, _Result) ->
     true.
 
@@ -549,6 +599,163 @@ shutdown_client_post(#state{asks=Asks, bids=Bids} = State, [_, Client], _) ->
         false ->
             true
     end.
+
+get_status_args(#state{sbroker=Broker}) ->
+    [Broker, ?TIMEOUT].
+
+get_status_pre(_, _) ->
+    true.
+
+get_status_next(State, _, _) ->
+    sys_next(State).
+
+get_status_post(#state{sbroker=Broker, sys=Sys} = State, _,
+                {status, Pid, {module, Mod},
+                 [_, SysState, Parent, _, Status]}) ->
+    Pid =:= Broker andalso Mod =:= sbroker andalso SysState =:= Sys andalso
+    Parent =:= self() andalso status_post(State, Status) andalso
+    sys_post(State);
+get_status_post(_, _, Result) ->
+    ct:pal("Full status: ~p", [Result]),
+    false.
+
+status_post(#state{asks=Asks, bids=Bids, sys=Sys} = State,
+            [{header, "Status for sbroker <" ++_ },
+             {data, [{"Status", SysState},
+                     {"Parent", Self},
+                     {"Active queue", Active},
+                     {"Time", {TimeMod, native, Time}}]},
+             {items, {"Installed queues", Queues}}]) ->
+    SysState =:= Sys andalso Self =:= self() andalso
+    ((length(Asks) > 0 andalso Active =:= ask) orelse
+     (length(Bids) > 0 andalso Active =:= ask_r) orelse
+     (Asks =:= [] andalso Bids =:= [])) andalso
+    ((erlang:function_exported(erlang, monotonic_time, 1) andalso
+      TimeMod =:= erlang) orelse TimeMod =:= sbroker_legacy) andalso
+    is_integer(Time) andalso
+    get_state_post(State, Queues);
+status_post(_, Status) ->
+    ct:pal("Status: ~p", [Status]),
+    false.
+
+get_state_args(#state{sbroker=Broker}) ->
+    [Broker, ?TIMEOUT].
+
+get_state_pre(_, _) ->
+    erlang:function_exported(sys, get_state, 2).
+
+get_state_next(State, _, _) ->
+    sys_next(State).
+
+get_state_post(State, _, Result) ->
+    get_state_post(State, Result) andalso sys_post(State).
+
+get_state_post(State, Queues) ->
+    get_ask_post(State, Queues) andalso get_bid_post(State, Queues).
+
+get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Queues) ->
+    case lists:keyfind(ask, 2, Queues) of
+        {AskMod, ask, AskState} ->
+            ClientPids = [client_pid(Client) || Client <- Asks],
+            Pids = [Pid || {_, {Pid,_}} <- AskMod:to_list(AskState)],
+            Pids =:= ClientPids;
+        Ask ->
+            ct:pal("Ask queue: ~p", [Ask]),
+            false
+    end.
+
+get_bid_post(#state{bid_mod=BidMod, bids=Bids}, Queues) ->
+    case lists:keyfind(ask_r, 2, Queues) of
+        {BidMod, ask_r, BidState} ->
+            ClientPids = [client_pid(Client) || Client <- Bids],
+            Pids = [Pid || {_, {Pid,_}} <- BidMod:to_list(BidState)],
+            Pids =:= ClientPids;
+        Bid ->
+            ct:pal("Bid queue: ~p", [Bid]),
+            false
+    end.
+
+replace_state_args(#state{sbroker=Broker}) ->
+    [Broker, ?TIMEOUT].
+
+replace_state(Broker, Timeout) ->
+    sys:replace_state(Broker, fun(Q) -> Q end, Timeout).
+
+replace_state_pre(_, _) ->
+    erlang:function_exported(sys, replace_state, 3).
+
+replace_state_next(State, _, _) ->
+    sys_next(State).
+
+replace_state_post(State, _, Result) ->
+    get_state_post(State, Result) andalso sys_post(State).
+
+suspend_args(#state{sbroker=Broker}) ->
+    [Broker, ?TIMEOUT].
+
+suspend_pre(#state{sys=SysState}, _) ->
+    SysState =:= running.
+
+suspend_next(State, _, _) ->
+    State#state{sys=suspended}.
+
+suspend_post(_, _, _) ->
+    true.
+
+change_code_args(#state{sbroker=Broker}) ->
+    [Broker, init(), ?TIMEOUT].
+
+change_code(Broker, Init, Timeout) ->
+    application:set_env(sbroker, ?MODULE, Init),
+    sys:change_code(Broker, undefined, undefined, undefined, Timeout).
+
+change_code_pre(#state{sys=SysState}, _) ->
+    SysState =:= suspended.
+
+change_code_next(State, _, [_, {ok, _} = Init, _]) ->
+    State#state{change=Init};
+change_code_next(State, _, _) ->
+    State.
+
+change_code_post(_, [_, {ok, _}, _], ok) ->
+    true;
+change_code_post(_, [_, ignore, _], ok) ->
+    true;
+change_code_post(_, [_, bad, _], {error, {bad_return_value, bad}}) ->
+    true;
+change_code_post(_, _, _) ->
+    false.
+
+resume_args(#state{sbroker=Broker}) ->
+    [Broker, ?TIMEOUT].
+
+resume_pre(#state{sys=SysState}, _) ->
+    SysState =:= suspended.
+
+resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _,
+            _) ->
+    NState = State#state{sys=running, change=undefined},
+    NState2 = ask_change_next(AskQueueSpec, NState),
+    bid_change_next(BidQueueSpec, NState2);
+resume_next(State, _, _) ->
+    timeout_next(State#state{sys=running}).
+
+resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _,
+            _) ->
+    ask_change_post(AskQueueSpec, State) andalso
+    bid_change_post(BidQueueSpec, State);
+resume_post(State, _, _) ->
+    timeout_post(State).
+
+sys_next(#state{sys=running} = State) ->
+    timeout_next(State);
+sys_next(#state{sys=suspended} = State) ->
+    State.
+
+sys_post(#state{sys=running} = State) ->
+    timeout_post(State);
+sys_post(#state{sys=suspended}) ->
+    true.
 
 %% Helpers
 

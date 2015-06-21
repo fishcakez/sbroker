@@ -115,6 +115,7 @@
 -export([system_get_state/1]).
 -export([system_replace_state/2]).
 -export([system_terminate/4]).
+-export([format_status/2]).
 
 %% macros
 
@@ -473,36 +474,84 @@ init_it(Starter, Parent, Name, Mod, Args, Opts) ->
 system_continue(Parent, Dbg, [State, _, Send, Asks, Bids, Config]) ->
     Time = monotonic_time(Config),
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    case State of
-        asking ->
-            asking_timeout(Time, Send, 0, Asks, Bids, NConfig);
-        bidding ->
-            bidding_timeout(Time, Send, 0, Asks, Bids, NConfig)
-    end.
+    timeout(State, Time, Send, 0, Asks, Bids, NConfig);
+system_continue(Parent, Dbg,
+               {change, {AskMod, AskArgs, BidMod, BidArgs, Config},
+                [State, _, Send, Asks, Bids, _]}) ->
+    Now = monotonic_time(Config),
+    NConfig = Config#config{parent=Parent, dbg=Dbg},
+    {NAsks, NBids, NConfig2} = change_asks(Now, Asks, AskMod, AskArgs, Bids,
+                                           BidMod, BidArgs, NConfig),
+    next(State, Now, Send, 0, NAsks, NBids, NConfig2).
 
 %% @private
-system_code_change(Misc, _, _, _) ->
-    {ok, Misc}.
+system_code_change([_, _, _, _, _, Config] = Misc, _, _, _) ->
+    case config_change(Config) of
+        {ok, Change} ->
+            {ok, {change, Change, Misc}};
+        ignore ->
+            {ok, Misc};
+        {error, Reason} ->
+            % sys will turn this into {error, Reason}
+            Reason
+    end;
+system_code_change({change, Change, [_, _, _, _, _, Config] = Misc}, _, _, _) ->
+    case config_change(Config) of
+        {ok, NChange} ->
+            {ok, {change, NChange, Misc}};
+        ignore ->
+            {ok, {change, Change, Misc}};
+        {error, Reason} ->
+            % sys will turn this into {error, Reason}
+            Reason
+    end.
 
 %% @private
 system_get_state([_, _, _, Asks, Bids,
                   #config{ask_mod=AskMod, bid_mod=BidMod}]) ->
-    Callbacks = [{AskMod, ask_queue, Asks},
-                 {BidMod, ask_r_queue, Bids}],
-    {ok, Callbacks}.
+    Callbacks = [{AskMod, ask, Asks},
+                 {BidMod, ask_r, Bids}],
+    {ok, Callbacks};
+system_get_state({change, _, Misc}) ->
+    system_get_state(Misc).
 
 %% @private
 system_replace_state(Replace,
-                     [State, Time, Send, Asks, Bids,
+                     [State, Now, Send, Asks, Bids,
                       #config{ask_mod=AskMod, bid_mod=BidMod} = Config]) ->
-    {AskMod, ask_queue, NAsks} = AskRes = Replace({AskMod, ask_queue, Asks}),
-    BidRes = Replace({BidMod, ask_r_queue, Bids}),
-    {BidMod, ask_r_queue, NBids} = BidRes,
-    {ok, [AskRes, BidRes], [State, Time, Send, NAsks, NBids, Config]}.
+    {AskMod, ask, NAsks} = AskRes = Replace({AskMod, ask, Asks}),
+    {BidMod, ask_r, NBids} = BidRes = Replace({BidMod, ask_r, Bids}),
+    {ok, [AskRes, BidRes], [State, Now, Send, NAsks, NBids, Config]};
+system_replace_state(Replace, {change, Change, Misc}) ->
+    {ok, States, NMisc} = system_replace_state(Replace, Misc),
+    {ok, States, {change, Change, NMisc}}.
 
 %% @private
-system_terminate(Reason, _, _, _) ->
-    exit(Reason).
+system_terminate(Reason, Parent, Dbg,
+                 [_, _, _, Asks, Bids,
+                  #config{ask_mod=AskMod, bid_mod=BidMod} = Config]) ->
+    Callbacks = [{AskMod, stop, Asks}, {BidMod, stop, Bids}],
+    NConfig = Config#config{parent=Parent, dbg=Dbg},
+    terminate(Reason, Callbacks, NConfig).
+
+%% @private
+format_status(Opt,
+              [PDict, SysState, Parent, _,
+               [State, Now, _, Asks, Bids,
+                #config{name=Name, ask_mod=AskMod, bid_mod=BidMod,
+                        time_mod=TimeMod, time_unit=TimeUnit}]]) ->
+    Header = gen:format_status_header("Status for sbroker", Name),
+    Queues = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids}],
+    Queues2 = [{Mod, Id, format_queue(Mod, Opt, PDict, Queue)} ||
+                {Mod, Id, Queue} <- Queues],
+    [{header, Header},
+     {data, [{"Status", SysState},
+             {"Parent", Parent},
+             {"Active queue", format_state(State)},
+             {"Time", {TimeMod, TimeUnit, Now}}]},
+     {items, {"Installed queues", Queues2}}];
+format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
+    format_status(Opt, [PDict, SysState, Parent, Dbg, Misc]).
 
 %% Internal
 
@@ -608,9 +657,9 @@ init_exception(Starter, Name, Class, Reason, Stack) ->
 init_exception(Starter, Class, Reason, Stack, Callbacks,
                #config{name=Name} = Config) ->
     Reason2 = {Class, Reason, Stack},
-    NReason = terminate(Reason2, Callbacks, Config),
-    NReason2 = reason(NReason),
-    init_stop(Starter, Name, {error, NReason2}, NReason2).
+    Reason3 = terminate_callbacks(Reason2, Callbacks, Config),
+    Reason4 = reason(Reason3),
+    init_stop(Starter, Name, {error, Reason4}, Reason4).
 
 enter_loop(Starter, Asks, Bids, Config) ->
     proc_lib:init_ack(Starter, {ok, self()}),
@@ -935,7 +984,7 @@ retry(From, Now, Send) ->
 
 config_change(From, State, Now, Send, Seq, Asks, Bids, Config) ->
     case config_change(Config) of
-        {ok, AskMod, AskArgs, BidMod, BidArgs, NConfig} ->
+        {ok, {AskMod, AskArgs, BidMod, BidArgs, NConfig}} ->
             gen:reply(From, ok),
             {NAsks, NBids, NConfig2} = change_asks(Now, Asks, AskMod, AskArgs,
                                                    Bids, BidMod, BidArgs,
@@ -953,7 +1002,7 @@ config_change(#config{mod=Mod, args=Args} = Config) ->
     try Mod:init(Args) of
         {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, Timeout}} ->
             NConfig = Config#config{timeout=Timeout},
-            {ok, AskMod, AskArgs, BidMod, BidArgs, NConfig};
+            {ok, {AskMod, AskArgs, BidMod, BidArgs, NConfig}};
         ignore ->
             ignore;
         Other ->
@@ -1077,11 +1126,33 @@ system(From, Msg, State, Now, Send, Asks, Bids,
     sys:handle_system_msg(Msg, From, Parent, ?MODULE, Dbg,
                           [State, Now, Send, Asks, Bids, NConfig]).
 
+format_queue(Mod, Opt, PDict, State) ->
+    case erlang:function_exported(Mod, format_status, 2) of
+        true ->
+            try Mod:format_status(Opt, [PDict, State]) of
+                Status ->
+                    Status
+            catch
+                _:_ ->
+                    State
+            end;
+        false ->
+            State
+    end.
+
+format_state(asking) ->
+    ask;
+format_state(bidding) ->
+    ask_r.
+
 terminate(Reason, Callbacks, Config) ->
+    NReason = terminate_callbacks(Reason, Callbacks, Config),
+    NReason2 = reason(NReason),
+    exit(NReason2).
+
+terminate_callbacks(Reason, Callbacks, Config) ->
     Terminate = fun(Callback, Acc) -> do_terminate(Callback, Acc, Config) end,
-    NReason = lists:foldl(Terminate, Reason, Callbacks),
-    Exit = reason(NReason),
-    exit(Exit).
+    lists:foldl(Terminate, Reason, Callbacks).
 
 do_terminate({Mod, Info, State}, Config, Acc) ->
     try Mod:terminate(Info, State) of
@@ -1123,7 +1194,8 @@ report(Mod, Reason, State, Config) ->
              "** Was installed in ~p~n"
              "** When queue state == ~p~n"
              "** Reason == ~p~n",
-    Args = [Tag, Mod, report_name(Config), State, Reason],
+    NState = format_queue(Mod, terminate, get(), State),
+    Args = [Tag, Mod, report_name(Config), NState, Reason],
     error_logger:format(Format, Args).
 
 report_name(#config{name={local, Name}}) ->
