@@ -52,7 +52,8 @@
 %% When removing a request from the queue, `handle_out/2':
 %% ```
 %% -callback handle_out(Time :: integer(), State :: any()) ->
-%%     {SendTime :: integer(), From :: {pid(), Tag :: any()}, NState :: any()} |
+%%     {SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()},
+%%      NState :: any()} |
 %%     {empty, NState :: any()}.
 %% '''
 %%
@@ -148,11 +149,12 @@
     State :: any().
 
 -callback handle_in(SendTime :: integer(),
-                    From :: {Sender :: pid(), Tag :: any()}, Time :: integer(),
-                    State :: any()) -> NState :: any().
+                    From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
+                    Time :: integer(), State :: any()) -> NState :: any().
 
 -callback handle_out(Time :: integer(), State :: any()) ->
-    {SendTime :: integer(), From :: {pid(), Tag :: any()}, NState :: any()} |
+    {SendTime :: integer(), From :: {pid(), Tag :: any()}, Value :: any(),
+     NState :: any()} |
     {empty, NState :: any()}.
 
 -callback handle_timeout(Time :: integer(), State :: any()) -> NState :: any().
@@ -167,7 +169,8 @@
     NState :: any().
 
 -callback to_list(State :: any()) ->
-    [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()}}].
+    [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()},
+      Value :: any()}].
 
 -callback len(State :: any()) -> Len :: non_neg_integer().
 

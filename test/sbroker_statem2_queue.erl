@@ -22,7 +22,7 @@
 -behaviour(sbroker_queue).
 
 -export([init/2]).
--export([handle_in/4]).
+-export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
@@ -38,8 +38,8 @@
 init(Time, Args) ->
     sbroker_statem_queue:init(Time, Args).
 
-handle_in(SendTime, From, Time, State) ->
-    sbroker_statem_queue:handle_in(SendTime, From, Time, State).
+handle_in(SendTime, From, Value, Time, State) ->
+    sbroker_statem_queue:handle_in(SendTime, From, Value, Time, State).
 
 handle_out(Time, State) ->
     sbroker_statem_queue:handle_out(Time, State).

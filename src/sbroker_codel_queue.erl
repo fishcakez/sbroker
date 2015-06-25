@@ -58,7 +58,7 @@
 %% public api
 
 -export([init/2]).
--export([handle_in/4]).
+-export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
@@ -73,7 +73,8 @@
 -ifdef(LEGACY_TYPES).
 -type internal_queue() :: queue().
 -else.
--type internal_queue() :: queue:queue({integer(), {pid(), any()}, reference()}).
+-type internal_queue() ::
+    queue:queue({integer(), {pid(), any()}, any(), reference()}).
 -endif.
 
 -record(state, {out :: out | out_r,
@@ -111,13 +112,14 @@ init(Time, {Out, Target, Interval, Drop, Max})
            drop_next=Time, peek_next=Time}.
 
 %% @private
--spec handle_in(SendTime, From, Time, State) -> NState when
+-spec handle_in(SendTime, From, Value, Time, State) -> NState when
       Time :: integer(),
       SendTime :: integer(),
       From :: {pid(), any()},
+      Value :: any(),
       State :: #state{},
       NState :: #state{}.
-handle_in(SendTime, {Pid, _} = From, Time, State) ->
+handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
     case handle_timeout(Time, State) of
         #state{max=Max, len=Max, drop=drop_r} = NState ->
             sbroker_queue:drop(From, SendTime, Time),
@@ -126,21 +128,22 @@ handle_in(SendTime, {Pid, _} = From, Time, State) ->
             {{value, Item}, NQ} = queue:out(Q),
             drop_item(Time, Item),
             Ref = monitor(process, Pid),
-            NQ2 = queue:in({SendTime, From, Ref}, NQ),
+            NQ2 = queue:in({SendTime, From, Value, Ref}, NQ),
             NState#state{queue=NQ2};
         #state{len=Len, queue=Q} = NState ->
             Ref = monitor(process, Pid),
-            NQ = queue:in({SendTime, From, Ref}, Q),
+            NQ = queue:in({SendTime, From, Value, Ref}, Q),
             NState#state{len=Len+1, queue=NQ}
     end.
 
 %% @private
 -spec handle_out(Time, State) ->
-    {SendTime, From, NState} | {empty, NState} when
+    {SendTime, From, Value, NState} | {empty, NState} when
       Time :: integer(),
       State :: #state{},
       SendTime :: integer(),
       From :: {pid(), any()},
+      Value :: any(),
       NState :: #state{}.
 handle_out(_, #state{len=0, drop_first=infinity} = State) ->
     {empty, State};
@@ -148,9 +151,9 @@ handle_out(_, #state{len=0} = State) ->
     {empty, State#state{drop_first=infinity}};
 handle_out(Time, #state{out=out, peek_next=PeekNext, len=Len, queue=Q} = State)
   when PeekNext > Time ->
-    {{value, {_, _, Ref} = Item}, NQ} = queue:out(Q),
+    {{value, {_, _, _, Ref} = Item}, NQ} = queue:out(Q),
     demonitor(Ref, [flush]),
-    setelement(3, Item, State#state{len=Len-1, queue=NQ});
+    setelement(4, Item, State#state{len=Len-1, queue=NQ});
 handle_out(Time, #state{out=out, target=Target, len=Len, queue=Q} = State) ->
     MinSend = Time - Target,
     out_peek(queue:out(Q), MinSend, Time, Len, State);
@@ -161,9 +164,9 @@ handle_out(Time, #state{out=out_r} = State) ->
         #state{len=0} = NState ->
             {empty, NState#state{drop_first=infinity}};
         #state{len=Len, queue=Q} = NState ->
-            {{value, {_, _, Ref} = Item}, NQ} = queue:out_r(Q),
+            {{value, {_, _, _, Ref} = Item}, NQ} = queue:out_r(Q),
             demonitor(Ref, [flush]),
-            setelement(3, Item, NState#state{len=Len-1, queue=NQ})
+            setelement(4, Item, NState#state{len=Len-1, queue=NQ})
     end.
 
 %% @private
@@ -192,7 +195,7 @@ handle_timeout(Time, #state{target=Target, len=Len, queue=Q} = State) ->
       NState :: #state{}.
 handle_cancel(Tag, Time, State) ->
     #state{len=Len, queue=Q} = NState = handle_timeout(Time, State),
-    Cancel = fun({_, {_, Tag2}, Ref}) when Tag2 =:= Tag ->
+    Cancel = fun({_, {_, Tag2}, _, Ref}) when Tag2 =:= Tag ->
                      demonitor(Ref, [flush]),
                      false;
                 (_) ->
@@ -214,7 +217,7 @@ handle_cancel(Tag, Time, State) ->
       NState :: #state{}.
 handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
     #state{queue=Q} = NState = handle_timeout(Time, State),
-    NQ = queue:filter(fun({_, _, Ref2}) -> Ref2 =/= Ref end, Q),
+    NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
     NState#state{len=queue:len(NQ), queue=NQ};
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
@@ -234,12 +237,13 @@ config_change(Arg, Time, State) ->
     handle_timeout(Time, NState).
 
 %% @private
--spec to_list(State) -> [{SendTime, From}] when
+-spec to_list(State) -> [{SendTime, From, Value}] when
       State :: #state{},
       SendTime :: integer(),
-      From :: {pid(), any()}.
+      From :: {pid(), any()},
+      Value :: any().
 to_list(#state{queue=Q}) ->
-    [erlang:delete_element(3, Item) || Item <- queue:to_list(Q)].
+    [erlang:delete_element(4, Item) || Item <- queue:to_list(Q)].
 
 %% @private
 -spec len(State) -> Len when
@@ -253,17 +257,17 @@ len(#state{len=Len}) ->
       Reason :: any(),
       State :: #state{}.
 terminate(_, #state{queue=Q}) ->
-    _ = [demonitor(Ref, [flush]) || {_, _, Ref} <- queue:to_list(Q)],
+    _ = [demonitor(Ref, [flush]) || {_, _, _, Ref} <- queue:to_list(Q)],
     ok.
 
 %% Internal
 
 
-timeout_peek({Send, _, _}, MinSend, _, _, _,
+timeout_peek({Send, _, _, _}, MinSend, _, _, _,
              #state{drop_first=infinity, target=Target} = State)
   when Send > MinSend ->
     State#state{peek_next=Send+Target};
-timeout_peek({Send, _, _}, MinSend, _, _, _, State) when Send > MinSend ->
+timeout_peek({Send, _, _, _}, MinSend, _, _, _, State) when Send > MinSend ->
     State;
 timeout_peek(_, _, Time, _, _,
              #state{drop_first=infinity, interval=Interval} = State) ->
@@ -287,7 +291,7 @@ timeout_drop(_, Time, Len, Q, #state{drop_next=DropNext} = State)
 timeout_drop(MinSend, Time, Len, Q,
              #state{count=C, drop_next=DropNext} = State) ->
     case queue:get(Q) of
-        {Send, _, _}  when Send > MinSend ->
+        {Send, _, _, _}  when Send > MinSend ->
             State#state{len=Len, queue=Q};
         Item ->
             drop_item(Time, Item),
@@ -297,26 +301,26 @@ timeout_drop(MinSend, Time, Len, Q,
 
 
 %% Item below target sojourn time and getting dequeued
-out_peek({{value, {Send, _, Ref} = Item}, Q}, MinSend, _Time, Len,
+out_peek({{value, {Send, _, _, Ref} = Item}, Q}, MinSend, _Time, Len,
          #state{target=Target} = State) when Send > MinSend ->
     demonitor(Ref, [flush]),
     %% First time state can change is if the next item has the same start time
     %% and remains for the target sojourn time.
     NState = State#state{drop_first=infinity, peek_next=Send+Target, len=Len-1,
                          queue=Q},
-    setelement(3, Item, NState);
+    setelement(4, Item, NState);
 %% Item is first above target sojourn time, begin first interval.
-out_peek({{value, {_, _, Ref} = Item}, Q}, _MinSend, Time, Len,
+out_peek({{value, {_, _, _, Ref} = Item}, Q}, _MinSend, Time, Len,
          #state{drop_first=infinity, interval=Interval} = State) ->
     demonitor(Ref, [flush]),
     NState = State#state{drop_first=Time+Interval, len=Len-1, queue=Q},
-    setelement(3, Item, NState);
+    setelement(4, Item, NState);
 %% Item above target sojourn time during a consecutive "slow" interval.
-out_peek({{value, {_, _, Ref} = Item}, Q}, _, Time, Len,
+out_peek({{value, {_, _, _, Ref} = Item}, Q}, _, Time, Len,
           #state{drop_first=dropping, drop_next=DropNext} = State)
   when DropNext > Time ->
     demonitor(Ref, [flush]),
-    setelement(3, Item, State#state{len=Len-1, queue=Q});
+    setelement(4, Item, State#state{len=Len-1, queue=Q});
 %% Item above target sojourn time and is the last in a consecutive "slow"
 %% interval.
 out_peek({{value, Item}, Q}, _, Time, 1, #state{drop_first=dropping} = State) ->
@@ -327,10 +331,10 @@ out_peek({{value, Item}, Q}, MinSend, Time, Len,
     drop_item(Time, Item),
     out_drops(queue:out(Q), MinSend, Time, Len-1, State);
 %% Item above target sojourn time during the first "slow" interval.
-out_peek({{value, {_, _, Ref} = Item}, Q}, _, Time, Len,
+out_peek({{value, {_, _, _, Ref} = Item}, Q}, _, Time, Len,
          #state{drop_first=DropFirst} = State) when DropFirst > Time ->
     demonitor(Ref, [flush]),
-    setelement(3, Item, State#state{len=Len-1, queue=Q});
+    setelement(4, Item, State#state{len=Len-1, queue=Q});
 %% Item above target sojourn time and is the last item in the first "slow"
 %% interval so drop it.
 out_peek({{value, Item}, Q}, _, Time, 1, State) ->
@@ -341,27 +345,27 @@ out_peek({{value, Item}, Q}, MinSend, Time, Len, State) ->
     drop_item(Time, Item),
     NState = drop_control(Time, State),
     case queue:out(Q) of
-        {{value, {Send, _, Ref} = Item2}, NQ} when Send > MinSend ->
+        {{value, {Send, _, _, Ref} = Item2}, NQ} when Send > MinSend ->
             demonitor(Ref, [flush]),
             NState2 = NState#state{drop_first=infinity, len=Len-2, queue=NQ},
-            setelement(3, Item2, NState2);
-        {{value, {_, _, Ref} = Item2}, NQ} ->
+            setelement(4, Item2, NState2);
+        {{value, {_, _, _, Ref} = Item2}, NQ} ->
             demonitor(Ref, [flush]),
-            setelement(3, Item2, NState#state{len=Len-2, queue=NQ})
+            setelement(4, Item2, NState#state{len=Len-2, queue=NQ})
     end.
 
-out_drops({{value, {Send, _, Ref} = Item}, Q}, MinSend, _Time, Len,
+out_drops({{value, {Send, _, _, Ref} = Item}, Q}, MinSend, _Time, Len,
       #state{target=Target} = State) when Send > MinSend ->
     demonitor(Ref, [flush]),
     NState = State#state{drop_first=infinity, peek_next=Send+Target,
                          queue=Q, len=Len-1},
-    setelement(3, Item, NState);
-out_drops({{value, {_, _, Ref} = Item}, Q}, MinStart, Time, Len,
+    setelement(4, Item, NState);
+out_drops({{value, {_, _, _, Ref} = Item}, Q}, MinStart, Time, Len,
       #state{count=C, drop_next=DropNext} = State) ->
     case drop_control(C+1, DropNext, State) of
         #state{drop_next=NDropNext} = NState when NDropNext > Time ->
             demonitor(Ref, [flush]),
-            setelement(3, Item, NState#state{queue=Q, len=Len-1});
+            setelement(4, Item, NState#state{queue=Q, len=Len-1});
         NState when Len =:= 1 ->
             drop_item(Time, Item),
             {empty, NState#state{drop_first=infinity, len=0, queue=Q}};
@@ -385,7 +389,7 @@ drop_control(C, Time, #state{interval=Interval} = State) ->
     DropNext = Time + trunc(Interval / math:sqrt(C)),
     State#state{count=C, drop_next=DropNext}.
 
-drop_item(Time, {SendTime, From, Ref}) ->
+drop_item(Time, {SendTime, From, _, Ref}) ->
     demonitor(Ref, [flush]),
     sbroker_queue:drop(From, SendTime, Time).
 

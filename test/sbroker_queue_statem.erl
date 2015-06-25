@@ -30,7 +30,7 @@
 -export([postcondition/3]).
 
 -export([init/3]).
--export([in/5]).
+-export([in/6]).
 -export([shutdown/5]).
 
 -record(state, {manager, manager_state, mod, queue, list=[], outs=[],
@@ -151,23 +151,27 @@ init_next(#state{manager=Manager} = State, Q, [Mod, Time, Args]) ->
 init_post(_, _, _) ->
     true.
 
-in_args(#state{mod=Mod, send_time=SendTime, time=Time, queue=Q}) ->
-    [Mod, oneof([SendTime, choose(SendTime, Time)]), tag(), time(Time), Q].
+info() ->
+    oneof([x, y, z]).
 
-in(Mod, SendTime, Tag, Time, Q) ->
+in_args(#state{mod=Mod, send_time=SendTime, time=Time, queue=Q}) ->
+    [Mod, oneof([SendTime, choose(SendTime, Time)]), tag(), info(), time(Time),
+     Q].
+
+in(Mod, SendTime, Tag, Info, Time, Q) ->
     Pid = spawn_client(),
     From = {Pid, Tag},
-    {Pid, Mod:handle_in(SendTime, From, Time, Q)}.
+    {Pid, Mod:handle_in(SendTime, From, Info, Time, Q)}.
 
 in_pre(#state{mod=Mod, send_time=PrevSendTime, time=PrevTime},
-       [Mod2, SendTime, _, Time, _]) ->
+       [Mod2, SendTime, _, _, Time, _]) ->
     Mod =:= Mod2 andalso SendTime =< Time andalso
     SendTime >= PrevSendTime andalso Time >= PrevTime.
 
 in_next(State, Value,
-        [_, SendTime, Tag, Time, _]) ->
+        [_, SendTime, Tag, Info, Time, _]) ->
     Pid = {call, erlang, element, [1, Value]},
-    Elem = {Time - SendTime, {Pid, Tag}},
+    Elem = {Time - SendTime, {Pid, Tag}, Info},
     Q = {call, erlang, element, [2, Value]},
     NState = State#state{queue=Q, send_time=SendTime},
     case manager_next(NState, handle_timeout, Time) of
@@ -183,14 +187,15 @@ in_next(State, Value,
             NState2#state{list=L++[Elem]}
     end.
 
-in_post(State, [_, SendTime, Tag, Time, _], {Pid, Q}) ->
+in_post(State, [_, SendTime, Tag, Info, Time, _], {Pid, Q}) ->
     From = {Pid, Tag},
-    Elem = {Time - SendTime, From},
+    Elem = {Time - SendTime, From, Info},
     case manager_post(State#state{queue=Q}, handle_timeout, Time) of
         {true, #state{max=0} = NState} ->
             drop_post(From, Time-SendTime) andalso post(NState);
         {true,
-         #state{drop=drop, max=Max, list=[{Sojourn, From2} | NL] = L} = NState}
+         #state{drop=drop, max=Max,
+                list=[{Sojourn, From2, _} | NL] = L} = NState}
           when length(L) =:= Max ->
             drop_post(From2, Sojourn) andalso
             post(NState#state{list=NL++[Elem]});
@@ -231,9 +236,10 @@ handle_out_post(#state{out=out} = State, [Time, _], {empty, _}) ->
         _ ->
             false
     end;
-handle_out_post(#state{out=out} = State, [Time, _], {SendTime, From, _}) ->
+handle_out_post(#state{out=out} = State, [Time, _],
+                {SendTime, From, Info, _}) ->
     case manager_post(State, handle_out, Time) of
-        {true, #state{list=[{Sojourn, From} | NL]} = NState} ->
+        {true, #state{list=[{Sojourn, From, Info} | NL]} = NState} ->
             Time - SendTime =:= Sojourn andalso post(NState#state{list=NL});
         _ ->
             false
@@ -245,12 +251,14 @@ handle_out_post(#state{out=out_r} = State, [Time, _], {empty, _}) ->
         _ ->
             false
     end;
-handle_out_post(#state{out=out_r} = State, [Time, _], {SendTime, From, _}) ->
+handle_out_post(#state{out=out_r} = State, [Time, _],
+                {SendTime, From, Info, _}) ->
     case manager_post(State, handle_out, Time) of
         {true, #state{list=[_|_] = L} = NState} ->
-            {Sojourn, From} = lists:last(L),
+            Sojourn = Time - SendTime,
             NL = droplast(L),
-            Time - SendTime =:= Sojourn andalso post(NState#state{list=NL});
+            lists:last(L) =:= {Sojourn, From, Info} andalso
+            post(NState#state{list=NL});
         _ ->
             false
     end;
@@ -279,7 +287,7 @@ handle_cancel_pre(#state{time=PrevTime}, [_, Time, _]) ->
 handle_cancel_next(#state{cancels=Cancels} = State, Value, [Tag, Time,  _]) ->
     Q = {call, erlang, element, [2, Value]},
     #state{list=L} = NState = manager_next(State, handle_timeout, Time),
-    {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}}) -> Tag =/= Tag2 end,
+    {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}, _}) -> Tag =/= Tag2 end,
                                      L),
     NState#state{list=NL, cancels=Cancels++Cancels2, queue=Q}.
 
@@ -287,7 +295,7 @@ handle_cancel_post(#state{cancels=Cancels} = State, [Tag, Time, _],
                    {Cancelled, _}) ->
     {Result, #state{list=L} = NState} =
         manager_post(State, handle_timeout, Time),
-    {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}}) -> Tag =/= Tag2 end,
+    {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}, _}) -> Tag =/= Tag2 end,
                                      L),
     NState2 = NState#state{list=NL, cancels=Cancels ++ Cancels2},
     case length(Cancels2) of
@@ -328,10 +336,10 @@ shutdown(Mod, self, nomonitor, Time, Q) ->
     Pid = self(),
     NQ = Mod:handle_info({'DOWN', make_ref(), process, Pid, shutdown}, Time, Q),
     {ok, NQ};
-shutdown(Mod, {_, {Pid, _}}, nomonitor, Time, Q) ->
+shutdown(Mod, {_, {Pid, _}, _}, nomonitor, Time, Q) ->
     NQ = Mod:handle_info({'DOWN', make_ref(), process, Pid, shutdown}, Time, Q),
     {ok, NQ};
-shutdown(Mod, {_, {Pid, _}}, monitor, Time, Q) ->
+shutdown(Mod, {_, {Pid, _}, _}, monitor, Time, Q) ->
     exit(Pid, shutdown),
     receive
         {'DOWN', _, process, Pid, _} = Down ->
@@ -352,11 +360,11 @@ shutdown_pre(_, _) ->
     true.
 
 shutdown_next(#state{cancels=Cancels, outs=Outs} = State, Value,
-              [_, {_, From}, _, Time, _]) ->
+              [_, {_, From, _}, _, Time, _]) ->
     Q = {call, erlang, element, [2, Value]},
     #state{list=L, drops=Drops} = NState =
         manager_next(State#state{queue=Q}, handle_timeout, Time),
-    Remove = fun({_, From2}) -> From2 =/= From end,
+    Remove = fun({_, From2, _}) -> From2 =/= From end,
     NL = lists:filter(Remove, L),
     NDrops = lists:filter(Remove, Drops),
     NCancels = lists:filter(Remove, Cancels),
@@ -368,10 +376,10 @@ shutdown_next(State, Value, [_, self, _, Time, _]) ->
     manager_next(State#state{queue=Q}, handle_timeout, Time).
 
 shutdown_post(#state{cancels=Cancels, outs=Outs} = State,
-              [_, {_, From}, _, Time, _], {ok, _}) ->
+              [_, {_, From, _}, _, Time, _], {ok, _}) ->
     {Result, #state{list=L, drops=Drops} = NState} =
         manager_post(State, handle_timeout, Time, From),
-    Remove = fun({_, From2}) -> From2 =/= From end,
+    Remove = fun({_, From2, _}) -> From2 =/= From end,
     NL = lists:filter(Remove, L),
     NCancels = lists:filter(Remove, Cancels),
     NOuts = lists:filter(Remove, Outs),
@@ -381,7 +389,7 @@ shutdown_post(#state{cancels=Cancels, outs=Outs} = State,
 shutdown_post(State, [_, self, _, Time, _], {ok, _}) ->
     {Result, NState} = manager_post(State, handle_timeout, Time),
     Result andalso post(NState);
-shutdown_post(_, [_, {_, {Pid, _}}, _, _, _], {error, timeout}) ->
+shutdown_post(_, [_, {_, {Pid, _}, _}, _, _, _], {error, timeout}) ->
     ct:pal("Pid ~p DOWN timeout", [Pid]),
     false.
 
@@ -452,7 +460,7 @@ to_list_next(State, _, _) ->
     State.
 
 to_list_post(#state{time=Time, list=L}, _, Result) ->
-    [{Time - SendTime , From} || {SendTime, From} <- Result] =:= L.
+    [{Time - SendTime , From, Info} || {SendTime, From, Info} <- Result] =:= L.
 
 terminate_args(#state{queue=Q}) ->
     [oneof([shutdown, normal, abnormal]), Q].
@@ -475,17 +483,18 @@ manager_post(State, Fun, Time) ->
 
 manager_post(State, Fun, Time, Skip) ->
     {Drops, NState} = manager(State, Fun, Time),
-    Result = lists:all(fun({_, From}) when From =:= Skip ->
+    Result = lists:all(fun({_, From, _}) when From =:= Skip ->
                                true;
-                          ({Sojourn, From}) ->
+                          ({Sojourn, From, _}) ->
                                drop_post(From, Sojourn)
                        end, Drops),
     {Result, NState}.
 
 manager(#state{manager=Manager, manager_state=ManState, list=L, drops=Drops,
                time=PrevTime} = State, Fun, Time) ->
-    NL = [{Sojourn + Time - PrevTime, From} || {Sojourn, From} <- L],
-    {Sojourns, _} = lists:unzip(NL),
+    NL = [{Sojourn + Time - PrevTime, From, Info} ||
+          {Sojourn, From, Info} <- L],
+    {Sojourns, _, _} = lists:unzip3(NL),
     {DropCount, NManState} = Manager:Fun(Time, Sojourns, ManState),
     {Drops2, NL2} = lists:split(DropCount, NL),
     {Drops2, State#state{time=Time, list=NL2, drops=Drops++Drops2,
@@ -495,9 +504,10 @@ drop_post({Pid, Tag} = From, Sojourn) ->
     client_msgs(Pid, [{Tag, {drop, Sojourn}}]) andalso no_monitor(From).
 
 post(#state{list=L, outs=Outs, cancels=Cancels, drops=Drops}) ->
-    lists:all(fun({_, From}) -> no_drop_post(From) end, L ++ Outs ++ Cancels)
-    andalso
-    lists:all(fun({_, From}) -> no_monitor(From) end, Outs ++ Cancels ++ Drops).
+    lists:all(fun({_, From, _}) -> no_drop_post(From) end,
+              L ++ Outs ++ Cancels) andalso
+    lists:all(fun({_, From, _}) -> no_monitor(From) end,
+              Outs ++ Cancels ++ Drops).
 
 no_drop_post({Pid, _}) ->
     client_msgs(Pid, []).

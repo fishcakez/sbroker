@@ -657,7 +657,7 @@ get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Queues) ->
     case lists:keyfind(ask, 2, Queues) of
         {AskMod, ask, AskState} ->
             ClientPids = [client_pid(Client) || Client <- Asks],
-            Pids = [Pid || {_, {Pid,_}} <- AskMod:to_list(AskState)],
+            Pids = [Pid || {_, {Pid,_}, _} <- AskMod:to_list(AskState)],
             Pids =:= ClientPids;
         Ask ->
             ct:pal("Ask queue: ~p", [Ask]),
@@ -668,7 +668,7 @@ get_bid_post(#state{bid_mod=BidMod, bids=Bids}, Queues) ->
     case lists:keyfind(ask_r, 2, Queues) of
         {BidMod, ask_r, BidState} ->
             ClientPids = [client_pid(Client) || Client <- Bids],
-            Pids = [Pid || {_, {Pid,_}} <- BidMod:to_list(BidState)],
+            Pids = [Pid || {_, {Pid,_}, _} <- BidMod:to_list(BidState)],
             Pids =:= ClientPids;
         Bid ->
             ct:pal("Bid queue: ~p", [Bid]),
@@ -849,7 +849,9 @@ settled_post(Client1, Client2) ->
             is_integer(SojournTime1) andalso SojournTime1 >= 0 andalso
             is_integer(SojournTime2) andalso SojournTime2 >= 0 andalso
             is_integer(RelSojournTime1) andalso RelSojournTime1 =< 0 andalso
-            -RelSojournTime1 =:= RelSojournTime2;
+            -RelSojournTime1 =:= RelSojournTime2 andalso
+            (SojournTime2 - RelSojournTime2) =:= SojournTime1 andalso
+            (SojournTime1 - RelSojournTime1) =:= SojournTime2;
         Result ->
             ct:log("Result: ~p", [Result]),
             false
@@ -884,7 +886,7 @@ client_call({Pid, MRef}, Call) ->
 client_init(Broker, async_bid) ->
     MRef = monitor(process, Broker),
     ARef = make_ref(),
-    {await, ARef, Broker} = sbroker:async_ask_r(Broker, ARef),
+    {await, ARef, Broker} = sbroker:async_ask_r(Broker, self(), ARef),
     client_init(MRef, Broker, ARef, queued);
 client_init(Broker, nb_bid) ->
     MRef = monitor(process, Broker),
@@ -893,7 +895,7 @@ client_init(Broker, nb_bid) ->
 client_init(Broker, async_ask) ->
     MRef = monitor(process, Broker),
     ARef = make_ref(),
-    {await, ARef, Broker} = sbroker:async_ask(Broker, ARef),
+    {await, ARef, Broker} = sbroker:async_ask(Broker, self(), ARef),
     client_init(MRef, Broker, ARef, queued);
 client_init(Broker, nb_ask) ->
     MRef = monitor(process, Broker),

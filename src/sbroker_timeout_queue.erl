@@ -39,7 +39,7 @@
 %% public api
 
 -export([init/2]).
--export([handle_in/4]).
+-export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
@@ -54,7 +54,8 @@
 -ifdef(LEGACY_TYPES).
 -type internal_queue() :: queue().
 -else.
--type internal_queue() :: queue:queue({integer(), {pid(), any()}, reference()}).
+-type internal_queue() ::
+    queue:queue({integer(), {pid(), any()}, any(), reference()}).
 -endif.
 
 -record(state, {out :: out | out_r,
@@ -85,13 +86,14 @@ init(Time, {Out, Timeout, Drop, Max})
            timeout_next=timeout_next(Time, Timeout)}.
 
 %% @private
--spec handle_in(SendTime, From, Time, State) -> NState when
+-spec handle_in(SendTime, From, Value, Time, State) -> NState when
       Time :: integer(),
       SendTime :: integer(),
       From :: {pid(), any()},
+      Value :: any(),
       State :: #state{},
       NState :: #state{}.
-handle_in(SendTime, {Pid, _} = From, Time, State) ->
+handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
     case handle_timeout(Time, State) of
         #state{max=Max, len=Max, drop=drop_r} = NState ->
             sbroker_queue:drop(From, SendTime, Time),
@@ -100,34 +102,35 @@ handle_in(SendTime, {Pid, _} = From, Time, State) ->
             {{value, Item}, NQ} = queue:out(Q),
             drop_item(Time, Item),
             Ref = monitor(process, Pid),
-            NQ2 = queue:in({SendTime, From, Ref}, NQ),
+            NQ2 = queue:in({SendTime, From, Value, Ref}, NQ),
             NState#state{queue=NQ2};
         #state{len=Len, queue=Q} = NState ->
             Ref = monitor(process, Pid),
-            NQ = queue:in({SendTime, From, Ref}, Q),
+            NQ = queue:in({SendTime, From, Value, Ref}, Q),
             NState#state{len=Len+1, queue=NQ}
     end.
 
 %% @private
 -spec handle_out(Time, State) ->
-    {SendTime, From, NState} | {empty, NState} when
+    {SendTime, From, Value, NState} | {empty, NState} when
       Time :: integer(),
       State :: #state{},
       SendTime :: integer(),
       From :: {pid(), any()},
+      Value :: any(),
       NState :: #state{}.
 handle_out(Time, State) ->
     case handle_timeout(Time, State) of
         #state{len=0} = NState ->
             {empty, NState};
         #state{out=out, len=Len, queue=Q} = NState ->
-            {{value, {_, _, Ref} = Item}, NQ} = queue:out(Q),
+            {{value, {_, _, _, Ref} = Item}, NQ} = queue:out(Q),
             demonitor(Ref, [flush]),
-            setelement(3, Item, NState#state{len=Len-1, queue=NQ});
+            setelement(4, Item, NState#state{len=Len-1, queue=NQ});
         #state{out=out_r, len=Len, queue=Q} = NState ->
-            {{value, {_, _, Ref} = Item}, NQ} = queue:out_r(Q),
+            {{value, {_, _, _, Ref} = Item}, NQ} = queue:out_r(Q),
             demonitor(Ref, [flush]),
-            setelement(3, Item, NState#state{len=Len-1, queue=NQ})
+            setelement(4, Item, NState#state{len=Len-1, queue=NQ})
     end.
 
 %% @private
@@ -150,7 +153,7 @@ handle_timeout(Time, #state{timeout=Timeout, len=Len, queue=Q} = State) ->
       NState :: #state{}.
 handle_cancel(Tag, Time, State) ->
     #state{len=Len, queue=Q} = NState = handle_timeout(Time, State),
-    Cancel = fun({_, {_, Tag2}, Ref}) when Tag2 =:= Tag ->
+    Cancel = fun({_, {_, Tag2}, _, Ref}) when Tag2 =:= Tag ->
                      demonitor(Ref, [flush]),
                      false;
                 (_) ->
@@ -172,7 +175,7 @@ handle_cancel(Tag, Time, State) ->
       NState :: #state{}.
 handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
     #state{queue=Q} = NState = handle_timeout(Time, State),
-    NQ = queue:filter(fun({_, _, Ref2}) -> Ref2 =/= Ref end, Q),
+    NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
     NState#state{len=queue:len(NQ), queue=NQ};
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
@@ -190,12 +193,13 @@ config_change(Arg, Time, State) ->
     handle_timeout(Time, NState).
 
 %% @private
--spec to_list(State) -> [{SendTime, From}] when
+-spec to_list(State) -> [{SendTime, From, Value}] when
       State :: #state{},
       SendTime :: integer(),
-      From :: {pid(), any()}.
+      From :: {pid(), any()},
+      Value :: any().
 to_list(#state{queue=Q}) ->
-    [erlang:delete_element(3, Item) || Item <- queue:to_list(Q)].
+    [erlang:delete_element(4, Item) || Item <- queue:to_list(Q)].
 
 %% @private
 -spec len(State) -> Len when
@@ -209,7 +213,7 @@ len(#state{len=Len}) ->
       Reason :: any(),
       State :: #state{}.
 terminate(_, #state{queue=Q}) ->
-    _ = [demonitor(Ref, [flush]) || {_, _, Ref} <- queue:to_list(Q)],
+    _ = [demonitor(Ref, [flush]) || {_, _, _, Ref} <- queue:to_list(Q)],
     ok.
 
 %% Internal
@@ -221,7 +225,7 @@ timeout_next(Time, Timeout) when is_integer(Timeout) andalso Timeout >= 0 ->
 
 timeout(MinSend, Time, Len, Q, #state{timeout=Timeout} = State) ->
     case queue:get(Q) of
-        {SendTime, _, _} when SendTime > MinSend ->
+        {SendTime, _, _, _} when SendTime > MinSend ->
             State#state{timeout_next=SendTime+Timeout, len=Len, queue=Q};
         Item when Len =:= 1 ->
             drop_item(Time, Item),
@@ -262,6 +266,6 @@ drop_queue(Time, Q) ->
     _ = [drop_item(Time, Item) || Item <- queue:to_list(Q)],
     ok.
 
-drop_item(Time, {SendTime, From, Ref}) ->
+drop_item(Time, {SendTime, From, _, Ref}) ->
     demonitor(Ref, [flush]),
     sbroker_queue:drop(From, SendTime, Time).

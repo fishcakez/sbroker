@@ -84,14 +84,19 @@
 %% public api
 
 -export([ask/1]).
+-export([ask/2]).
 -export([ask_r/1]).
+-export([ask_r/2]).
 -export([nb_ask/1]).
+-export([nb_ask/2]).
 -export([nb_ask_r/1]).
+-export([nb_ask_r/2]).
 -export([async_ask/1]).
 -export([async_ask/2]).
+-export([async_ask/3]).
 -export([async_ask_r/1]).
 -export([async_ask_r/2]).
-
+-export([async_ask_r/3]).
 -export([await/2]).
 -export([cancel/3]).
 -export([change_config/2]).
@@ -162,15 +167,29 @@
 
 %% public api
 
-%% @doc Tries to match with a process calling `ask_r/1' on the same broker.
-%% Returns `{go, Ref, Pid, RelativeTime, SojournTime}' on a successful match
-%% or `{drop, SojournTime}'.
+%% @equiv ask(Broker, self())
+-spec ask(Broker) -> Go | Drop when
+      Broker :: broker(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: integer(),
+      SojournTime :: non_neg_integer(),
+      Drop :: {drop, SojournTime}.
+ask(Broker) ->
+    call(Broker, ask, self(), infinity).
+
+%% @doc Send a match request, with value `ReqValue', to try to match with a
+%% process calling `ask_r/2' on the broker, `Broker'.
 %%
-%% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
-%% matched process. `RelativeTime' is the time (in the broker's time unit) spent
-%% waiting for a match after discounting time spent waiting for the broker to
-%% handle requests. `SojournTime' is the time spent in both the broker's message
-%% queue and internal queue.
+%% Returns `{go, Ref, Value, RelativeTime, SojournTime}' on a successful
+%% match or `{drop, SojournTime}'.
+%%
+%% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
+%% value of the matched request sent by the counterparty process. `RelativeTime'
+%% is the approximate time differnece (in the broker's time unit) between when
+%% the request was sent and the matching request was sent. `SojournTime' is the
+%% approximate time spent in both the broker's message queue and internal queue.
 %%
 %% `RelativeTime' represents the `SojournTime' without the overhead of the
 %% broker. The value measures the level of queue congestion without being
@@ -189,103 +208,162 @@
 %% approximately the same time. Therefore `SojournTime' is the latency, or
 %% overhead, of the broker.
 %%
-%% The sojourn time for `Pid' can be approximated by `SojournTime' minus
-%% `RelativeTime'.
--spec ask(Broker) -> Go | Drop when
+%% The sojourn time for matched process can be approximated by `SojournTime'
+%% minus `RelativeTime'.
+-spec ask(Broker, ReqValue) -> Go | Drop when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
+      ReqValue :: any(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
-      Pid :: pid(),
+      Value :: any(),
       RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
-ask(Broker) ->
-    call(Broker, ask, undefined, infinity).
+ask(Broker, ReqValue) ->
+    call(Broker, ask, ReqValue, infinity).
 
-%% @doc Tries to match with a process calling `ask/1' on the same broker.
-%%
-%% @see ask/1
+%% @equiv ask_r(Broker, self())
 -spec ask_r(Broker) -> Go | Drop when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
-      Pid :: pid(),
+      Value ::  any(),
       RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask_r(Broker) ->
-    call(Broker, bid, undefined, infinity).
+    call(Broker, bid, self(), infinity).
 
-%% @doc Tries to match with a process calling `ask_r/1' on the same broker but
-%% does not enqueue the request if no immediate match. Returns
-%% `{go, Ref, Pid, RelativeTime, SojournTime}' on a successful match or
-%% `{retry, SojournTime}'.
+%% @doc Tries to match with a process calling `ask/2' on the same broker.
 %%
-%% `Ref' is the transaction reference, which is a `reference()'. `Pid' is the
-%% matched process. `RelativeTime' is the time spent waiting for a match after
-%% discounting time spent waiting for the broker to handle requests.
-%% `SojournTime' is the time spent in the broker's message queue.
-%%
-%% @see ask/1
+%% @see ask/2
+-spec ask_r(Broker, ReqValue) -> Go | Drop when
+      Broker :: broker(),
+      ReqValue :: any(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: integer(),
+      SojournTime :: non_neg_integer(),
+      Drop :: {drop, SojournTime}.
+ask_r(Broker, ReqValue) ->
+    call(Broker, bid, ReqValue, infinity).
+
+%% @equiv nb_ask(Broker, self())
 -spec nb_ask(Broker) -> Go | Retry when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
-      Pid :: pid(),
+      Value :: any(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask(Broker) ->
-    call(Broker, nb_ask, undefined, infinity).
+    call(Broker, nb_ask, self(), infinity).
 
-%% @doc Tries to match with a process calling `ask/1' on the same broker but
-%% does not enqueue the request if no immediate match.
+%% @doc Tries to match with a process calling `ask_r/2' on the same broker but
+%% does not enqueue the request if no immediate match. Returns
+%% `{go, Ref, Value, RelativeTime, SojournTime}' on a successful match or
+%% `{retry, SojournTime}'.
 %%
-%% @see nb_ask/1
+%% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
+%% value of the matched process. `RelativeTime' is the time spent waiting for a
+%% match after discounting time spent waiting for the broker to handle requests.
+%% `SojournTime' is the time spent in the broker's message queue.
+%%
+%% @see ask/2
+-spec nb_ask(Broker, ReqValue) -> Go | Retry when
+      Broker :: broker(),
+      ReqValue :: any(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Retry :: {retry, SojournTime}.
+nb_ask(Broker, ReqValue) ->
+    call(Broker, nb_ask, ReqValue, infinity).
+
+%% @equiv nb_ask_r(Broker, self())
 -spec nb_ask_r(Broker) -> Go | Retry when
       Broker :: broker(),
-      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
-      Pid :: pid(),
+      Value :: any(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask_r(Broker) ->
-    call(Broker, nb_bid, undefined, infinity).
+    call(Broker, nb_bid, self(), infinity).
 
-%% @doc Monitors the broker and sends an asynchronous request to match with a
-%% process calling `ask_r/1'. Returns `{await, Tag, Pid}'.
+%% @doc Tries to match with a process calling `ask/2' on the same broker but
+%% does not enqueue the request if no immediate match.
 %%
-%% `Tag' is a monitor `reference()' that uniquely identifies the reply
-%% containing the result of the request. `Pid', is the pid (`pid()') of the
-%% monitored broker. To cancel the request call `cancel(Pid, Tag)'.
-%%
-%% The reply is of the form `{Tag, {go, Ref, Pid, RelativeTime, SojournTime}'
-%% or `{Tag, {drop, SojournTime}}'.
-%%
-%% Multiple asynchronous requests can be made from a single process to a
-%% broker and no guarantee is made of the order of replies. A process making
-%% multiple requests can reuse the monitor reference for subsequent requests to
-%% the same broker process (`Process') using `async_ask/2'.
-%%
-%% @see cancel/2
-%% @see async_ask/2
+%% @see nb_ask/2
+-spec nb_ask_r(Broker, ReqValue) -> Go | Retry when
+      Broker :: broker(),
+      ReqValue :: any(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Retry :: {retry, SojournTime}.
+nb_ask_r(Broker, ReqValue) ->
+    call(Broker, nb_bid, ReqValue, infinity).
+
+%% @equiv async_ask(Broker, self())
 -spec async_ask(Broker) -> {await, Tag, Pid} when
       Broker :: broker(),
       Tag :: reference(),
       Pid :: pid().
 async_ask(Broker) ->
-    async_call(Broker, ask, undefined).
+    async_call(Broker, ask, self()).
 
-%% @doc Sends an asynchronous request to match with a process calling `ask_r/1'.
+%% @doc Monitors the broker and sends an asynchronous request to match with a
+%% process calling `ask_r/2'. Returns `{await, Tag, Pid}'.
+%%
+%% `Tag' is a monitor `reference()' that uniquely identifies the reply
+%% containing the result of the request. `Pid', is the pid (`pid()') of the
+%% monitored broker. To cancel the request call `cancel(Pid, Tag)'.
+%%
+%% The reply is of the form `{Tag, {go, Ref, Value, RelativeTime, SojournTime}'
+%% or `{Tag, {drop, SojournTime}}'.
+%%
+%% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
+%% value of the matched process. `RelativeTime' is the time spent waiting for a
+%% match after discounting time spent waiting for the broker to handle requests.
+%% `SojournTime' is the time spent in the broker's message queue.
+%%
+%% Multiple asynchronous requests can be made from a single process to a
+%% broker and no guarantee is made of the order of replies. A process making
+%% multiple requests can reuse the monitor reference for subsequent requests to
+%% the same broker process (`Process') using `async_ask/3'.
+%%
+%% @see cancel/2
+%% @see async_ask/3
+-spec async_ask(Broker, ReqValue) -> {await, Tag, Pid} when
+      Broker :: broker(),
+      ReqValue :: any(),
+      Tag :: reference(),
+      Pid :: pid().
+async_ask(Broker, ReqValue) ->
+    async_call(Broker, ask, ReqValue).
+
+%% @doc Sends an asynchronous request to match with a process calling `ask_r/2'.
 %% Returns `{await, Tag, Pid}'.
 %%
 %% `Tag' is a `any()' that identifies the reply containing the result of the
 %% request. `Pid', is the pid (`pid()') of the broker. To cancel all requests
 %% identified by `Tag' on broker `Pid' call `cancel(Pid, Tag)'.
 %%
-%% The reply is of the form `{Tag, {go, Ref, Pid, RelativeTime, SojournTime}' or
-%% `{Tag, {drop, SojournTime}}'.
+%% The reply is of the form `{Tag, {go, Ref, Value, RelativeTime, SojournTime}'
+%% or `{Tag, {drop, SojournTime}}'.
+%%
+%% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
+%% value of the matched process. `RelativeTime' is the time spent waiting for a
+%% match after discounting time spent waiting for the broker to handle requests.
+%% `SojournTime' is the time spent in the broker's message queue.
 %%
 %% Multiple asynchronous requests can be made from a single process to a
 %% broker and no guarantee is made of the order of replies. If the broker
@@ -293,35 +371,46 @@ async_ask(Broker) ->
 %% the caller should take appropriate steps to handle this scenario.
 %%
 %% @see cancel/2
--spec async_ask(Broker, Tag) -> {await, Tag, Pid} when
+-spec async_ask(Broker, ReqValue, Tag) -> {await, Tag, Pid} when
       Broker :: broker(),
+      ReqValue :: any(),
       Tag :: any(),
       Pid :: pid().
-async_ask(Broker, Tag) ->
-    async_call(Broker, ask, undefined, Tag).
+async_ask(Broker, ReqValue, Tag) ->
+    async_call(Broker, ask, ReqValue, Tag).
 
-%% @doc Monitors the broker and sends an asynchronous request to match with a
-%% process calling `ask/1'.
-%%
-%% @see async_ask/1
-%% @see cancel/2
+%% @equiv async_ask_r(Broker, self())
 -spec async_ask_r(Broker) -> {await, Tag, Pid} when
       Broker :: broker(),
       Tag :: reference(),
       Pid :: pid().
 async_ask_r(Broker) ->
-    async_call(Broker, bid, undefined).
+    async_call(Broker, bid, self()).
 
-%% @doc Sends an asynchronous request to match with a process calling `ask/1'.
+%% @doc Monitors the broker and sends an asynchronous request to match with a
+%% process calling `ask/2'.
 %%
 %% @see async_ask/2
 %% @see cancel/2
--spec async_ask_r(Broker, Tag) -> {await, Tag, Pid} when
+-spec async_ask_r(Broker, ReqValue) -> {await, Tag, Pid} when
       Broker :: broker(),
+      ReqValue :: any(),
+      Tag :: reference(),
+      Pid :: pid().
+async_ask_r(Broker, ReqValue) ->
+    async_call(Broker, bid, ReqValue).
+
+%% @doc Sends an asynchronous request to match with a process calling `ask/2'.
+%%
+%% @see async_ask/3
+%% @see cancel/2
+-spec async_ask_r(Broker, ReqValue, Tag) -> {await, Tag, Pid} when
+      Broker :: broker(),
+      ReqValue :: any(),
       Tag :: any(),
       Pid :: pid().
-async_ask_r(Broker, Tag) ->
-    async_call(Broker, bid, undefined, Tag).
+async_ask_r(Broker, ReqValue, Tag) ->
+    async_call(Broker, bid, ReqValue, Tag).
 
 %% @doc Await the response to an asynchronous request identified by `Tag'.
 %%
@@ -334,9 +423,9 @@ async_ask_r(Broker, Tag) ->
 -spec await(Tag, Timeout) -> Go | Drop when
       Tag :: any(),
       Timeout :: timeout(),
-      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
-      Pid :: pid(),
+      Value :: any(),
       RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
@@ -714,20 +803,20 @@ asking(Now, Send, Seq, Asks, Bids, Config) ->
             asking(Msg, Now, Send, Seq + 1, Asks, Bids, Config)
     end.
 
-asking({ask, Ask, _}, Now, Send, Seq, Asks, Bids,
+asking({ask, Ask, Value}, Now, Send, Seq, Asks, Bids,
        #config{ask_mod=AskMod} = Config) ->
-    try AskMod:handle_in(Send, Ask, Now, Asks) of
+    try AskMod:handle_in(Send, Ask, Value, Now, Asks) of
         NAsks ->
             asking(Now, Send, Seq, NAsks, Bids, Config)
     catch
         Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
     end;
-asking({bid, Bid, _} = Msg, Now, Send, Seq, Asks, Bids,
+asking({bid, Bid, BidValue} = Msg, Now, Send, Seq, Asks, Bids,
        #config{ask_mod=AskMod} = Config) ->
     try AskMod:handle_out(Now, Asks) of
-        {AskSojourn, Ask, NAsks} ->
-            settle(Now, Now - AskSojourn, Ask, Send, Bid),
+        {AskSend, Ask, AskValue, NAsks} ->
+            settle(Now, AskSend, Ask, AskValue, Send, Bid, BidValue),
             asking(Now, Send, Seq, NAsks, Bids, Config);
         {empty, NAsks} ->
             bidding(Msg, Now, Send, Seq, NAsks, Bids, Config);
@@ -740,11 +829,11 @@ asking({bid, Bid, _} = Msg, Now, Send, Seq, Asks, Bids,
 asking({nb_ask, Ask, _}, Now, Send, Seq, Asks, Bids, Config) ->
     retry(Ask, Now, Send),
     asking_timeout(Now, Send, Seq, Asks, Bids, Config);
-asking({nb_bid, Bid, _}, Now, Send, Seq, Asks, Bids,
+asking({nb_bid, Bid, BidValue}, Now, Send, Seq, Asks, Bids,
        #config{ask_mod=AskMod} = Config) ->
     try AskMod:handle_out(Now, Asks) of
-        {AskSojourn, Ask, NAsks} ->
-            settle(Now, Now - AskSojourn, Ask, Send, Bid),
+        {AskSend, Ask, AskValue, NAsks} ->
+            settle(Now, AskSend, Ask, AskValue, Send, Bid, BidValue),
             asking(Now, Send, Seq, NAsks, Bids, Config);
         {empty, NAsks} ->
             retry(Bid, Now, Send),
@@ -870,20 +959,20 @@ bidding(Now, Send, Seq, Asks, Bids, Config) ->
             bidding(Msg, Now, Send, Seq + 1, Asks, Bids, Config)
     end.
 
-bidding({bid, Bid, _}, Now, Send, Seq, Asks, Bids,
+bidding({bid, Bid, Value}, Now, Send, Seq, Asks, Bids,
         #config{bid_mod=BidMod} = Config) ->
-    try BidMod:handle_in(Send, Bid, Now, Bids) of
+    try BidMod:handle_in(Send, Bid, Value, Now, Bids) of
         NBids ->
             bidding(Now, Send, Seq, Asks, NBids, Config)
     catch
         Class:Reason ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
     end;
-bidding({ask, Ask, _} = Msg, Now, Send, Seq, Asks, Bids,
+bidding({ask, Ask, AskValue} = Msg, Now, Send, Seq, Asks, Bids,
         #config{bid_mod=BidMod} = Config) ->
     try BidMod:handle_out(Now, Bids) of
-        {BidSojourn, Bid, NBids} ->
-            settle(Now, Send, Ask, Now - BidSojourn, Bid),
+        {BidSend, Bid, BidValue, NBids} ->
+            settle(Now, Send, Ask, AskValue, BidSend, Bid, BidValue),
             bidding(Now, Send, Seq, Asks, NBids, Config);
         {empty, NBids} ->
             asking(Msg, Now, Send, Seq, Asks, NBids, Config);
@@ -896,11 +985,11 @@ bidding({ask, Ask, _} = Msg, Now, Send, Seq, Asks, Bids,
 bidding({nb_bid, Bid, _}, Now, Send, Seq, Asks, Bids, Config) ->
     retry(Bid, Now, Send),
     bidding_timeout(Now, Send, Seq, Asks, Bids, Config);
-bidding({nb_ask, Ask, _}, Now, Send, Seq, Asks, Bids,
+bidding({nb_ask, Ask, AskValue}, Now, Send, Seq, Asks, Bids,
         #config{bid_mod=BidMod} = Config) ->
     try BidMod:handle_out(Now, Bids) of
-        {BidSojourn, Bid, NBids} ->
-            settle(Now, Send, Ask, Now - BidSojourn, Bid),
+        {BidSend, Bid, BidValue, NBids} ->
+            settle(Now, Send, Ask, AskValue, BidSend, Bid, BidValue),
             bidding(Now, Send, Seq, Asks, NBids, Config);
         {empty, NBids} ->
             retry(Ask, Now, Send),
@@ -972,12 +1061,12 @@ bidding_exception(Class, Reason, Asks, Bids,
                  {BidMod, Reason2, Bids}],
     terminate(Reason2, Callbacks, Config).
 
-settle(Now, BidSend, {BidPid, _} = Bid, AskSend, {AskPid, _} = Ask) ->
+settle(Now, AskSend, Ask, AskValue, BidSend, Bid, BidValue) ->
     Ref = make_ref(),
     RelativeTime = AskSend - BidSend,
     %% Bid always messaged first.
-    gen:reply(Bid, {go, Ref, AskPid, RelativeTime, Now - BidSend}),
-    gen:reply(Ask, {go, Ref, BidPid, -RelativeTime, Now - AskSend}).
+    gen:reply(Bid, {go, Ref, AskValue, RelativeTime, Now - BidSend}),
+    gen:reply(Ask, {go, Ref, BidValue, -RelativeTime, Now - AskSend}).
 
 retry(From, Now, Send) ->
     gen:reply(From, {retry, Now - Send}).
@@ -1056,7 +1145,6 @@ change(Now, Mod1, State1, Mod2, Args2, Config) ->
             {stop, Reason2, [{Mod1, stop, State1}]}
     end.
 
-
 change_init(Now, Items, Mod1, State1, Mod2, Args2, Config) ->
     try Mod2:init(Now,Args2) of
         State2 ->
@@ -1078,26 +1166,29 @@ change_report(Mod, Reason, Args, Config) ->
     stop_logger:format(Format, Args).
 
 change_from_list(Items, Now, Mod1, State1, Mod2, State2, Config) ->
-    In = fun(Item, Acc) -> change_in(Item, Now, Mod2, Acc) end,
-    try lists:foldl(In, State2, Items) of
-        NState2 ->
-            change_terminate(Mod1, State1, Mod2, NState2, Config)
-    catch
-        throw:{stop, Reason, Callbacks} ->
+    case change_in(Items, Now, Mod2, State2) of
+        {ok, NState2} ->
+            change_terminate(Mod1, State1, Mod2, NState2, Config);
+        {stop, Reason, Callbacks} ->
             {stop, Reason, [{Mod1, stop, State1} | Callbacks]};
-        error:function_clause ->
+        {bad_items, Callbacks} ->
             Reason = {bad_return_value, Items},
-            {stop, Reason, [{Mod1, Reason, State1}, {Mod2, stop, State2}]}
+            {stop, Reason, [{Mod1, Reason, State1} | Callbacks]}
     end.
 
-change_in({Send, From}, Now, Mod, State) ->
-    try
-        Mod:handle_in(Send, From, Now, State)
+change_in([], _, _, State) ->
+    {ok, State};
+change_in([{Send, From, Value} | Items], Now, Mod, State) ->
+    try Mod:handle_in(Send, From, Value, Now, State) of
+        NState ->
+            change_in(Items, Now, Mod, NState)
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            throw({stop, Reason2, [{Mod, Reason2, State}]})
-    end.
+            {stop, Reason2, [{Mod, Reason2, State}]}
+    end;
+change_in(_, _, Mod, State) ->
+    {bad_items, [{Mod, stop, State}]}.
 
 change_terminate(Mod1, State1, Mod2, State2, Config) ->
     try Mod1:terminate(change, State1) of

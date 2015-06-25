@@ -22,7 +22,7 @@
 -behaviour(sbroker_queue).
 
 -export([init/2]).
--export([handle_in/4]).
+-export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
@@ -35,7 +35,8 @@
 -ifdef(LEGACY_TYPES).
 -type internal_queue() :: queue().
 -else.
--type internal_queue() :: queue:queue({integer(), {pid(), any()}, reference()}).
+-type internal_queue() ::
+    queue:queue({integer(), {pid(), any()}, any(), reference()}).
 -endif.
 
 -record(state, {config :: [non_neg_integer()],
@@ -55,19 +56,19 @@
 init(_, {Out, Drops}) ->
     #state{config=Drops, out=Out, drops=Drops}.
 
-handle_in(SendTime, {Pid, _} = From, Time, State) ->
+handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
     #state{queue=Q} = NState = handle_timeout(Time, State),
     Ref = monitor(process, Pid),
-    NState#state{queue=queue:in({SendTime, From, Ref}, Q)}.
+    NState#state{queue=queue:in({SendTime, From, Value, Ref}, Q)}.
 
 handle_out(Time, #state{out=Out} = State) ->
     #state{queue=Q} = NState = handle_timeout(Time, State),
     case queue:Out(Q) of
         {empty, _} ->
             {empty, NState};
-        {{value, {SendTime, From, Ref}}, NQ} ->
+        {{value, {SendTime, From, Value, Ref}}, NQ} ->
             demonitor(Ref, [flush]),
-            {SendTime, From, NState#state{queue=NQ}}
+            {SendTime, From, Value, NState#state{queue=NQ}}
     end.
 
 %% If queue is empty don't change state.
@@ -82,7 +83,7 @@ handle_timeout(Time, #state{queue=Q} = State) ->
 handle_cancel(Tag, Time, State) ->
     #state{queue=Q} = NState = handle_timeout(Time, State),
     Len = queue:len(Q),
-    Cancel = fun({_, {_, Tag2}, Ref}) when Tag2 =:= Tag ->
+    Cancel = fun({_, {_, Tag2}, _, Ref}) when Tag2 =:= Tag ->
                      demonitor(Ref, [flush]),
                      false;
                 (_) ->
@@ -97,7 +98,7 @@ handle_cancel(Tag, Time, State) ->
     end.
 handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
     #state{queue=Q} = NState = handle_timeout(Time, State),
-    NQ = queue:filter(fun({_, _, Ref2}) -> Ref2 =/= Ref end, Q),
+    NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
     NState#state{queue=NQ};
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
@@ -109,13 +110,13 @@ config_change({Out, Config}, Time, State) ->
 
 
 to_list(#state{queue=Q}) ->
-    [erlang:delete_element(3, Item) || Item <- queue:to_list(Q)].
+    [erlang:delete_element(4, Item) || Item <- queue:to_list(Q)].
 
 len(#state{queue=Q}) ->
     queue:len(Q).
 
 terminate(_, #state{queue=Q}) ->
-    _ = [demonitor(Ref, [flush]) || {_, _, Ref} <- queue:to_list(Q)],
+    _ = [demonitor(Ref, [flush]) || {_, _, _, Ref} <- queue:to_list(Q)],
     ok.
 
 %% Internal
@@ -134,6 +135,6 @@ drop_queue(Time, Q) ->
     _ = [drop_item(Time, Item) || Item <- queue:to_list(Q)],
     ok.
 
-drop_item(Time, {SendTime, From, Ref}) ->
+drop_item(Time, {SendTime, From, _, Ref}) ->
     demonitor(Ref, [flush]),
     sbroker_queue:drop(From, SendTime, Time).
