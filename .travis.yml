@@ -6,6 +6,5 @@ otp_release:
     - 17.0
     - R16B03-1
     - R16B02
-    - R15B03
 script: "rebar get-deps compile ct -C rebar.test.config"
 
