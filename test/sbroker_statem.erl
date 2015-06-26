@@ -642,7 +642,7 @@ get_state_args(#state{sbroker=Broker}) ->
     [Broker, ?TIMEOUT].
 
 get_state_pre(_, _) ->
-    erlang:function_exported(sys, get_state, 2).
+    erlang:function_exported(gen_server, system_get_state, 1).
 
 get_state_next(State, _, _) ->
     sys_next(State).
@@ -682,7 +682,7 @@ replace_state(Broker, Timeout) ->
     sys:replace_state(Broker, fun(Q) -> Q end, Timeout).
 
 replace_state_pre(_, _) ->
-    erlang:function_exported(sys, replace_state, 3).
+    erlang:function_exported(gen_server, system_replace_state, 2).
 
 replace_state_next(State, _, _) ->
     sys_next(State).
