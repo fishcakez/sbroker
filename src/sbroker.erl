@@ -142,8 +142,7 @@
     {time_unit, sbroker_time:unit()} |
     {read_time_after, non_neg_integer() | infinity}.
 -type start_return() :: {ok, pid()} | ignore | {error, any()}.
--type queue_spec() :: {module(), any(), out | out_r,
-                       non_neg_integer() | infinity, drop | drop_r}.
+-type queue_spec() :: {module(), any()}.
 
 -export_type([broker/0]).
 -export_type([queue_spec/0]).

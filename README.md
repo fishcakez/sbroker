@@ -9,12 +9,13 @@ Introduction
 
 `sbroker` provides a simple interface to match processes. One party
 calls `sbroker:ask/1` and the counterparty `sbroker:ask_r/1`. If a match
-is found both return `{go, Ref, Pid, RelativeTime, SojournTime}`, where
-`SojournTime` is the time spent in `native` time units waiting for a match,
-`RelativeTime` is the theoretical sojourn time if using the sbroker had no
-overhead, in `native` time units, `Pid` is the other process in the match and
-`Ref` is the transaction reference. If no match is found, returns
-`{drop, SojournTime}`.
+is found both return `{go, Ref, Pid, RelativeTime, SojournTime}`. `Ref` is the
+transaction reference. `Pid` is the other process in the match, which can be
+changed by using `sbroker:ask/2` and `sbroker:ask_r/2`. `SojournTime` is the
+time spent waiting for a match and `RelativeTime` is the theoretical sojourn
+time if using the sbroker had no overhead. If no match is found, returns
+`{drop, SojournTime}`. The time unit for `SojournTime` and `RelativeTime` is set
+by the `time_unit` start option to a broker, defaulting to the VM's native unit.
 
 Processes calling `sbroker:ask/1` are only matched with a process calling
 `sbroker:ask_r/1` and vice versa.
@@ -25,48 +26,38 @@ Usage
 `sbroker` provides configurable queues defined by `sbroker:queue_spec()`s. A
 `queue_spec()` takes the form:
 ```erlang
-{Module, Args, Out, Size, Drop}
+{Module, Args}
 ```
-`Module` is an `squeue` callback module to handle active queue
-management. The following modules are possible: `squeue_naive`,
-`squeue_timeout`, `squeue_codel` and `squeue_codel_timeout`.
+`Module` is an `sbroker_queue` callback module to queue. The following callback
+modules are provided: `sbroker_drop_queue`, `sbroker_timeout_queue` and
+`sbroker_codel_queue`.
+
 `Args` is the argument passed to the callback module. Information about
 the different backends and their arguments are avaliable in the
-documentation. The `native` time units are used to measure time with
-these queues to prevent a lose of precision.
-`sbroker_time:milli_seconds_to_native/1` converts milliseconds to the
-`native` time unit.
+documentation.
 
-`Out` sets the dequeue function, either the atom `out` (FIFO) or the
-atom `out_r` (LIFO).
-
-`Size` is the maximum size of the queue. Should the queue go above this
-size a process is dropped. The dropping strategy is determined by
-`Drop`, which is either the atom `drop` (head drop) or the atom `drop_r`
-(tail drop).
-
-An `sbroker` is started using `sbroker:start_link/2,3`:
+An `sbroker` is started using `sbroker:start_link/3,4`:
 ```erlang
-sbroker:start_link(Module, Args).
-sbroker:start_link(Name, Module, Args).
+sbroker:start_link(Module, Args, Opts).
+sbroker:start_link(Name, Module, Args, Opts).
 ```
 
 The sbroker will call `Module:init(Args)`, which should return the specification
 for the sbroker:
 ```erlang
 init(_) ->
-    {ok, {AskQueueSpec, AskRQueueSpec, Interval}}.
+    {ok, {AskQueueSpec, AskRQueueSpec, Timeout}}.
 ```
 `AskQueueSpec` is the `queue_spec` for the queue containing processes calling
 `ask/1`. The queue is referred to as the `ask` queue. Similarly
 `AskRQueueSpec` is the `queue_spec` for the queue contaning processes calling
-`ask_r/1`, and the queue is referedd toas the `ask_r` queue.
+`ask_r/1`, and the queue is referred to as the `ask_r` queue.
 
-`Interval` is the interval in milliseconds that an `sbroker` is polled to apply
-timeout queue management. Note that timeout queue management can occur on every
-enqueue and dequeue, and is not reliant on the `Interval`. Setting a suitable
-interval ensures that active queue management can occur if no processes are
-enqueued or dequeued for a period of time.
+`Timeout` is the timeout, in milliseconds, that the broker polls the
+active queue after a period of inactivity. Note that timeout queue management
+can occur on every enqueue and dequeue, and is not reliant on the `Timeout`.
+Setting a suitable timeout ensures that active queue management can occur if no
+processes are enqueued or dequeued for a period of time.
 
 For example:
 ```erlang
@@ -78,24 +69,23 @@ For example:
 -export([init/1]).
 
 start_link() ->
-    sbroker:start_link(?MODULE, undefined).
+    sbroker:start_link(?MODULE, undefined, [{time_unit, milli_seconds}]).
 
 init(_) ->
-    Timeout = sbroker_time:milli_seconds_to_native(200),
-    QueueSpec = {squeue_timeout, Timeout, out, 16, drop},
-    Interval = 100,
-    {ok, {QueueSpec, QueueSpec, Interval}}.
+    QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 16}},
+    {ok, {QueueSpec, QueueSpec, 100}}.
 ```
 `sbroker_example:start_link/0` will start an `sbroker` with queues configured by 
 `QueueSpec`.
 
-This configuration uses the `squeue_timeout` queue management module which drops
-requests after they have been in the queue for `200` milliseconds - converted to
-`native` time units. `out` sets the queue to `FIFO`. `16` sets the maximum
-length of the queue. `drop` sets the queue to drop processes from the head of
-the queue (head drop) when the maximum size is reached. `Interval` sets the
-poll interval of the queue to `100` milliseconds, which means`squeue:timeout/2`
-is called every `100` milliseconds on the active queue.
+This configuration uses the `sbroker_timeout_queue` callback module which drops
+requests when they have been in the queue for longer than a time limit - in this
+case `200` milliseconds. `out` sets the queue to `FIFO`. `drop` sets the queue
+to drop processes from the head of the queue (head drop) when the maximum size
+(`16`) is reached. The broker timeout is `100` milliseconds, which means that
+queue management is applied to the active queue after `100` milliseconds of
+inactivity. This value is always in milliseconds, regardless of the
+`time_unit` in the start options.
 
 To use this `sbroker`:
 ```erlang
