@@ -117,11 +117,7 @@ Then visit `doc/index.html`.
 
 Test
 ----
-Rebar fetches test dependency and runs common test:
-```
-rebar get-deps compile ct -C rebar.test.config
-```
-Or rebar3:
+Testing requires rebar3:
 ```
 rebar3 ct
 ```

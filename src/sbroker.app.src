@@ -1,9 +1,12 @@
 {application, sbroker,
- [{description, "Sojourn-time based active queue management process broker"}
- ,{vsn, "0.6.2"}
+ [{description, "Process broker for dispatching with backpressure and load shedding"}
+ ,{vsn, "0.7.0"}
  ,{registered, []}
  ,{applications,
     [kernel,stdlib]}
  ,{env,[]}
  ,{modules, []}
+ ,{contributors, ["James Fish"]}
+ ,{licenses, ["Apache v2.0"]}
+ ,{links, [{"Github", "https://github.com/fishcakez/sbroker"}]}
  ]}.
