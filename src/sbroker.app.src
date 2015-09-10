@@ -1,6 +1,6 @@
 {application, sbroker,
  [{description, "Process broker for dispatching with backpressure and load shedding"}
- ,{vsn, "0.7.0"}
+ ,{vsn, "0.8.0-dev+queue_timeout"}
  ,{registered, []}
  ,{applications,
     [kernel,stdlib]}
