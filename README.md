@@ -46,18 +46,12 @@ The sbroker will call `Module:init(Args)`, which should return the specification
 for the sbroker:
 ```erlang
 init(_) ->
-    {ok, {AskQueueSpec, AskRQueueSpec, Timeout}}.
+    {ok, {AskQueueSpec, AskRQueueSpec}}.
 ```
 `AskQueueSpec` is the `queue_spec` for the queue containing processes calling
 `ask/1`. The queue is referred to as the `ask` queue. Similarly
 `AskRQueueSpec` is the `queue_spec` for the queue contaning processes calling
 `ask_r/1`, and the queue is referred to as the `ask_r` queue.
-
-`Timeout` is the timeout, in milliseconds, that the broker polls the
-active queue after a period of inactivity. Note that timeout queue management
-can occur on every enqueue and dequeue, and is not reliant on the `Timeout`.
-Setting a suitable timeout ensures that active queue management can occur if no
-processes are enqueued or dequeued for a period of time.
 
 For example:
 ```erlang
@@ -73,7 +67,7 @@ start_link() ->
 
 init(_) ->
     QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 16}},
-    {ok, {QueueSpec, QueueSpec, 100}}.
+    {ok, {QueueSpec, QueueSpec}}.
 ```
 `sbroker_example:start_link/0` will start an `sbroker` with queues configured by 
 `QueueSpec`.
@@ -82,10 +76,7 @@ This configuration uses the `sbroker_timeout_queue` callback module which drops
 requests when they have been in the queue for longer than a time limit - in this
 case `200` milliseconds. `out` sets the queue to `FIFO`. `drop` sets the queue
 to drop processes from the head of the queue (head drop) when the maximum size
-(`16`) is reached. The broker timeout is `100` milliseconds, which means that
-queue management is applied to the active queue after `100` milliseconds of
-inactivity. This value is always in milliseconds, regardless of the
-`time_unit` in the start options.
+(`16`) is reached.
 
 To use this `sbroker`:
 ```erlang

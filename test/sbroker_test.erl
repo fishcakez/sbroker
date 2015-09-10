@@ -40,4 +40,4 @@ start_link() ->
 
 init(undefined) ->
     QSpec = {sbroker_timeout_queue, {out, 200, drop, infinity}},
-    {ok, {QSpec, QSpec, 200}}.
+    {ok, {QSpec, QSpec}}.

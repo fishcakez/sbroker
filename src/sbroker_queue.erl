@@ -33,12 +33,12 @@
 %%
 %% `State' is the state of the queue and used in the next call.
 %%
-%% When inserting a request into the queue, `handle_in/4':
+%% When inserting a request into the queue, `handle_in/5':
 %% ```
 %% -callback handle_in(SendTime :: integer(),
-%%                     From :: {Sender :: pid(), Tag :: any()},
+%%                     From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
 %%                     Time :: integer(), State :: any()) ->
-%%     NState :: any().
+%%     {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
 %% `SendTime' is the (approximate) time a request was sent. It is always less
 %% than or equal to `Time'.
@@ -46,63 +46,80 @@
 %% `From' is a 2-tuple containing the senders pid and a response tag. `From' can
 %% be used with `drop/3' to drop a request.
 %%
-%% `Time' is the current time, `State' is the current state and `NState' is the
-%% new state.
+%% `Value' is any term, `Time' is the current time, `State' is the current
+%% state and `NState'.
+%%
+%% `TimeoutTime' represents the next time a queue wishes to call
+%% `handle_timeout/2' to drop items. If a message is not received the timeout
+%% should occur at or after `TimeoutTime'. The time must be greater than or
+%% equal to `Time'. If a queue does not require a timeout then `TimeoutTime'
+%% should be `infinity'. The value may be ignored or unavailable in other
+%% callbacks if the queue is empty.
 %%
 %% When removing a request from the queue, `handle_out/2':
 %% ```
 %% -callback handle_out(Time :: integer(), State :: any()) ->
 %%     {SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()},
-%%      NState :: any()} |
+%%      Value:: any(), NState :: any(), TimeoutTime :: integer() | infinity} |
 %%     {empty, NState :: any()}.
 %% '''
 %%
 %% `Time' is the current time, `State' is the current state and `NState' is the
 %% new state.
 %%
+%% `SendTime', `From' and `Value' should be the same values passed as
+%% arguments to `handle_in/5'.
+%%
+%% `TimeoutTime' is the time of the next timeout, see `handle_in/5'.
+%%
 %% When a timeout occurs, `handle_timeout/2':
 %% ```
 %% -callback handle_timeout(Time :: integer(), State :: any()) ->
-%%     NState :: any().
+%%     {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
-%% `Time' is the current time, `State' is the current state and `NState' is the
-%% new state.
+%% `Time' is the current time, `State' is the current state, `NState' is the
+%% new state and `TimeoutTime' is the time of the next timeout, see
+%% `handle_in/5'.
 %%
 %% When cancelling requests, `handle_cancel/3':
 %% ```
 %% -callback handle_cancel(Tag :: any(), Time :: integer(), State :: any()) ->
-%%     {Reply :: false | pos_integer(), NState :: any()}.
+%%     {Reply :: false | pos_integer(), NState :: any(),
+%%      TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Tag' is a response tag, which is part of the `From' tuple passed to
-%% `handle_in/4'. There may be multiple requests with the same tag and all
+%% `handle_in/5'. There may be multiple requests with the same tag and all
 %% should be removed.
 %%
 %% If no requests are cancelled the `Reply' is `false', otherwise it is the
 %% number of cancelled requests.
 %%
-%% `Time' is the current time, `State' is the current state and `NState' is the
-%% new state.
+%% `Time' is the current time, `State' is the current state, `NState' is the
+%% new state and `TimeoutTime' is the time of the next timeout, see
+%% `handle_in/5'.
 %%
 %% When handling a message, `handle_info/3':
 %% ```
 %% -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
-%%     NState :: any().
+%%     {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Msg' is the message, and may be intended for another queue.
 %%
-%% `Time' is the current time, `State' is the current state and `NState' is the
-%% new state.
+%% `Time' is the current time, `State' is the current state, `NState' is the
+%% new state and `TimeoutTime' is the time of the next timeout, see
+%% `handle_in/5'.
 %%
 %% When changing the configuration of a queue, `config_change/3':
 %% ```
 %% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
-%%      NState :: any().
+%%      {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Args' is the arguments to reconfigure the queue. The queue should change its
 %% configuration as if the same `Args' term was used in `init/2'.
 %%
-%% `Time' is the current time, `State' is the current state and `NState' is the
-%% new state.
+%% `Time' is the current time, `State' is the current state, `NState' is the
+%% new state and `TimeoutTime' is the time of the next timeout, see
+%% `handle_in/5'.
 %%
 %% When returning a list of queued requests, `to_list/1':
 %% ```
@@ -128,9 +145,10 @@
 %%                     {error | throw | exit, Reason :: any(), Stack :: list()},
 %%                     State :: any()) -> any().
 %% '''
-%% `Reason' is `stop' if the queue is being shutdown,
-%% `{bad_return_value, Return}' if a previous callback returned an invalid term
-%% or `{Class, Reason, Stack}' if a previous callback raised an exception.
+%% `Reason' is `stop' if the queue is being shutdown, `change' if the queue is
+%% being replaced by another queue, `{bad_return_value, Return}' if a previous
+%% callback returned an invalid term or `{Class, Reason, Stack}' if a previous
+%% callback raised an exception.
 %%
 %% `State' is the current state of the queue.
 %%
@@ -145,28 +163,30 @@
 
 %% types
 
--callback init(Time :: integer(), Args :: any()) ->
-    State :: any().
+-callback init(Time :: integer(), Args :: any()) -> State :: any().
 
 -callback handle_in(SendTime :: integer(),
                     From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
-                    Time :: integer(), State :: any()) -> NState :: any().
+                    Time :: integer(), State :: any()) ->
+    {NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback handle_out(Time :: integer(), State :: any()) ->
     {SendTime :: integer(), From :: {pid(), Tag :: any()}, Value :: any(),
-     NState :: any()} |
+     NState :: any(), TimeoutTime :: integer() | infinity} |
     {empty, NState :: any()}.
 
--callback handle_timeout(Time :: integer(), State :: any()) -> NState :: any().
+-callback handle_timeout(Time :: integer(), State :: any()) ->
+    {NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback handle_cancel(Tag :: any(), Time :: integer(), State :: any()) ->
-    {Reply :: false | pos_integer(), NState :: any()}.
+    {Reply :: false | pos_integer(), NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
-    NState :: any().
+    {NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
-    NState :: any().
+    {NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback to_list(State :: any()) ->
     [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()},
@@ -174,7 +194,8 @@
 
 -callback len(State :: any()) -> Len :: non_neg_integer().
 
--callback terminate(Reason :: stop | {bad_return_value, Return :: any()} |
+-callback terminate(Reason :: stop | change |
+                    {bad_return_value, Return :: any()} |
                     {error | throw | exit, Reason :: any(), Stack :: list()},
                     State :: any()) -> any().
 
