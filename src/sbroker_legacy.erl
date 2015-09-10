@@ -1,6 +1,7 @@
 %%-------------------------------------------------------------------
 %%
 %% Copyright (c) 2015, James Fish <james@fishcakez.com>
+%% Copyright Ericsson AB 2014-2015. All Rights Reserved
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -27,6 +28,7 @@
 
 -export([monotonic_time/0]).
 -export([monotonic_time/1]).
+-export([convert_time_unit/3]).
 
 %% @doc Get the time, `Time', as an `integer()' in `micro_seconds'.
 %%
@@ -64,4 +66,31 @@ monotonic_time(seconds) ->
 monotonic_time(1000000) ->
     monotonic_time();
 monotonic_time(N) when is_integer(N) and N > 0 ->
-    (N * monotonic_time()) div 1000000.
+    (N * monotonic_time()) div 1000000;
+monotonic_time(TimeUnit) ->
+    error(badarg, [TimeUnit]).
+
+%% @doc Convert the `integer()' time, `InTime', from `InTimeUnit' time units to
+%% `OutTimeUnit' time units.
+-spec convert_time_unit(InTime, InTimeUnit, OutTimeUnit) -> OutTime when
+      InTime :: integer(),
+      InTimeUnit :: sbroker_time:unit(),
+      OutTimeUnit :: sbroker_time:unit(),
+      OutTime :: integer().
+convert_time_unit(InTime, InTimeUnit, OutTimeUnit) ->
+    FU = integer_time_unit(InTimeUnit),
+    TU = integer_time_unit(OutTimeUnit),
+    case InTime < 0 of
+        true -> TU*InTime - (FU - 1);
+        false -> TU*InTime
+    end div FU.
+
+%% Internal
+
+integer_time_unit(native) -> 1000*1000;
+integer_time_unit(nano_seconds) -> 1000*1000*1000;
+integer_time_unit(micro_seconds) -> 1000*1000;
+integer_time_unit(milli_seconds) -> 1000;
+integer_time_unit(seconds) -> 1;
+integer_time_unit(I) when is_integer(I), I > 0 -> I;
+integer_time_unit(BadRes) -> erlang:error(bad_time_unit, [BadRes]).

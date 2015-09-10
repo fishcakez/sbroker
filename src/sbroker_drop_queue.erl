@@ -71,7 +71,7 @@ init(_, {Out, Drop, Max})
     #state{out=Out, drop=Drop, max=Max}.
 
 %% @private
--spec handle_in(SendTime, From, Value, Time, State) -> NState when
+-spec handle_in(SendTime, From, Value, Time, State) -> {NState, infinity} when
       Time :: integer(),
       SendTime :: integer(),
       From :: {pid(), any()},
@@ -81,7 +81,7 @@ init(_, {Out, Drop, Max})
 handle_in(SendTime, From, _, Time,
           #state{max=Max, len=Max, drop=drop_r} = State) ->
     sbroker_queue:drop(From, SendTime, Time),
-    State;
+    {State, infinity};
 handle_in(SendTime, {Pid, _} = From, Value, Time,
           #state{max=Max, len=Max, drop=drop, queue=Q} = State) ->
     {{value, {SendTime2, From2, _, Ref2}}, NQ} = queue:out(Q),
@@ -89,16 +89,16 @@ handle_in(SendTime, {Pid, _} = From, Value, Time,
     sbroker_queue:drop(From2, SendTime2, Time),
     Ref = monitor(process, Pid),
     NQ2 = queue:in({SendTime, From, Value, Ref}, NQ),
-    State#state{queue=NQ2};
+    {State#state{queue=NQ2}, infinity};
 handle_in(SendTime, {Pid, _} = From, Value, _,
           #state{len=Len, queue=Q} = State) ->
     Ref = monitor(process, Pid),
     NQ = queue:in({SendTime, From, Value, Ref}, Q),
-    State#state{len=Len+1, queue=NQ}.
+    {State#state{len=Len+1, queue=NQ}, infinity}.
 
 %% @private
 -spec handle_out(Time, State) ->
-    {SendTime, From, Value, NState} | {empty, NState} when
+    {SendTime, From, Value, NState, infinity} | {empty, NState} when
       Time :: integer(),
       State :: #state{},
       SendTime :: integer(),
@@ -108,16 +108,16 @@ handle_in(SendTime, {Pid, _} = From, Value, _,
 handle_out(_Time, #state{len=0} = State) ->
     {empty, State};
 handle_out(_, #state{out=out, len=Len, queue=Q} = State) ->
-    {{value, {_, _, _, Ref} = Item}, NQ} = queue:out(Q),
+    {{value, {SendTime, From, Value, Ref}}, NQ} = queue:out(Q),
     demonitor(Ref, [flush]),
-    setelement(4, Item, State#state{len=Len-1, queue=NQ});
+    {SendTime, From, Value, State#state{len=Len-1, queue=NQ}, infinity};
 handle_out(_, #state{out=out_r, len=Len, queue=Q} = State) ->
-    {{value, {_, _, _, Ref} = Item}, NQ} = queue:out_r(Q),
+    {{value, {SendTime, From, Value, Ref}}, NQ} = queue:out_r(Q),
     demonitor(Ref, [flush]),
-    setelement(4, Item, State#state{len=Len-1, queue=NQ}).
+    {SendTime, From, Value, State#state{len=Len-1, queue=NQ}, infinity}.
 
 %% @private
--spec handle_cancel(Tag, Time, State) -> {Cancelled, NState} when
+-spec handle_cancel(Tag, Time, State) -> {Cancelled, NState, infinity} when
       Tag :: any(),
       Time :: integer(),
       State :: #state{},
@@ -133,31 +133,31 @@ handle_cancel(Tag, _, #state{len=Len, queue=Q} = State) ->
     NQ = queue:filter(Cancel, Q),
     case queue:len(NQ) of
         Len ->
-            {false, State};
+            {false, State, infinity};
         NLen ->
-            {Len - NLen, State#state{len=NLen, queue=NQ}}
+            {Len - NLen, State#state{len=NLen, queue=NQ}, infinity}
     end.
 
 %% @private
--spec handle_timeout(Time, State) -> State when
+-spec handle_timeout(Time, State) -> {State, infinity} when
       Time :: integer(),
       State :: #state{}.
 handle_timeout(_Time, State) ->
-    State.
+    {State, infinity}.
 
 %% @private
--spec handle_info(Msg, Time, State) -> NState when
+-spec handle_info(Msg, Time, State) -> {NState, infinity} when
       Msg :: any(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
 handle_info({'DOWN', Ref, _, _, _}, _, #state{queue=Q} = State) ->
     NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
-    State#state{len=queue:len(NQ), queue=NQ};
+    {State#state{len=queue:len(NQ), queue=NQ}, infinity};
 handle_info(_, _, State) ->
-    State.
+    {State, infinity}.
 
--spec config_change({Out, Drop, Max}, Time, State) -> NState when
+-spec config_change({Out, Drop, Max}, Time, State) -> {NState, infinity} when
       Out :: out | out_r,
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
@@ -169,7 +169,7 @@ config_change({Out, drop, 0}, Time, State) ->
 config_change({Out, Drop, infinity}, _, State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) ->
-    State#state{out=Out, drop=Drop, max=infinity};
+    {State#state{out=Out, drop=Drop, max=infinity}, infinity};
 config_change({Out, Drop, Max}, Time, #state{len=Len, queue=Q} = State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
@@ -178,13 +178,17 @@ config_change({Out, Drop, Max}, Time, #state{len=Len, queue=Q} = State)
         DropCount when DropCount > 0 andalso Drop =:= drop ->
             {DropQ, NQ} = queue:split(DropCount, Q),
             drop_queue(Time, DropQ),
-            State#state{out=Out, drop=Drop, max=Max, len=Max, queue=NQ};
+            NState = State#state{out=Out, drop=Drop, max=Max, len=Max,
+                                 queue=NQ},
+            {NState, infinity};
         DropCount when DropCount > 0 andalso Drop =:= drop_r ->
             {NQ, DropQ} = queue:split(Max, Q),
             drop_queue(Time, DropQ),
-            State#state{out=Out, drop=Drop, max=Max, len=Max, queue=NQ};
+            NState = State#state{out=Out, drop=Drop, max=Max, len=Max,
+                                 queue=NQ},
+            {NState, infinity};
         _ ->
-            State#state{out=Out, drop=Drop, max=Max}
+            {State#state{out=Out, drop=Drop, max=Max}, infinity}
     end.
 
 %% @private

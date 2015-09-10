@@ -28,6 +28,7 @@
 
 -export([module/0]).
 -export([args/0]).
+-export([time_dependence/0]).
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
@@ -73,6 +74,9 @@ args() ->
 
 init({Out, Drops}) ->
     {Out, drop, infinity, {Drops, Drops}}.
+
+time_dependence() ->
+    indepedent.
 
 handle_timeout(_, _, {[], []} = State) ->
     {0, State};

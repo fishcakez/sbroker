@@ -20,13 +20,21 @@
 %% @doc This module provides a behaviour for reading the time and utility
 %% functions to get the current time.
 %%
-%% The `sbroker_time' behaviour has two callbacks:
+%% The `sbroker_time' behaviour has three callbacks:
 %% ```
 %% -callback monotonic_time() :: Time :: integer().
 %% -callback monotonic_time(TimeUnit :: unit()) -> Time :: integer().
+%% -callback convert_time_unit(InTime, InTimeUnit, OutTimeUnit) -> OutTime when
+%%       InTime :: integer(),
+%%       InTimeUnit :: sbroker_time:unit(),
+%%       OutTimeUnit :: sbroker_time:unit(),
+%%       OutTime :: integer().
 %% '''
 %% `monotonic_time/1' should return the time in the given time unit as an
 %% integer. `monotonic_time/0' should be equivalent to `monotonic_time(native)'.
+%%
+%% `convert_time_unit/3' should convert the `InTime' from `InTimeUnit' time
+%% units to `OutTimeUnit' time units.
 %%
 %% The `TimeUnit' is a named time unit: `native', `nano_seconds',
 %% `micro_seconds', `milli_seconds' or `seconds', or a `pos_integer()', which
@@ -43,6 +51,7 @@
 
 -export([monotonic_time/0]).
 -export([monotonic_time/1]).
+-export([convert_time_unit/3]).
 
 %% types
 
@@ -54,6 +63,11 @@
 
 -callback monotonic_time() -> Time :: integer().
 -callback monotonic_time(TimeUnit :: unit()) -> Time :: integer().
+-callback convert_time_unit(InTime, InTimeUnit, OutTimeUnit) -> OutTime when
+      InTime :: integer(),
+      InTimeUnit :: sbroker_time:unit(),
+      OutTimeUnit :: sbroker_time:unit(),
+      OutTime :: integer().
 
 %% @doc Get the time, `Time', as an `integer()' in the `native' time units.
 %%
@@ -90,4 +104,26 @@ monotonic_time(TimeUnit) ->
     catch
         error:undef ->
             sbroker_legacy:monotonic_time(TimeUnit)
+    end.
+
+%% @doc Convert the `integer()' time, `InTime', from `InTimeUnit' time units to
+%% `OutTimeUnit' time units.
+%%
+%% Use `erlang:convert_time_unit/3' if it is exported, otherwise falls back to
+%% `sbroker_legacy:convert_time_unit/3'.
+%%
+%% @see erlang:convert_time_unit/3
+%% @see sbroker_legacy:convert_time_unit/3
+-spec convert_time_unit(InTime, InTimeUnit, OutTimeUnit) -> OutTime when
+      InTime :: integer(),
+      InTimeUnit :: sbroker_time:unit(),
+      OutTimeUnit :: sbroker_time:unit(),
+      OutTime :: integer().
+convert_time_unit(InTime, InTimeUnit, OutTimeUnit) ->
+    try erlang:convert_time_unit(InTime, InTimeUnit, OutTimeUnit) of
+        OutTime ->
+            OutTime
+    catch
+        error:undef ->
+            sbroker_legacy:convert_time_unit(InTime, InTime, OutTimeUnit)
     end.

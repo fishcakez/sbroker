@@ -206,7 +206,7 @@ start_link_args(_) ->
     [init()].
 
 init() ->
-    frequency([{30, {ok, {queue_spec(), queue_spec(), 10000}}},
+    frequency([{30, {ok, {queue_spec(), queue_spec()}}},
                {1, ignore},
                {1, bad}]).
 
@@ -241,7 +241,7 @@ start_link_pre(#state{sbroker=Broker}, _) ->
 
 start_link_next(State, Value,
                 [{ok, {{AskMod, {AskOut, AskDrops}},
-                       {BidMod, {BidOut, BidDrops}}, _}}]) ->
+                       {BidMod, {BidOut, BidDrops}}}}]) ->
     Broker = {call, erlang, element, [2, Value]},
     State#state{sbroker=Broker, bid_mod=BidMod, bid_out=BidOut,
                 bid_drops=BidDrops, bid_state=BidDrops, ask_mod=AskMod,
@@ -452,8 +452,7 @@ change_config_next(State, _, [_, ignore]) ->
     timeout_next(State);
 change_config_next(State, _, [_, bad]) ->
     timeout_next(State);
-change_config_next(State, _,
-                   [_, {ok, {AskQueueSpec, BidQueueSpec, _}}]) ->
+change_config_next(State, _, [_, {ok, {AskQueueSpec, BidQueueSpec}}]) ->
     NState = ask_change_next(AskQueueSpec, State),
     bid_change_next(BidQueueSpec, NState).
 
@@ -497,7 +496,7 @@ change_config_post(State, [_, ignore], ok) ->
     timeout_post(State);
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     timeout_post(State);
-change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}], ok) ->
+change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec}}], ok) ->
     ask_change_post(AskQueueSpec, State) andalso
     bid_change_post(BidQueueSpec, State);
 change_config_post(_, _, _) ->
@@ -732,16 +731,14 @@ resume_args(#state{sbroker=Broker}) ->
 resume_pre(#state{sys=SysState}, _) ->
     SysState =:= suspended.
 
-resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _,
-            _) ->
+resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec}}} = State, _, _) ->
     NState = State#state{sys=running, change=undefined},
     NState2 = ask_change_next(AskQueueSpec, NState),
     bid_change_next(BidQueueSpec, NState2);
 resume_next(State, _, _) ->
     timeout_next(State#state{sys=running}).
 
-resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _,
-            _) ->
+resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec}}} = State, _, _) ->
     ask_change_post(AskQueueSpec, State) andalso
     bid_change_post(BidQueueSpec, State);
 resume_post(State, _, _) ->
