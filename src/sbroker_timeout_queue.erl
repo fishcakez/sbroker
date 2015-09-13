@@ -82,7 +82,7 @@ init(Time, {Out, Timeout, Drop, Max})
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        ((is_integer(Max) andalso Max >= 0) orelse Max =:= infinity) ->
-    TimeoutNext = timeout_next(Time, Timeout),
+    TimeoutNext = first_timeout_next(Time, Timeout),
     #state{out=Out, timeout=Timeout, drop=Drop, max=Max,
            timeout_next=TimeoutNext}.
 
@@ -236,10 +236,16 @@ terminate(_, #state{queue=Q}) ->
 
 %% Internal
 
+first_timeout_next(_, infinity) ->
+    infinity;
+first_timeout_next(Time, Timeout)
+  when is_integer(Timeout) andalso Timeout >= 0->
+    Time.
+
 timeout_next(_, infinity) ->
     infinity;
-timeout_next(Time, Timeout) when is_integer(Timeout) andalso Timeout >= 0 ->
-    Time.
+timeout_next(Time, Timeout) ->
+    Time + Timeout.
 
 timeout(Time, #state{timeout_next=Next} = State) when Time < Next ->
     State;
@@ -266,12 +272,12 @@ change({Out, Timeout, Drop, infinity}, Time, State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) ->
     State#state{out=Out, drop=Drop, max=infinity, timeout=Timeout,
-                timeout_next=timeout_next(Time, Timeout)};
+                timeout_next=first_timeout_next(Time, Timeout)};
 change({Out, Timeout, Drop, Max}, Time, #state{len=Len, queue=Q} = State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        (is_integer(Max) andalso Max >= 0) ->
-    Next = timeout_next(Time, Timeout),
+    Next = first_timeout_next(Time, Timeout),
     NState = State#state{out=Out, drop=Drop, max=Max, timeout=Timeout,
                          timeout_next=Next},
     case Len - Max of
