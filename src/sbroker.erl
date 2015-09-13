@@ -762,16 +762,12 @@ monotonic_time(#config{time_mod=TimeMod, time_unit=native}) ->
 monotonic_time(#config{time_mod=TimeMod, time_unit=TimeUnit}) ->
     TimeMod:monotonic_time(TimeUnit).
 
-mark(Time, 0, _) ->
+mark(Time) when is_integer(Time) ->
     _ = self() ! {'$mark', Time},
     Time;
-mark(_, _, Config) ->
-    mark(Config).
-
 mark(Config) ->
     Time = monotonic_time(Config),
-    _ = self() ! {'$mark', Time},
-    Time.
+    mark(Time).
 
 idle_timeout(_, infinity, _) ->
     infinity;
@@ -871,15 +867,15 @@ asking({cancel, From, Tag}, Now, Send, Seq, Asks, Bids, _,
         Class:Reason ->
             asking_exception(Class, Reason, Asks, Bids, Config)
     end;
-asking({'$mark', Mark}, Time, _, Seq, Asks, Bids, Next, Config) ->
+asking({'$mark', Mark}, Now, _, Seq, Asks, Bids, Next, Config) ->
     receive
         Msg ->
-            Now = mark(Time, Seq, Config),
+            mark(Now),
             Send = (Mark + Now) div 2,
-            asking(Msg, Now, Send, 0, Asks, Bids, Next, Config)
+            asking(Msg, Now, Send, Seq, Asks, Bids, Next, Config)
     after
         0 ->
-            Timeout = idle_timeout(Time, Next, Config),
+            Timeout = idle_timeout(Now, Next, Config),
             asking_idle(Asks, Bids, Timeout, Config)
     end;
 asking({'EXIT', Parent, Reason}, _, _, _, _, _, _, #config{parent=Parent}) ->
@@ -1036,15 +1032,15 @@ bidding({cancel, From, Tag}, Now, Send, Seq, Asks, Bids, _,
         Class:Reason ->
             bidding_exception(Class, Reason, Asks, Bids, Config)
     end;
-bidding({'$mark', Mark}, Time, _, Seq, Asks, Bids, Next, Config) ->
+bidding({'$mark', Mark}, Now, _, Seq, Asks, Bids, Next, Config) ->
     receive
         Msg ->
-            Now = mark(Time, Seq, Config),
+            mark(Now),
             Send = (Mark + Now) div 2,
-            bidding(Msg, Now, Send, 0, Asks, Bids, max(Now, Next), Config)
+            bidding(Msg, Now, Send, Seq, Asks, Bids, Next, Config)
     after
         0 ->
-            Timeout = idle_timeout(Time, Next, Config),
+            Timeout = idle_timeout(Now, Next, Config),
             bidding_idle(Asks, Bids, Timeout, Config)
     end;
 bidding({'EXIT', Parent, Reason}, _, _, _, _, _, _, #config{parent=Parent}) ->
