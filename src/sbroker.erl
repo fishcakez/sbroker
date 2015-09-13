@@ -612,12 +612,9 @@ system_replace_state(Replace, {change, Change, Misc}) ->
     {ok, States, {change, Change, NMisc}}.
 
 %% @private
-system_terminate(Reason, Parent, Dbg,
-                 [_, _, _, Asks, Bids,
-                  #config{ask_mod=AskMod, bid_mod=BidMod} = Config]) ->
-    Callbacks = [{AskMod, stop, Asks}, {BidMod, stop, Bids}],
+system_terminate(Reason, Parent, Dbg, [_, _, _, Asks, Bids, Config]) ->
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    terminate(Reason, Callbacks, NConfig).
+    terminate({stop, Reason}, Asks, Bids, NConfig).
 
 %% @private
 format_status(Opt,
@@ -743,15 +740,14 @@ init_bids(Starter, Time, Asks, BidArgs,
     end.
 
 init_exception(Starter, Name, Class, Reason, Stack) ->
-    Reason2 = reason({Class, Reason, Stack}),
+    Reason2 = sbroker_queue:exit_reason({Class, Reason, Stack}),
     init_stop(Starter, Name, {error, Reason2}, Reason2).
 
 init_exception(Starter, Class, Reason, Stack, Callbacks,
                #config{name=Name} = Config) ->
     Reason2 = {Class, Reason, Stack},
-    Reason3 = terminate_callbacks(Reason2, Callbacks, Config),
-    Reason4 = reason(Reason3),
-    init_stop(Starter, Name, {error, Reason4}, Reason4).
+    {stop, Reason3} = terminate(Reason2, Callbacks, Config),
+    init_stop(Starter, Name, {error, Reason3}, Reason3).
 
 enter_loop(Starter, Asks, Bids, Config) ->
     proc_lib:init_ack(Starter, {ok, self()}),
@@ -878,8 +874,9 @@ asking({'$mark', Mark}, Now, _, Seq, Asks, Bids, Next, Config) ->
             Timeout = idle_timeout(Now, Next, Config),
             asking_idle(Asks, Bids, Timeout, Config)
     end;
-asking({'EXIT', Parent, Reason}, _, _, _, _, _, _, #config{parent=Parent}) ->
-    exit(Reason);
+asking({'EXIT', Parent, Reason}, _, _, _, Asks, Bids, _,
+        #config{parent=Parent} = Config) ->
+    terminate({stop, Reason}, Asks, Bids, Config);
 asking({system, From, Msg}, Now, Send, _, Asks, Bids, _, Config) ->
     system(From, Msg, asking, Now, Send, Asks, Bids, Config);
 asking({change_config, From, _}, Now, Send, Seq, Asks, Bids, _, Config) ->
@@ -1043,8 +1040,9 @@ bidding({'$mark', Mark}, Now, _, Seq, Asks, Bids, Next, Config) ->
             Timeout = idle_timeout(Now, Next, Config),
             bidding_idle(Asks, Bids, Timeout, Config)
     end;
-bidding({'EXIT', Parent, Reason}, _, _, _, _, _, _, #config{parent=Parent}) ->
-    exit(Reason);
+bidding({'EXIT', Parent, Reason}, _, _, _, Asks, Bids, _,
+        #config{parent=Parent} = Config) ->
+    terminate({stop, Reason}, Asks, Bids, Config);
 bidding({system, From, Msg}, Now, Send, _, Asks, Bids, _, Config) ->
     system(From, Msg, bidding, Now, Send, Asks, Bids, Config);
 bidding({change_config, From, _}, Now, Send, Seq, Asks, Bids, _, Config) ->
@@ -1128,9 +1126,8 @@ change_asks(Now, Asks, NAskMod, AskArgs, Bids, NBidMod, BidArgs,
         {ok, NAsks, AskNext} ->
             NConfig = Config#config{ask_mod=NAskMod},
             change_bids(Now, NAsks, AskNext, Bids, NBidMod, BidArgs, NConfig);
-        {stop, Reason, Callbacks} ->
-            NCallbacks = [{BidMod, stop, Bids} | Callbacks],
-            terminate(Reason, Config, NCallbacks)
+        {stop, _} = Stop ->
+            terminate(Stop, [{BidMod, stop, Bids}], Config)
     end.
 
 change_bids(Now, Asks, AskNext, Bids, NBidMod, BidArgs,
@@ -1138,95 +1135,12 @@ change_bids(Now, Asks, AskNext, Bids, NBidMod, BidArgs,
     case change(Now, BidMod, Bids, NBidMod, BidArgs, Config) of
         {ok, NBids, BidNext} ->
             {Asks, AskNext, NBids, BidNext, Config#config{bid_mod=NBidMod}};
-        {stop, Reason, Callbacks} ->
-            NCallbacks = [{AskMod, stop, Asks} | Callbacks],
-            terminate(Reason, NCallbacks, Config)
+        {stop, _} = Stop ->
+            terminate(Stop, [{AskMod, stop, Asks}], Config)
     end.
 
-change(Now, Mod, State, Mod, Args, _) ->
-    try Mod:config_change(Args, Now, State) of
-        {NState, Next} ->
-            {ok, NState, Next};
-        Other ->
-            Reason = {bad_return_value, Other},
-            {stop, Reason, [{Mod, Reason, State}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            Callbacks = [{Mod, Reason2, State}],
-            {stop, Reason2, Callbacks}
-    end;
 change(Now, Mod1, State1, Mod2, Args2, Config) ->
-    try Mod1:to_list(State1) of
-        Items when is_list(Items) ->
-            change_init(Now, Items, Mod1, State1, Mod2, Args2, Config);
-        Other ->
-            Reason = {bad_return_value, Other},
-            {stop, Reason, [{Mod1, Reason, State1}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            {stop, Reason2, [{Mod1, stop, State1}]}
-    end.
-
-change_init(Now, Items, Mod1, State1, Mod2, Args2, Config) ->
-    try Mod2:init(Now,Args2) of
-        State2 ->
-            change_from_list(Items, Now, Mod1, State1, Mod2, State2, Config)
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            change_report(Mod2, Reason2, Args2, Config),
-            {stop, Reason2, [{Mod1, stop, State1}]}
-    end.
-
-change_report(Mod, Reason, Args, Config) ->
-    Tag = {sbroker_queue_stop, start_error},
-    Format = "~i** sbroker_queue ~p failed to install.~n"
-             "** Was installing in ~p~n"
-             "** When queue arguments == ~p~n"
-             "** Reason == ~p~n",
-    Args = [Tag, Mod, report_name(Config), Args, Reason],
-    error_logger:format(Format, Args).
-
-change_from_list(Items, Now, Mod1, State1, Mod2, State2, Config) ->
-    case change_in(Items, Now, Mod2, State2, infinity) of
-        {ok, NState2, Next} ->
-            change_terminate(Mod1, State1, Mod2, NState2, Next, Config);
-        {stop, Reason, Callbacks} ->
-            {stop, Reason, [{Mod1, stop, State1} | Callbacks]};
-        {bad_items, Callbacks} ->
-            Reason = {bad_return_value, Items},
-            {stop, Reason, [{Mod1, Reason, State1} | Callbacks]}
-    end.
-
-change_in([], _, _, State, Next) ->
-    {ok, State, Next};
-change_in([{Send, From, Value} | Items], Now, Mod, State, _) ->
-    try Mod:handle_in(Send, From, Value, Now, State) of
-        {NState, Next} ->
-            change_in(Items, Now, Mod, NState, Next);
-        Other ->
-            Reason = {bad_return_value, Other},
-            {stop, Reason, [{Mod, Reason, State}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            {stop, Reason2, [{Mod, Reason2, State}]}
-    end;
-change_in(_, _, Mod, State, _) ->
-    {bad_items, [{Mod, stop, State}]}.
-
-change_terminate(Mod1, State1, Mod2, State2, Next, Config) ->
-    try Mod1:terminate(change, State1) of
-        _ ->
-            {ok, State2, Next}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(Mod1, Reason2, State1, Config),
-            {stop, Reason2, [{Mod2, stop, State2}]}
-    end.
+    sbroker_queue:change(Mod1, State1, Mod2, Args2, Now, report_name(Config)).
 
 next(asking, Now, Send, Seq, Asks, AskNext, Bids, _, Config) ->
     asking(Now, Send, Seq, Asks, Bids, AskNext, Config);
@@ -1264,63 +1178,15 @@ format_state(bidding) ->
     ask_r.
 
 terminate(Reason, Callbacks, Config) ->
-    NReason = terminate_callbacks(Reason, Callbacks, Config),
-    NReason2 = reason(NReason),
-    exit(NReason2).
+    Name = report_name(Config),
+    {stop, NReason} = sbroker_queue:terminate(Reason, Callbacks, Name),
+    exit(NReason).
 
-terminate_callbacks(Reason, Callbacks, Config) ->
-    Terminate = fun(Callback, Acc) -> do_terminate(Callback, Acc, Config) end,
-    lists:foldl(Terminate, Reason, Callbacks).
+terminate(Reason, Asks, Bids,
+          #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    terminate(Reason, [{AskMod, stop, Asks}, {BidMod, stop, Bids}], Config).
 
-do_terminate({Mod, Info, State}, Config, Acc) ->
-    try Mod:terminate(Info, State) of
-        _ when Info =:= stop ->
-            Acc;
-        _ ->
-            maybe_report(Mod, Info, State, Config),
-            Acc
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(Mod, Reason2, State, Config),
-            Reason2
-    end.
-
-reason({throw, Value, Stack}) ->
-    {{nocatch, Value}, Stack};
-reason({exit, Reason, _}) ->
-    Reason;
-reason({error, Reason, Stack}) ->
-    {Reason, Stack};
-reason({bad_return_value, _} = Bad) ->
-    Bad.
-
-maybe_report(_, {exit, normal, _}, _, _) ->
-    ok;
-maybe_report(_, {exit, shutdown, _}, _, _) ->
-    ok;
-maybe_report(_, {exit, {shutdown, _}, _}, _, _) ->
-    ok;
-maybe_report(_, {error, shutdown, _}, _, _) ->
-    ok;
-maybe_report(Mod, Reason, State, Config) ->
-    report(Mod, Reason, State, Config).
-
-report(Mod, Reason, State, Config) ->
-    Tag = {sbroker_queue_error, queue_crashed},
-    Format = "~i** sbroker_queue ~p crashed.~n"
-             "** Was installed in ~p~n"
-             "** When queue state == ~p~n"
-             "** Reason == ~p~n",
-    NState = format_queue(Mod, terminate, get(), State),
-    Args = [Tag, Mod, report_name(Config), NState, Reason],
-    error_logger:format(Format, Args).
-
-report_name(#config{name={local, Name}}) ->
-    Name;
-report_name(#config{name={global, Name}}) ->
-    Name;
-report_name(#config{name={via, _, Name}}) ->
-    Name;
 report_name(#config{name=Pid, mod=Mod}) when is_pid(Pid) ->
-    {Mod, Pid}.
+    {Mod, Pid};
+report_name(#config{name=Name}) ->
+    Name.
