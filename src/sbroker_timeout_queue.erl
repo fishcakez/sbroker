@@ -59,7 +59,7 @@
 -endif.
 
 -record(state, {out :: out | out_r,
-                timeout :: pos_integer(),
+                timeout :: timeout(),
                 drop :: drop | drop_r,
                 max :: non_neg_integer() | infinity,
                 timeout_next :: integer() | infinity,
