@@ -206,7 +206,7 @@ start_link_args(_) ->
     [init()].
 
 init() ->
-    frequency([{30, {ok, {queue_spec(), queue_spec()}}},
+    frequency([{30, {ok, {queue_spec(), queue_spec(), meter_spec()}}},
                {1, ignore},
                {1, bad}]).
 
@@ -214,10 +214,13 @@ queue_spec() ->
     {oneof([sbroker_statem_queue, sbroker_statem2_queue]),
      {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}}.
 
+meter_spec() ->
+    {sbroker_alarm_meter, {0, 10, ?MODULE}}.
+
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, Init),
     Trap = process_flag(trap_exit, true),
-    case sbroker:start_link(?MODULE, [], []) of
+    case sbroker:start_link(?MODULE, [], [{read_time_after, 2}]) of
         {error, Reason} = Error ->
             receive
                 {'EXIT', _, Reason} ->
@@ -241,7 +244,8 @@ start_link_pre(#state{sbroker=Broker}, _) ->
 
 start_link_next(State, Value,
                 [{ok, {{AskMod, {AskOut, AskDrops}},
-                       {BidMod, {BidOut, BidDrops}}}}]) ->
+                       {BidMod, {BidOut, BidDrops}},
+                       _}}]) ->
     Broker = {call, erlang, element, [2, Value]},
     State#state{sbroker=Broker, bid_mod=BidMod, bid_out=BidOut,
                 bid_drops=BidDrops, bid_state=BidDrops, ask_mod=AskMod,
@@ -452,7 +456,7 @@ change_config_next(State, _, [_, ignore]) ->
     timeout_next(State);
 change_config_next(State, _, [_, bad]) ->
     timeout_next(State);
-change_config_next(State, _, [_, {ok, {AskQueueSpec, BidQueueSpec}}]) ->
+change_config_next(State, _, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}]) ->
     NState = ask_change_next(AskQueueSpec, State),
     bid_change_next(BidQueueSpec, NState).
 
@@ -496,7 +500,7 @@ change_config_post(State, [_, ignore], ok) ->
     timeout_post(State);
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     timeout_post(State);
-change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec}}], ok) ->
+change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}], ok) ->
     ask_change_post(AskQueueSpec, State) andalso
     bid_change_post(BidQueueSpec, State);
 change_config_post(_, _, _) ->
@@ -624,7 +628,7 @@ status_post(#state{asks=Asks, bids=Bids, sys=Sys} = State,
                      {"Parent", Self},
                      {"Active queue", Active},
                      {"Time", {TimeMod, native, Time}}]},
-             {items, {"Installed queues", Queues}}]) ->
+             {items, {"Installed handlers", Handlers}}]) ->
     SysState =:= Sys andalso Self =:= self() andalso
     ((length(Asks) > 0 andalso Active =:= ask) orelse
      (length(Bids) > 0 andalso Active =:= ask_r) orelse
@@ -632,7 +636,7 @@ status_post(#state{asks=Asks, bids=Bids, sys=Sys} = State,
     ((erlang:function_exported(erlang, monotonic_time, 1) andalso
       TimeMod =:= erlang) orelse TimeMod =:= sbroker_legacy) andalso
     is_integer(Time) andalso
-    get_state_post(State, Queues);
+    get_state_post(State, Handlers);
 status_post(_, Status) ->
     ct:pal("Status: ~p", [Status]),
     false.
@@ -649,11 +653,11 @@ get_state_next(State, _, _) ->
 get_state_post(State, _, Result) ->
     get_state_post(State, Result) andalso sys_post(State).
 
-get_state_post(State, Queues) ->
-    get_ask_post(State, Queues) andalso get_bid_post(State, Queues).
+get_state_post(State, Handlers) ->
+    get_ask_post(State, Handlers) andalso get_bid_post(State, Handlers).
 
-get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Queues) ->
-    case lists:keyfind(ask, 2, Queues) of
+get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Handlers) ->
+    case lists:keyfind(ask, 2, Handlers) of
         {AskMod, ask, AskState} ->
             ClientPids = [client_pid(Client) || Client <- Asks],
             Pids = [Pid || {_, {Pid,_}, _} <- AskMod:to_list(AskState)],
@@ -663,8 +667,8 @@ get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Queues) ->
             false
     end.
 
-get_bid_post(#state{bid_mod=BidMod, bids=Bids}, Queues) ->
-    case lists:keyfind(ask_r, 2, Queues) of
+get_bid_post(#state{bid_mod=BidMod, bids=Bids}, Handlers) ->
+    case lists:keyfind(ask_r, 2, Handlers) of
         {BidMod, ask_r, BidState} ->
             ClientPids = [client_pid(Client) || Client <- Bids],
             Pids = [Pid || {_, {Pid,_}, _} <- BidMod:to_list(BidState)],
@@ -731,14 +735,14 @@ resume_args(#state{sbroker=Broker}) ->
 resume_pre(#state{sys=SysState}, _) ->
     SysState =:= suspended.
 
-resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec}}} = State, _, _) ->
+resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _, _) ->
     NState = State#state{sys=running, change=undefined},
     NState2 = ask_change_next(AskQueueSpec, NState),
     bid_change_next(BidQueueSpec, NState2);
 resume_next(State, _, _) ->
     timeout_next(State#state{sys=running}).
 
-resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec}}} = State, _, _) ->
+resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _, _) ->
     ask_change_post(AskQueueSpec, State) andalso
     bid_change_post(BidQueueSpec, State);
 resume_post(State, _, _) ->

@@ -154,12 +154,15 @@
                  time_mod :: module(),
                  time_unit :: sbroker_time:unit(),
                  ask_mod :: module(),
-                 bid_mod :: module()}).
+                 bid_mod :: module(),
+                 meter_mod :: module()}).
 
 -record(time, {now :: integer(),
                send :: integer(),
+               next = infinity :: integer() | infinity,
                seq :: non_neg_integer(),
-               read_after :: non_neg_integer() | infinity}).
+               read_after :: non_neg_integer() | infinity,
+               meter :: any()}).
 
 -dialyzer(no_return).
 
@@ -540,13 +543,14 @@ init_it(Starter, Parent, Name, Mod, {TimeOpts, Args}, Opts) ->
     {TimeMod, TimeUnit, ReadAfter} = TimeOpts,
     _ = put('$initial_call', {Mod, init, 1}),
     try Mod:init(Args) of
-        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}}} ->
+        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, {MeterMod, MeterArgs}}} ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
                              name=Name, time_mod=TimeMod, time_unit=TimeUnit,
-                             ask_mod=AskMod, bid_mod=BidMod},
+                             ask_mod=AskMod, bid_mod=BidMod,
+                             meter_mod=MeterMod},
             Now = monotonic_time(Config),
             Time = #time{now=Now, send=Now, read_after=ReadAfter},
-            init_asks(Starter, Time, AskArgs, BidArgs, Config);
+            init(Starter, Time, AskArgs, BidArgs, MeterArgs, Config);
         ignore ->
             init_stop(Starter, Name, ignore, normal);
         Other ->
@@ -555,25 +559,20 @@ init_it(Starter, Parent, Name, Mod, {TimeOpts, Args}, Opts) ->
     catch
         Class:Reason ->
             Stack = erlang:get_stacktrace(),
-            init_exception(Starter, Name, Class, Reason, Stack)
+            Reason2 = sbroker_handlers:exit_reason({Class, Reason, Stack}),
+            init_stop(Starter, Name, Reason2)
     end.
 
 %% sys API
 
 %% @private
 system_continue(Parent, Dbg, [State, Time, Asks, Bids, Config]) ->
-    NTime = read_time(Time, Config),
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    timeout(State, NTime, Asks, Bids, NConfig);
+    timeout(State, Time, Asks, Bids, NConfig);
 system_continue(Parent, Dbg,
-                {change, {AskMod, AskArgs, BidMod, BidArgs},
-                [State, Time, Asks, Bids, Config]}) ->
-    NTime = read_time(Time, Config),
+                {change, Change, [State, Time, Asks, Bids, Config]}) ->
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    {NAsks, AskNext, NBids, BidNext, NConfig2} =
-        change_asks(Time, Asks, AskMod, AskArgs, Bids, BidMod, BidArgs,
-                    NConfig),
-    next(State, NTime, NAsks, AskNext, NBids, BidNext, NConfig2).
+    change(State, Change, Time, Asks, Bids, NConfig).
 
 %% @private
 system_code_change([_, _, _, _, Config] = Misc, _, _, _) ->
@@ -598,46 +597,54 @@ system_code_change({change, Change, [_, _, _, _, Config] = Misc}, _, _, _) ->
     end.
 
 %% @private
-system_get_state([_, _, Asks, Bids,
-                  #config{ask_mod=AskMod, bid_mod=BidMod}]) ->
+system_get_state([_, #time{meter=Meter}, Asks, Bids,
+                  #config{ask_mod=AskMod, bid_mod=BidMod,
+                          meter_mod=MeterMod}]) ->
     Callbacks = [{AskMod, ask, Asks},
-                 {BidMod, ask_r, Bids}],
+                 {BidMod, ask_r, Bids},
+                 {MeterMod, meter, Meter}],
     {ok, Callbacks};
 system_get_state({change, _, Misc}) ->
     system_get_state(Misc).
 
 %% @private
 system_replace_state(Replace,
-                     [State, Time, Asks, Bids,
-                      #config{ask_mod=AskMod, bid_mod=BidMod} = Config]) ->
+                     [State, #time{meter=Meter} = Time, Asks, Bids,
+                      #config{ask_mod=AskMod, bid_mod=BidMod,
+                              meter_mod=MeterMod} = Config]) ->
     {AskMod, ask, NAsks} = AskRes = Replace({AskMod, ask, Asks}),
     {BidMod, ask_r, NBids} = BidRes = Replace({BidMod, ask_r, Bids}),
-    {ok, [AskRes, BidRes], [State, Time, NAsks, NBids, Config]};
+    {MeterMod, meter, NMeter} = MeterRes = Replace({MeterMod, meter, Meter}),
+    Result = [AskRes, BidRes, MeterRes],
+    Misc = [State, Time#time{meter=NMeter}, NAsks, NBids, Config],
+    {ok, Result, Misc};
 system_replace_state(Replace, {change, Change, Misc}) ->
     {ok, States, NMisc} = system_replace_state(Replace, Misc),
     {ok, States, {change, Change, NMisc}}.
 
 %% @private
-system_terminate(Reason, Parent, Dbg, [_, _, Asks, Bids, Config]) ->
+system_terminate(Reason, Parent, Dbg, [_, Time, Asks, Bids, Config]) ->
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    terminate({stop, Reason}, Asks, Bids, NConfig).
+    terminate({stop, Reason}, Time, Asks, Bids, NConfig).
 
 %% @private
 format_status(Opt,
               [PDict, SysState, Parent, _,
-               [State, #time{now=Now}, Asks, Bids,
+               [State, #time{now=Now, meter=Meter}, Asks, Bids,
                 #config{name=Name, ask_mod=AskMod, bid_mod=BidMod,
-                        time_mod=TimeMod, time_unit=TimeUnit}]]) ->
+                        meter_mod=MeterMod, time_mod=TimeMod,
+                        time_unit=TimeUnit}]]) ->
     Header = gen:format_status_header("Status for sbroker", Name),
-    Queues = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids}],
-    Queues2 = [{Mod, Id, format_queue(Mod, Opt, PDict, Queue)} ||
-                {Mod, Id, Queue} <- Queues],
+    Handlers = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids},
+                {MeterMod, meter, Meter}],
+    Handlers2 = [{Mod, Id, format_status(Mod, Opt, PDict, Handler)} ||
+                {Mod, Id, Handler} <- Handlers],
     [{header, Header},
      {data, [{"Status", SysState},
              {"Parent", Parent},
              {"Active queue", format_state(State)},
              {"Time", {TimeMod, TimeUnit, Now}}]},
-     {items, {"Installed queues", Queues2}}];
+     {items, {"Installed handlers", Handlers2}}];
 format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
     format_status(Opt, [PDict, SysState, Parent, Dbg, Misc]).
 
@@ -705,6 +712,18 @@ time_module() ->
         false -> sbroker_legacy
     end.
 
+init(Starter, #time{now=Now} = Time, AskArgs, BidArgs, MeterArgs,
+     #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod,
+             name=Name} = Config) ->
+    Inits = [{sbroker_queue, AskMod, AskArgs}, {sbroker_queue, BidMod, BidArgs},
+             {sbroker_meter, MeterMod, MeterArgs}],
+    case sbroker_handlers:init(Now, Inits, report_name(Config)) of
+        {ok, [{_, _, Asks}, {_, _, Bids}, {_, _, Meter}]} ->
+            enter_loop(Starter, Time#time{meter=Meter}, Asks, Bids, Config);
+        {stop, Reason} ->
+            init_stop(Starter, Name, Reason)
+    end.
+
 init_stop(Starter, Name, Reason) ->
     init_stop(Starter, Name, {error, Reason}, Reason).
 
@@ -722,46 +741,9 @@ unregister_name({via, Mod, Name}) ->
 unregister_name(Self) when is_pid(Self) ->
     ok.
 
-init_asks(Starter, #time{now=Now} = Time, AskArgs, BidArgs,
-          #config{ask_mod=AskMod} = Config) ->
-    try AskMod:init(Now, AskArgs) of
-        Asks ->
-            init_bids(Starter, Time, Asks, BidArgs, Config)
-    catch
-        Class:Reason ->
-            Stack = erlang:get_stacktrace(),
-            init_exception(Starter, Class, Reason, Stack, [], Config)
-    end.
-
-init_bids(Starter, #time{now=Now} = Time, Asks, BidArgs,
-          #config{bid_mod=BidMod, ask_mod=AskMod} = Config) ->
-    try BidMod:init(Now, BidArgs) of
-        Bids ->
-            enter_loop(Starter, Time, Asks, Bids, Config)
-    catch
-        Class:Reason ->
-            Stack = erlang:get_stacktrace(),
-            Callbacks = [{AskMod, stop, Asks}],
-            init_exception(Starter, Class, Reason, Stack, Callbacks, Config)
-    end.
-
-init_exception(Starter, Name, Class, Reason, Stack) ->
-    Reason2 = sbroker_queue:exit_reason({Class, Reason, Stack}),
-    init_stop(Starter, Name, {error, Reason2}, Reason2).
-
-init_exception(Starter, Class, Reason, Stack, Callbacks,
-               #config{name=Name} = Config) ->
-    Reason2 = {Class, Reason, Stack},
-    {stop, Reason3} = terminate(Reason2, Callbacks, Config),
-    init_stop(Starter, Name, {error, Reason3}, Reason3).
-
 enter_loop(Starter, Time, Asks, Bids, Config) ->
     proc_lib:init_ack(Starter, {ok, self()}),
-    asking_idle(Time, Asks, Bids, infinity, Config).
-
-read_time(Time, Config) ->
-    Now = monotonic_time(Config),
-    Time#time{now=Now, seq=0}.
+    idle_recv(asking, infinity, Time,  Asks, Bids, Config).
 
 monotonic_time(#config{time_mod=TimeMod, time_unit=native}) ->
     TimeMod:monotonic_time();
@@ -773,31 +755,77 @@ mark(Time, Config) ->
     _ = self() ! {'$mark', Now},
     Time#time{now=Now, send=Now, seq=0}.
 
-handle_mark(Mark, #time{now=Now} = Time) ->
-    _ = self() ! {'$mark', Now},
-    Send = (Mark + Now) div 2,
-    Time#time{send=Send}.
+update_time(#time{seq=Seq, read_after=Seq} = Time, Asks, Bids, Config) ->
+    Now = monotonic_time(Config),
+    update_meter(Now, Time, Asks, Bids, Config);
+update_time(#time{seq=Seq} = Time, _, _, _) ->
+    Time#time{seq=Seq+1}.
 
-idle_timeout(_, infinity, _) ->
-    infinity;
-idle_timeout(#time{now=Now}, Next,
-             #config{time_mod=TimeMod, time_unit=TimeUnit}) ->
-    case TimeMod:convert_time_unit(Next-Now, TimeUnit, milli_seconds) of
-        0       -> 1;
-        Timeout -> Timeout
+update_meter(Now, #time{now=Prev, seq=Seq, meter=Meter} = Time, Asks,
+             Bids, #config{meter_mod=MeterMod} = Config) ->
+    try MeterMod:handle_update(Now-Prev, Seq, Now, Meter) of
+        {NMeter, Next} ->
+            Time#time{now=Now, seq=0, meter=NMeter, next=Next};
+        Other ->
+            meter_return(Other, Time, Asks, Bids, Config)
+    catch
+        Class:Reason ->
+            meter_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
-asking_idle(Time, Asks, Bids, Next, Config) ->
+meter_return(Return, #time{meter=Meter}, Asks, Bids,
+             #config{ask_mod=AskMod, bid_mod=BidMod,
+                     meter_mod=MeterMod} = Config) ->
+    Reason = {bad_return_value, Return},
+    Callbacks = [{sbroker_queue, AskMod, stop, Asks},
+                 {sbroker_queue, BidMod, stop, Bids},
+                 {sbroker_meter, MeterMod, Reason, Meter}],
+    terminate(Reason, Callbacks, Config).
+
+meter_exception(Class, Reason, #time{meter=Meter}, Asks, Bids,
+                #config{ask_mod=AskMod, bid_mod=BidMod,
+                        meter_mod=MeterMod} = Config) ->
+    Reason2 = {Class, Reason, erlang:get_stacktrace()},
+    Callbacks = [{sbroker_queue, AskMod, stop, Asks},
+                 {sbroker_queue, BidMod, stop, Bids},
+                 {sbroker_meter, MeterMod, Reason2, Meter}],
+    terminate(Reason2, Callbacks, Config).
+
+idle(State, #time{seq=0} = Time, Asks, Bids, Next, Config) ->
     Timeout = idle_timeout(Time, Next, Config),
+    idle_recv(State, Timeout, Time, Asks, Bids, Config);
+idle(State, Time, Asks, Bids, Next, Config) ->
+    Now = monotonic_time(Config),
+    NTime = update_meter(Now, Time, Asks, Bids, Config),
+    Timeout = idle_timeout(NTime, Next, Config),
+    idle_recv(State, Timeout, NTime, Asks, Bids, Config).
+
+idle_timeout(#time{now=Now, next=Next1}, Next2,
+             #config{time_mod=TimeMod, time_unit=TimeUnit}) ->
+    case min(Next1, Next2) of
+        infinity ->
+            infinity;
+        Next ->
+            Diff = Next-Now,
+            Timeout = TimeMod:convert_time_unit(Diff, TimeUnit, milli_seconds),
+            max(Timeout, 1)
+    end.
+
+idle_recv(State, Timeout, Time, Asks, Bids, Config) ->
     receive
         Msg ->
             NTime = mark(Time, Config),
-            asking(Msg, NTime, Asks, Bids, infinity, Config)
+            handle(State, Msg, NTime, Asks, Bids, infinity, Config)
     after
         Timeout ->
             NTime = mark(Time, Config),
-            asking_timeout(NTime, Asks, Bids, Config)
+            timeout(State, NTime, Asks, Bids, Config)
     end.
+
+handle(asking, Msg, Time, Asks, Bids, Next, Config) ->
+    asking(Msg, Time, Asks, Bids, Next, Config);
+handle(bidding, Msg, Time, Asks, Bids, Next, Config) ->
+    bidding(Msg, Time, Asks, Bids, Next, Config).
 
 asking_timeout(#time{now=Now} = Time, Asks, Bids,
                #config{ask_mod=AskMod} = Config) ->
@@ -805,22 +833,17 @@ asking_timeout(#time{now=Now} = Time, Asks, Bids,
         {NAsks, Next} ->
             asking(Time, NAsks, Bids, Next, Config);
         Other ->
-            asking_return(Other, Asks, Bids, Config)
+            asking_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
-asking(#time{seq=Seq, read_after=Seq} = Time, Asks, Bids, Next, Config) ->
+asking(Time, Asks, Bids, Next, Config) ->
     receive
         Msg ->
-            #time{now=Now} = NTime = read_time(Time, Config),
-            asking(Msg, NTime, Asks, Bids, max(Now, Next), Config)
-    end;
-asking(#time{seq=Seq} = Time, Asks, Bids, Next, Config) ->
-    receive
-        Msg ->
-            asking(Msg, Time#time{seq=Seq+1}, Asks, Bids, Next, Config)
+            NTime = update_time(Time, Asks, Bids, Config),
+            asking(Msg, NTime, Asks, Bids, Next, Config)
     end.
 
 asking({ask, Ask, Value}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
@@ -829,10 +852,10 @@ asking({ask, Ask, Value}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
         {NAsks, Next} ->
             asking(Time, NAsks, Bids, Next, Config);
         Other ->
-            asking_return(Other, Asks, Bids, Config)
+            asking_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
 asking({bid, Bid, BidValue} = Msg, #time{now=Now} = Time, Asks, Bids, _,
        #config{ask_mod=AskMod} = Config) ->
@@ -843,10 +866,10 @@ asking({bid, Bid, BidValue} = Msg, #time{now=Now} = Time, Asks, Bids, _,
         {empty, NAsks} ->
             bidding(Msg, Time, NAsks, Bids, infinity, Config);
         Other ->
-            asking_return(Other, Asks, Bids, Config)
+            asking_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
 asking({nb_ask, Ask, _}, Time, Asks, Bids, _, Config) ->
     retry(Ask, Time),
@@ -861,10 +884,10 @@ asking({nb_bid, Bid, BidValue}, #time{now=Now} = Time, Asks, Bids, _,
             retry(Bid, Time),
             bidding(Time, NAsks, Bids, infinity, Config);
         Other ->
-            asking_return(Other, Asks, Bids, Config)
+            asking_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
 asking({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, _,
        #config{ask_mod=AskMod} = Config) ->
@@ -873,44 +896,56 @@ asking({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, _,
             gen:reply(From, Reply),
             asking(Time, NAsks, Bids, Next, Config);
         Other ->
-            asking_return(Other, Asks, Bids, Config)
+            asking_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
-asking({'$mark', Mark}, Time, Asks, Bids, Next, Config) ->
+asking(Msg, Time, Asks, Bids, Next, Config) ->
+    common(Msg, asking, Time, Asks, Bids, Next, Config).
+
+common({'$mark', Mark}, State, #time{now=Now} = Time, Asks, Bids, Next,
+       Config) ->
     receive
         Msg ->
-            NTime = handle_mark(Mark, Time),
-            asking(Msg, NTime, Asks, Bids, Next, Config)
+            _ = self() ! {'$mark', Now},
+            Send = (Mark + Now) div 2,
+            handle(State, Msg, Time#time{send=Send}, Asks, Bids, Next, Config)
     after
         0 ->
-            asking_idle(Time, Asks, Bids, Next, Config)
+            idle(State, Time, Asks, Bids, Next, Config)
     end;
-asking({'EXIT', Parent, Reason}, _, Asks, Bids, _,
+common({'EXIT', Parent, Reason}, _, Time, Asks, Bids, _,
        #config{parent=Parent} = Config) ->
-    terminate({stop, Reason}, Asks, Bids, Config);
-asking({system, From, Msg}, Time, Asks, Bids, _, Config) ->
-    system(From, Msg, asking, Time, Asks, Bids, Config);
-asking({change_config, From, _}, Time, Asks, Bids, _, Config) ->
-    config_change(From, asking, Time, Asks, Bids, Config);
-asking({len_ask, From, _}, Time, Asks, Bids, _,
+    terminate({stop, Reason}, Time, Asks, Bids, Config);
+common({system, From, Msg}, State, Time, Asks, Bids, _, Config) ->
+    system(From, Msg, State, Time, Asks, Bids, Config);
+common({change_config, From, _}, State, Time, Asks, Bids, _, Config) ->
+    config_change(From, State, Time, Asks, Bids, Config);
+common({len_ask, From, _}, State, Time, Asks, Bids, _,
        #config{ask_mod=AskMod} = Config) ->
     try AskMod:len(Asks) of
         Len ->
             gen:reply(From, Len),
-            asking_timeout(Time, Asks, Bids, Config)
+            timeout(State, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
-asking({len_bid, From, _}, Time, Asks, Bids, _, Config) ->
-    gen:reply(From, 0),
-    asking_timeout(Time, Asks, Bids, Config);
-asking(timeout, Time, Asks, Bids, _, Config) ->
-    asking_timeout(Time, Asks, Bids, Config);
-asking(Msg, Time, Asks, Bids, _, Config) ->
-    info_asks(Msg, asking, Time, Asks, Bids, Config).
+common({len_bid, From, _}, State, Time, Asks, Bids, _,
+        #config{bid_mod=BidMod} = Config) ->
+    try BidMod:len(Bids) of
+        Len ->
+            gen:reply(From, Len),
+            timeout(State, Time, Asks, Bids, Config)
+    catch
+        Class:Reason ->
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
+    end;
+common(timeout, State, Time, Asks, Bids, _, Config) ->
+    timeout(State, Time, Asks, Bids, Config);
+common(Msg, State, Time, Asks, Bids, _, Config) ->
+    info_asks(Msg, State, Time, Asks, Bids, Config).
 
 ask_settle(#time{now=Now, send=Send}, AskSend, Ask, AskValue, Bid, BidValue) ->
     settle(Now, AskSend, Ask, AskValue, Send, Bid, BidValue).
@@ -921,51 +956,50 @@ info_asks(Msg, State, #time{now=Now} = Time, Asks, Bids,
         {NAsks, AskNext} ->
             info_bids(Msg, State, Time, NAsks, Bids, AskNext, Config);
         Other ->
-            asking_return(Other, Asks, Bids, Config)
+            asking_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            asking_exception(Class, Reason, Asks, Bids, Config)
+            asking_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
 info_bids(Msg, State, #time{now=Now} = Time, Asks, Bids, AskNext,
           #config{bid_mod=BidMod} = Config) ->
     try BidMod:handle_info(Msg, Now, Bids) of
-        {NBids, _} when State =:= asking ->
-            asking(Time, Asks, NBids, AskNext, Config);
-        {NBids, BidNext} when State =:= bidding ->
-            bidding(Time, Asks, NBids, BidNext, Config);
+        {NBids, BidNext} ->
+            info_meter(Msg, State, Time, Asks, AskNext, NBids, BidNext, Config);
         Other ->
-            bidding_return(Other, Asks, Bids, Config)
+            bidding_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
-asking_return(Return, Asks, Bids,
+info_meter(Msg, State, #time{now=Now, meter=Meter} = Time, Asks, AskNext, Bids,
+           BidNext, #config{meter_mod=MeterMod} = Config) ->
+    try MeterMod:handle_info(Msg, Now, Meter) of
+        {Meter, MeterNext} ->
+            NTime = Time#time{meter=Meter, next=MeterNext},
+            next(State, NTime, Asks, AskNext, Bids, BidNext, Config);
+        Other ->
+            meter_return(Other, Time, Asks, Bids, Config)
+    catch
+        Class:Reason ->
+            meter_exception(Class, Reason, Time, Asks, Bids, Config)
+    end.
+
+asking_return(Return, Time, Asks, Bids,
               #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
     Reason = {bad_return_value, Return},
-    Callbacks = [{AskMod, Reason, Asks},
-                 {BidMod, stop, Bids}],
-    terminate(Reason, Callbacks, Config).
+    Callbacks = [{sbroker_queue, AskMod, Reason, Asks},
+                 {sbroker_queue, BidMod, stop, Bids}],
+    terminate(Reason, Time, Callbacks, Config).
 
-asking_exception(Class, Reason, Asks, Bids,
+asking_exception(Class, Reason, Time, Asks, Bids,
                  #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
     Reason2 = {Class, Reason, erlang:get_stacktrace()},
-    Callbacks = [{AskMod, Reason2, Asks},
-                 {BidMod, stop, Bids}],
-    terminate(Reason2, Callbacks, Config).
-
-bidding_idle(Time, Asks, Bids, Next, Config) ->
-    Timeout = idle_timeout(Time, Next, Config),
-    receive
-        Msg ->
-            NTime = mark(Time, Config),
-            bidding(Msg, NTime, Asks, Bids, infinity, Config)
-    after
-        Timeout ->
-            NTime = mark(Time, Config),
-            bidding_timeout(NTime, Asks, Bids, Config)
-    end.
+    Callbacks = [{sbroker_queue, AskMod, Reason2, Asks},
+                 {sbroker_queue, BidMod, stop, Bids}],
+    terminate(Reason2, Time, Callbacks, Config).
 
 bidding_timeout(#time{now=Now} = Time, Asks, Bids,
                 #config{bid_mod=BidMod} = Config) ->
@@ -973,22 +1007,17 @@ bidding_timeout(#time{now=Now} = Time, Asks, Bids,
         {NBids, Next} ->
             bidding(Time, Asks, NBids, Next, Config);
         Other ->
-            bidding_return(Other, Asks, Bids, Config)
+            bidding_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
-bidding(#time{seq=Seq, read_after=Seq} = Time, Asks, Bids, Next, Config) ->
-    receive
-        Msg ->
-            #time{now=Now} = NTime = read_time(Time, Config),
-            bidding(Msg, NTime, Asks, Bids, max(Now, Next), Config)
-    end;
 bidding(Time, Asks, Bids, Next, Config) ->
     receive
         Msg ->
-            bidding(Msg, Time, Asks, Bids, Next, Config)
+            NTime = update_time(Time, Asks, Bids, Config),
+            bidding(Msg, NTime, Asks, Bids, Next, Config)
     end.
 
 bidding({bid, Bid, Value}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
@@ -997,10 +1026,10 @@ bidding({bid, Bid, Value}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
         {NBids, Next} ->
             bidding(Time, Asks, NBids, Next, Config);
         Other ->
-            bidding_return(Other, Asks, Bids, Config)
+            bidding_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
 bidding({ask, Ask, AskValue} = Msg, #time{now=Now} = Time, Asks, Bids, _,
         #config{bid_mod=BidMod} = Config) ->
@@ -1011,10 +1040,10 @@ bidding({ask, Ask, AskValue} = Msg, #time{now=Now} = Time, Asks, Bids, _,
         {empty, NBids} ->
             asking(Msg, Time, Asks, NBids, infinity, Config);
         Other ->
-            bidding_return(Other, Asks, Bids, Config)
+            bidding_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
 bidding({nb_bid, Bid, _}, Time, Asks, Bids, _, Config) ->
     retry(Bid, Time),
@@ -1029,10 +1058,10 @@ bidding({nb_ask, Ask, AskValue}, #time{now=Now} = Time, Asks, Bids, _,
             retry(Ask, Time),
             asking(Time, Asks, NBids, infinity, Config);
         Other ->
-            bidding_return(Other, Asks, Bids, Config)
+            bidding_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
 bidding({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, _,
         #config{bid_mod=BidMod} = Config) ->
@@ -1041,61 +1070,30 @@ bidding({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, _,
             gen:reply(From, Reply),
             bidding(Time, Asks, NBids, Next, Config);
         Other ->
-            bidding_return(Other, Asks, Bids, Config)
+            bidding_return(Other, Time, Asks, Bids, Config)
     catch
         Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
+            bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
-bidding({'$mark', Mark}, Time, Asks, Bids, Next, Config) ->
-    receive
-        Msg ->
-            NTime = handle_mark(Mark, Time),
-            bidding(Msg, NTime, Asks, Bids, Next, Config)
-    after
-        0 ->
-            bidding_idle(Time, Asks, Bids, Next, Config)
-    end;
-bidding({'EXIT', Parent, Reason}, _, Asks, Bids, _,
-        #config{parent=Parent} = Config) ->
-    terminate({stop, Reason}, Asks, Bids, Config);
-bidding({system, From, Msg}, Time, Asks, Bids, _, Config) ->
-    system(From, Msg, bidding, Time, Asks, Bids, Config);
-bidding({change_config, From, _}, Time, Asks, Bids, _, Config) ->
-    config_change(From, bidding, Time, Asks, Bids, Config);
-bidding({len_ask, From, _}, Time, Asks, Bids, _, Config) ->
-    gen:reply(From, 0),
-    bidding_timeout(Time, Asks, Bids, Config);
-bidding({len_bid, From, _}, Time, Asks, Bids, _,
-        #config{bid_mod=BidMod} = Config) ->
-    try BidMod:len(Bids) of
-        Len ->
-            gen:reply(From, Len),
-            bidding_timeout(Time, Asks, Bids, Config)
-    catch
-        Class:Reason ->
-            bidding_exception(Class, Reason, Asks, Bids, Config)
-    end;
-bidding(timeout, Time, Asks, Bids, _, Config) ->
-    bidding_timeout(Time, Asks, Bids, Config);
-bidding(Msg, Time, Asks, Bids, _, Config) ->
-    info_asks(Msg, bidding, Time, Asks, Bids, Config).
+bidding(Msg, Time, Asks, Bids, Next, Config) ->
+    common(Msg, bidding, Time, Asks, Bids, Next, Config).
 
 bid_settle(#time{now=Now, send=Send}, Ask, AskValue, BidSend, Bid, BidValue) ->
     settle(Now, Send, Ask, AskValue, BidSend, Bid, BidValue).
 
-bidding_return(Return, Asks, Bids,
+bidding_return(Return, Time, Asks, Bids,
                #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
     Reason = {bad_return_value, Return},
-    Callbacks = [{AskMod, stop, Asks},
-                 {BidMod, Reason, Bids}],
-    terminate(Reason, Callbacks, Config).
+    Callbacks = [{sbroker_queue, AskMod, stop, Asks},
+                 {sbroker_queue, BidMod, Reason, Bids}],
+    terminate(Reason, Time, Callbacks, Config).
 
-bidding_exception(Class, Reason, Asks, Bids,
+bidding_exception(Class, Reason, Time, Asks, Bids,
                   #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
     Reason2 = {Class, Reason, erlang:get_stacktrace()},
-    Callbacks = [{AskMod, stop, Asks},
-                 {BidMod, Reason2, Bids}],
-    terminate(Reason2, Callbacks, Config).
+    Callbacks = [{sbroker_queue, AskMod, stop, Asks},
+                 {sbroker_queue, BidMod, Reason2, Bids}],
+    terminate(Reason2, Time, Callbacks, Config).
 
 settle(Now, AskSend, Ask, AskValue, BidSend, Bid, BidValue) ->
     Ref = make_ref(),
@@ -1109,12 +1107,9 @@ retry(From, #time{now=Now, send=Send}) ->
 
 config_change(From, State, Time, Asks, Bids, Config) ->
     case config_change(Config) of
-        {ok, {AskMod, AskArgs, BidMod, BidArgs}} ->
+        {ok, Change} ->
             gen:reply(From, ok),
-            {NAsks, AskNext, NBids, BidNext, NConfig} =
-                change_asks(Time, Asks, AskMod, AskArgs, Bids, BidMod, BidArgs,
-                            Config),
-            next(State, Time, NAsks, AskNext, NBids, BidNext, NConfig);
+            change(State, Change, Time, Asks, Bids, Config);
         ignore  ->
             gen:reply(From, ok),
             timeout(State, Time, Asks, Bids, Config);
@@ -1125,8 +1120,8 @@ config_change(From, State, Time, Asks, Bids, Config) ->
 
 config_change(#config{mod=Mod, args=Args}) ->
     try Mod:init(Args) of
-        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}}} ->
-            {ok, {AskMod, AskArgs, BidMod, BidArgs}};
+        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, {Meter, MeterArgs}}} ->
+            {ok, {AskMod, AskArgs, BidMod, BidArgs, Meter, MeterArgs}};
         ignore ->
             ignore;
         Other ->
@@ -1136,27 +1131,22 @@ config_change(#config{mod=Mod, args=Args}) ->
             {error, {Class, Reason, erlang:get_stacktrace()}}
     end.
 
-change_asks(Time, Asks, NAskMod, AskArgs, Bids, NBidMod, BidArgs,
-            #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
-    case change(Time, AskMod, Asks, NAskMod, AskArgs, Config) of
-        {ok, NAsks, AskNext} ->
-            NConfig = Config#config{ask_mod=NAskMod},
-            change_bids(Time, NAsks, AskNext, Bids, NBidMod, BidArgs, NConfig);
-        {stop, _} = Stop ->
-            terminate(Stop, [{BidMod, stop, Bids}], Config)
+change(State, {NAskMod, AskArgs, NBidMod, BidArgs, NMeterMod, MeterArgs},
+       #time{now=Now, meter=Meter} = Time, Asks, Bids,
+       #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod} = Config) ->
+    Inits = [{sbroker_queue, AskMod, Asks, NAskMod, AskArgs},
+             {sbroker_queue, BidMod, Bids, NBidMod, BidArgs},
+             {sbroker_meter, MeterMod, Meter, NMeterMod, MeterArgs}],
+    case sbroker_handlers:change(Now, Inits, report_name(Config)) of
+        {ok, [{_, _, NAsks, AskNext}, {_, _, NBids, BidNext},
+              {_, _, NMeter, MeterNext}]} ->
+            NTime = Time#time{meter=NMeter, next=MeterNext},
+            NConfig = Config#config{ask_mod=NAskMod, bid_mod=NBidMod,
+                                    meter_mod=NMeterMod},
+            next(State, NTime, NAsks, AskNext, NBids, BidNext, NConfig);
+        {stop, Reason} ->
+            exit(Reason)
     end.
-
-change_bids(Time, Asks, AskNext, Bids, NBidMod, BidArgs,
-            #config{bid_mod=BidMod, ask_mod=AskMod} = Config) ->
-    case change(Time, BidMod, Bids, NBidMod, BidArgs, Config) of
-        {ok, NBids, BidNext} ->
-            {Asks, AskNext, NBids, BidNext, Config#config{bid_mod=NBidMod}};
-        {stop, _} = Stop ->
-            terminate(Stop, [{AskMod, stop, Asks}], Config)
-    end.
-
-change(#time{now=Now}, Mod1, State1, Mod2, Args2, Config) ->
-    sbroker_queue:change(Mod1, State1, Mod2, Args2, Now, report_name(Config)).
 
 next(asking, Time, Asks, AskNext, Bids, _, Config) ->
     asking(Time, Asks, Bids, AskNext, Config);
@@ -1174,7 +1164,7 @@ system(From, Msg, State, Time, Asks, Bids,
     sys:handle_system_msg(Msg, From, Parent, ?MODULE, Dbg,
                           [State, Time, Asks, Bids, NConfig]).
 
-format_queue(Mod, Opt, PDict, State) ->
+format_status(Mod, Opt, PDict, State) ->
     case erlang:function_exported(Mod, format_status, 2) of
         true ->
             try Mod:format_status(Opt, [PDict, State]) of
@@ -1195,12 +1185,19 @@ format_state(bidding) ->
 
 terminate(Reason, Callbacks, Config) ->
     Name = report_name(Config),
-    {stop, NReason} = sbroker_queue:terminate(Reason, Callbacks, Name),
+    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, Name),
     exit(NReason).
 
-terminate(Reason, Asks, Bids,
+terminate(Reason, #time{meter=Meter}, Callbacks,
+          #config{meter_mod=MeterMod} = Config) ->
+    NCallbacks = Callbacks ++ [{sbroker_meter, MeterMod, stop, Meter}],
+    terminate(Reason, NCallbacks, Config).
+
+terminate(Reason, Time, Asks, Bids,
           #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
-    terminate(Reason, [{AskMod, stop, Asks}, {BidMod, stop, Bids}], Config).
+    Callbacks = [{sbroker_queue, AskMod, stop, Asks},
+                 {sbroker_queue, BidMod, stop, Bids}],
+    terminate(Reason, Time, Callbacks, Config).
 
 report_name(#config{name=Pid, mod=Mod}) when is_pid(Pid) ->
     {Mod, Pid};

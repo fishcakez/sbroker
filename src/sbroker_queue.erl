@@ -157,18 +157,14 @@
 %% @private
 -module(sbroker_queue).
 
+-behaviour(sbroker_handler).
+
 %% public api
 
 -export([drop/3]).
 -export([change/6]).
--export([terminate/3]).
--export([exit_reason/1]).
 
 %% types
-
--type reason() :: stop | change |
-    {exit | throw | error, any(), erlang:raise_stacktrace()} |
-    {bad_return_value, any()}.
 
 -callback init(Time :: integer(), Args :: any()) -> State :: any().
 
@@ -201,7 +197,8 @@
 
 -callback len(State :: any()) -> Len :: non_neg_integer().
 
--callback terminate(Reason :: reason(), State :: any()) -> any().
+-callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
+    any().
 
 %% public api
 
@@ -224,21 +221,21 @@ drop(From, SendTime, Time) ->
       Module2 :: module(),
       Args :: any(),
       Time :: integer(),
-      Name :: any(),
+      Name :: sbroker_handler:name(),
       State2 :: any(),
       TimeoutTime :: integer(),
       ExitReason :: any().
-change(Mod, State, Mod, Args, Now, Name) ->
+change(Mod, State, Mod, Args, Now, _) ->
     try Mod:config_change(Args, Now, State) of
         {NState, Next} ->
             {ok, NState, Next};
         Other ->
             Reason = {bad_return_value, Other},
-            terminate(Reason, [{Mod, Reason, State}], Name)
+            {stop, Reason, [{Mod, Reason, State}]}
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            terminate(Reason2, [{Mod, Reason2, State}], Name)
+            {stop, Reason2, [{Mod, Reason2, State}]}
     end;
 change(Mod1, State1, Mod2, Args2, Now, Name) ->
     try Mod1:to_list(State1) of
@@ -246,51 +243,12 @@ change(Mod1, State1, Mod2, Args2, Now, Name) ->
             change_init(Items, Mod1, State1, Mod2, Args2, Now, Name);
         Other ->
             Reason = {bad_return_value, Other},
-            terminate(Reason, [{Mod1, Reason, State1}], Name)
+            {stop, Reason, [{Mod1, Reason, State1}]}
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            terminate(Reason2, [{Mod1, stop, State1}], Name)
+            {stop, Reason2, [{Mod1, stop, State1}]}
     end.
-
-%% @private
--spec terminate(Reason, [{Module, Info, State}, ...], Name) ->
-    {stop, NewExitReason} when
-      Reason :: reason() | {stop, ExitReason :: any()},
-      Module :: module(),
-      Info :: reason(),
-      State :: any(),
-      Name :: any(),
-      NewExitReason :: any().
-terminate({stop, _} = Stop, [], _) ->
-    Stop;
-terminate(Reason, [], _) ->
-    {stop, exit_reason(Reason)};
-terminate(Reason, [{Mod, Info, State} | Rest], Name) ->
-    try Mod:terminate(Info, State) of
-        _ ->
-            maybe_report(Mod, Info, State, Name),
-            terminate(Reason, Rest, Name)
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(queue_crashed, Mod, Reason2, State, Name),
-            terminate(Reason2, Rest, Name)
-    end.
-
-%% @private
--spec exit_reason(Reason) -> ExitReason when
-      Reason :: {exit | throw | error, any(), erlang:raise_stacktrace()} |
-        {bad_return_value, any()},
-      ExitReason :: any().
-exit_reason({throw, Value, Stack}) ->
-    {{nocatch, Value}, Stack};
-exit_reason({exit, Reason, _}) ->
-    Reason;
-exit_reason({error, Reason, Stack}) ->
-    {Reason, Stack};
-exit_reason({bad_return_value, _} = Bad) ->
-    Bad.
 
 %% Internal
 
@@ -301,8 +259,9 @@ change_init(Items, Mod1, State1, Mod2, Args2, Now, Name) ->
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(start_error, Name, Mod2, Reason2, Args2),
-            terminate(Reason2, [{Mod1, stop, State1}], Name)
+            sbroker_handler:report(?MODULE, start_error, Name, Mod2, Reason2,
+                                   Args2),
+            {stop, Reason2, [{Mod1, stop, State1}]}
     end.
 
 change_from_list(Items, Mod1, State1, Mod2, State2, Now, Name) ->
@@ -310,10 +269,10 @@ change_from_list(Items, Mod1, State1, Mod2, State2, Now, Name) ->
         {ok, NState2, Next} ->
             change_terminate(Mod1, State1, Mod2, NState2, Next, Name);
         {stop, Reason, Callbacks} ->
-            terminate(Reason, [{Mod1, stop, State1} | Callbacks], Name);
+            {stop, Reason, [{Mod1, stop, State1} | Callbacks]};
         {bad_items, Callbacks} ->
             Reason = {bad_return_value, Items},
-            terminate(Reason, [{Mod1, Reason, State1} | Callbacks], Name)
+            {stop, Reason, [{Mod1, Reason, State1} | Callbacks]}
     end.
 
 change_in([], _, State, Next, _) ->
@@ -340,66 +299,7 @@ change_terminate(Mod1, State1, Mod2, State2, Next, Name) ->
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(queue_crashed, Mod1, Reason2, State1, Name),
-            terminate(Reason2, [{Mod2, stop, State2}], Name)
+            sbroker_handler:report(?MODULE, handler_crashed, Mod1, Reason2,
+                                   State1, Name),
+            {stop, Reason2, [{Mod2, stop, State2}]}
     end.
-
-maybe_report(_, stop, _, _) ->
-    ok;
-maybe_report(_, change, _, _) ->
-    ok;
-maybe_report(Mod, Reason, State, Name) ->
-    case exit_reason(Reason) of
-        normal ->
-            ok;
-        shutdown ->
-            ok;
-        {shutdown, _} ->
-            ok;
-        Reason2 ->
-            send_report(queue_crashed, Mod, Reason2, State, name(Name))
-    end.
-
-report(Type, Mod, Reason, State, Name) ->
-    send_report(Type, Mod, exit_reason(Reason), State, name(Name)).
-
-send_report(start_error, Mod, Reason, Args, Name) ->
-    Tag = {?MODULE, start_error},
-    Format = "~i** ~p ~p failed to install.~n"
-             "** Was installing in ~p~n"
-             "** When queue arguments == ~p~n"
-             "** Reason == ~p~n",
-    Args = [Tag, ?MODULE, Mod, Name, Args, exit_reason(Reason)],
-    error_logger:format(Format, Args);
-send_report(queue_crashed, Mod, Reason, State, Name) ->
-    Tag = {?MODULE, queue_crashed},
-    Format = "~i** ~p ~p crashed.~n"
-             "** Was installed in ~p~n"
-             "** When queue state == ~p~n"
-             "** Reason == ~p~n",
-    NState = format_state(Mod, State),
-    Args = [Tag, ?MODULE, Mod, Name, NState, exit_reason(Reason)],
-    error_logger:format(Format, Args).
-
-format_state(Mod, State) ->
-    case erlang:function_exported(Mod, format_status, 2) of
-        true ->
-            try Mod:format_status(terminate, [get(), State]) of
-                Status ->
-                    Status
-            catch
-                _:_ ->
-                    State
-            end;
-        false ->
-            State
-    end.
-
-name({local, Name}) when is_atom(Name) ->
-    Name;
-name({global, Name}) ->
-    Name;
-name({via, _, Name}) ->
-    Name;
-name(Name) ->
-    Name.
