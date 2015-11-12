@@ -17,10 +17,9 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sbroker_SUITE).
+-module(sbroker_meter_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
--define(TIMEOUT, 5000).
 
 %% common_test api
 
@@ -37,24 +36,18 @@
 
 %% test cases
 
--export([ask/1]).
--export([ask_r/1]).
--export([await_timeout/1]).
--export([await_down/1]).
 -export([statem/1]).
 
 %% common_test api
 
 all() ->
-    [{group, simple},
-     {group, property}].
+    [{group, property}].
 
 suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{simple, [ask, ask_r, await_timeout, await_down]},
-     {property, [statem]}].
+    [{property, [parallel], [statem]}].
 
 init_per_suite(Config) ->
     {ok, Started} = application:ensure_all_started(sbroker),
@@ -99,76 +92,20 @@ init_per_testcase(_TestCase, Config) ->
     Config.
 
 end_per_testcase(_TestCase, _Config) ->
+    _ = sbroker_test_handler:reset(),
     ok.
 
 %% test cases
 
-ask(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker, self(), Ref),
-    1 = sbroker:len_r(Broker, ?TIMEOUT),
-    {go, Ref2, Self, AskRel, AskTime} = sbroker:ask(Broker),
-    0 = sbroker:len(Broker, ?TIMEOUT),
-    0 = sbroker:len_r(Broker, ?TIMEOUT),
-    AskRRel = -AskRel,
-    {go, Ref2, Self, AskRRel, AskRTime} = sbroker:await(Ref, ?TIMEOUT),
-    if
-        AskTime =< AskRTime ->
-            ok;
-        true ->
-            exit({bad_sojourn_times, AskTime, AskRTime})
-    end.
-
-ask_r(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    Self = self(),
-    {await, Ref, Broker} = sbroker:async_ask(Broker, self(), Ref),
-    1 = sbroker:len(Broker, ?TIMEOUT),
-    {go, Ref2, Self, AskRRel, AskRTime} = sbroker:ask_r(Broker),
-    0 = sbroker:len(Broker, ?TIMEOUT),
-    0 = sbroker:len_r(Broker, ?TIMEOUT),
-    AskRel = -AskRRel,
-    {go, Ref2, Self, AskRel, AskTime} = sbroker:await(Ref, ?TIMEOUT),
-    if
-        AskRTime =< AskTime ->
-            ok;
-        true ->
-            exit({bad_sojourn_times, AskRTime, AskTime})
-    end.
-
-await_timeout(_) ->
-    {ok, Broker} = sbroker_test:start_link(),
-    Ref = make_ref(),
-    {await, Ref, Broker} = sbroker:async_ask(Broker, self(), Ref),
-    {'EXIT',
-     {timeout, {sbroker, await, [Ref, 0]}}} = (catch sbroker:await(Ref, 0)),
-    ok.
-
-await_down(_) ->
-    Trap = process_flag(trap_exit, true),
-    {ok, Broker} = sbroker_test:start_link(),
-    {await, Ref, Broker} = sbroker:async_ask(Broker),
-    exit(Broker, shutdown),
-    receive {'EXIT', Broker, shutdown} -> ok end,
-    _ = process_flag(trap_exit, Trap),
-    {'EXIT',
-     {shutdown,
-      {sbroker, await,
-       [Ref, ?TIMEOUT]}}} = (catch sbroker:await(Ref, ?TIMEOUT)),
-    ok.
-
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
-    case sbroker_statem:quickcheck(QcOpts) of
+    case sbroker_meter_statem:quickcheck(QcOpts) of
         true ->
             ok;
         {error, Reason} ->
             error(Reason);
         CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
+            ct:pal("Counter Example:~n~p", [CounterExample]),
             error(counterexample)
     end.
 

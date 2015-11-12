@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sbroker_timeout_statem).
+-module(sbroker_timeout_queue_statem).
 
 -include_lib("proper/include/proper.hrl").
 
