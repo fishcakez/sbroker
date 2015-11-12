@@ -38,13 +38,13 @@
 
 %% public api
 
--export([init/2]).
+-export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
--export([config_change/3]).
+-export([config_change/4]).
 -export([to_list/1]).
 -export([len/1]).
 -export([terminate/2]).
@@ -69,21 +69,23 @@
 %% public api
 
 %% @private
--spec init(Time, {Out, Timeout, Drop, Max}) -> State when
+-spec init(TimeUnit, Time, {Out, Timeout, Drop, Max}) -> State when
+      TimeUnit :: sbroker_time:unit(),
       Time :: integer(),
       Out :: out | out_r,
       Timeout :: timeout(),
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
       State :: #state{}.
-init(Time, {Out, Timeout, drop, 0}) ->
-    init(Time, {Out, Timeout, drop_r, 0});
-init(Time, {Out, Timeout, Drop, Max})
+init(TimeUnit, Time, {Out, Timeout, drop, 0}) ->
+    init(TimeUnit, Time, {Out, Timeout, drop_r, 0});
+init(TimeUnit, Time, {Out, Timeout, Drop, Max})
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        ((is_integer(Max) andalso Max >= 0) orelse Max =:= infinity) ->
-    TimeoutNext = first_timeout_next(Time, Timeout),
-    #state{out=Out, timeout=Timeout, drop=Drop, max=Max,
+    NTimeout = sbroker_util:timeout(Timeout, TimeUnit),
+    TimeoutNext = first_timeout_next(Time, NTimeout),
+    #state{out=Out, timeout=NTimeout, drop=Drop, max=Max,
            timeout_next=TimeoutNext}.
 
 %% @private
@@ -196,8 +198,9 @@ handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
 
--spec config_change({Out, Timeout, Drop, Max}, Time, State) ->
+-spec config_change(TimeUnit, {Out, Timeout, Drop, Max}, Time, State) ->
     {NState, TimeoutNext} when
+      TimeUnit :: sbroker_time:unit(),
       Out :: out | out_r,
       Timeout :: timeout(),
       Drop :: drop | drop_r,
@@ -206,8 +209,8 @@ handle_info(_, Time, State) ->
       State :: #state{},
       NState :: #state{},
       TimeoutNext :: integer() | infinity.
-config_change(Arg, Time, State) ->
-    NState = change(Arg, Time, State),
+config_change(TimeUnit, Arg, Time, State) ->
+    NState = change(TimeUnit, Arg, Time, State),
     handle_timeout(Time, NState).
 
 %% @private
@@ -266,18 +269,21 @@ timeout(MinSend, Time, Len, Q, #state{timeout=Timeout} = State) ->
             timeout(MinSend, Time, Len-1, queue:drop(Q), State)
     end.
 
-change({Out, Timeout, drop, 0}, Time, State) ->
-    change({Out, Timeout, drop_r, 0}, Time, State);
-change({Out, Timeout, Drop, infinity}, Time, State)
+change(TimeUnit, {Out, Timeout, drop, 0}, Time, State) ->
+    change(TimeUnit, {Out, Timeout, drop_r, 0}, Time, State);
+change(TimeUnit, {Out, Timeout, Drop, infinity}, Time, State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) ->
-    State#state{out=Out, drop=Drop, max=infinity, timeout=Timeout,
-                timeout_next=first_timeout_next(Time, Timeout)};
-change({Out, Timeout, Drop, Max}, Time, #state{len=Len, queue=Q} = State)
+    NTimeout = sbroker_util:timeout(Timeout, TimeUnit),
+    State#state{out=Out, drop=Drop, max=infinity, timeout=NTimeout,
+                timeout_next=first_timeout_next(Time, NTimeout)};
+change(TimeUnit, {Out, Timeout, Drop, Max}, Time,
+       #state{len=Len, queue=Q} = State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        (is_integer(Max) andalso Max >= 0) ->
-    Next = first_timeout_next(Time, Timeout),
+    NTimeout = sbroker_util:timeout(Timeout, TimeUnit),
+    Next = first_timeout_next(Time, NTimeout),
     NState = State#state{out=Out, drop=Drop, max=Max, timeout=Timeout,
                          timeout_next=Next},
     case Len - Max of

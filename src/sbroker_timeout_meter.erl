@@ -21,20 +21,19 @@
 
 -behaviour(sbroker_meter).
 
--export([init/2]).
+-export([init/3]).
 -export([handle_update/4]).
 -export([handle_info/3]).
--export([config_change/3]).
+-export([config_change/4]).
 -export([terminate/2]).
 
 %% @private
--spec init(Time, Timeout) -> Timeout when
+-spec init(TimeUnit, Time, Timeout) -> Timeout when
+      TimeUnit :: sbroker_time:unit(),
       Time :: integer(),
       Timeout :: timeout().
-init(_, Timeout) when is_integer(Timeout) andalso Timeout >= 0 ->
-    Timeout;
-init(_, infinity) ->
-    infinity.
+init(TimeUnit, _, Timeout) ->
+    sbroker_util:timeout(Timeout, TimeUnit).
 
 %% @private
 -spec handle_update(ProcessTime, Count, Time, Timeout) ->
@@ -57,13 +56,14 @@ handle_info(_, Time, Timeout) ->
     handle(Time, Timeout).
 
 %% @private
--spec config_change(NTimeout, Time, Timeout) -> {NTimeout, Next} when
+-spec config_change(TimeUnit, NTimeout, Time, Timeout) -> {NTimeout, Next} when
+      TimeUnit :: sbroker_time:unit(),
       NTimeout :: timeout(),
       Time :: integer(),
       Timeout :: timeout(),
       Next :: integer() | infinity.
-config_change(NTimeout, Time, _) ->
-    handle(Time, init(Time, NTimeout)).
+config_change(TimeUnit, NTimeout, Time, _) ->
+    handle(Time, init(TimeUnit, Time, NTimeout)).
 
 %% @private
 -spec terminate(Reason, Timeout) -> ok when

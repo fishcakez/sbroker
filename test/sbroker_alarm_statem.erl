@@ -35,7 +35,7 @@ module() ->
     sbroker_alarm_meter.
 
 args() ->
-    {oneof([choose(0, 3), infinity]),
+    {choose(0, 3),
      choose(1, 5),
      desc()}.
 
@@ -117,7 +117,7 @@ alarm_post(#state{status=slow, alarm=Alarm}) ->
     end.
 
 change(#state{alarm=Alarm, interval_time=IntervalTime, time=PrevTime} = State,
-       Time, {Target, Interval, Alarm}) when Target =/= infinity ->
+       Time, {Target, Interval, Alarm}) ->
     NIntervalTime = IntervalTime - PrevTime + Time,
     State#state{target=Target, interval=Interval, time=Time,
                 interval_time=NIntervalTime};

@@ -713,11 +713,11 @@ time_module() ->
     end.
 
 init(Starter, #time{now=Now} = Time, AskArgs, BidArgs, MeterArgs,
-     #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod,
-             name=Name} = Config) ->
+     #config{time_unit=TimeUnit, ask_mod=AskMod, bid_mod=BidMod,
+             meter_mod=MeterMod, name=Name} = Config) ->
     Inits = [{sbroker_queue, AskMod, AskArgs}, {sbroker_queue, BidMod, BidArgs},
              {sbroker_meter, MeterMod, MeterArgs}],
-    case sbroker_handlers:init(Now, Inits, report_name(Config)) of
+    case sbroker_handlers:init(TimeUnit, Now, Inits, report_name(Config)) of
         {ok, [{_, _, Asks}, {_, _, Bids}, {_, _, Meter}]} ->
             enter_loop(Starter, Time#time{meter=Meter}, Asks, Bids, Config);
         {stop, Reason} ->
@@ -1133,11 +1133,12 @@ config_change(#config{mod=Mod, args=Args}) ->
 
 change(State, {NAskMod, AskArgs, NBidMod, BidArgs, NMeterMod, MeterArgs},
        #time{now=Now, meter=Meter} = Time, Asks, Bids,
-       #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod} = Config) ->
+       #config{time_unit=TimeUnit, ask_mod=AskMod, bid_mod=BidMod,
+               meter_mod=MeterMod} = Config) ->
     Inits = [{sbroker_queue, AskMod, Asks, NAskMod, AskArgs},
              {sbroker_queue, BidMod, Bids, NBidMod, BidArgs},
              {sbroker_meter, MeterMod, Meter, NMeterMod, MeterArgs}],
-    case sbroker_handlers:change(Now, Inits, report_name(Config)) of
+    case sbroker_handlers:change(TimeUnit, Now, Inits, report_name(Config)) of
         {ok, [{_, _, NAsks, AskNext}, {_, _, NBids, BidNext},
               {_, _, NMeter, MeterNext}]} ->
             NTime = Time#time{meter=NMeter, next=MeterNext},

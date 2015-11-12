@@ -19,15 +19,16 @@
 %%-------------------------------------------------------------------
 -module(sbroker_meter).
 
--behaviour(sbroker_handler).
+-behaviour(sbroker_handlers).
 
 %% public api
 
--export([change/6]).
+-export([change/7]).
 
 %% types
 
--callback init(Time :: integer(), Args :: any()) -> State :: any().
+-callback init(TimeUnit :: sbroker_time:unit(), Time :: integer(),
+               Args :: any()) -> State :: any().
 
 -callback handle_update(ProcessTime :: non_neg_integer(),
                         Count :: pos_integer(), Time :: integer(),
@@ -37,26 +38,29 @@
 -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
     {NState :: any(), UpdateTime :: integer() | infinity}.
 
--callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
+-callback config_change(TimeUnit :: sbroker_time:unit(), Args :: any(),
+                        Time :: integer(), State :: any()) ->
     {NState :: any(), UpdateTime :: integer() | infinity}.
 
 -callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
     any().
 
 %% @private
--spec change(Module1, State1, Module2, Args, Time, Name) ->
-    {ok, State2, TimeoutTime} | {stop, ExitReason} when
+-spec change(Module1, State1, Module2, TimeUnit, Args, Time, Name) ->
+    {ok, State2, TimeoutTime} | {stop, Reason, Callbacks} when
       Module1 :: module(),
       State1 :: any(),
       Module2 :: module(),
+      TimeUnit :: sbroker_time:unit(),
       Args :: any(),
       Time :: integer(),
       Name :: sbroker_handler:name(),
       State2 :: any(),
       TimeoutTime :: integer(),
-      ExitReason :: any().
-change(Mod, State, Mod, Args, Now, _) ->
-    try Mod:config_change(Args, Now, State) of
+      Reason :: sbroker_handlers:reason(),
+      Callbacks :: [{Module1, Reason, State :: any()}].
+change(Mod, State, Mod, TimeUnit, Args, Now, _) ->
+    try Mod:config_change(TimeUnit, Args, Now, State) of
         {NState, Next} ->
             {ok, NState, Next};
         Other ->
@@ -67,10 +71,10 @@ change(Mod, State, Mod, Args, Now, _) ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
             {stop, Reason2, [{Mod, Reason2, State}]}
     end;
-change(Mod1, State1, Mod2, Args2, Now, Name) ->
+change(Mod1, State1, Mod2, TimeUnit, Args2, Now, Name) ->
     try Mod1:terminate(change, State1) of
         _ ->
-            change_init(Mod2, Args2, Now, Name)
+            change_init(Mod2, TimeUnit, Args2, Now, Name)
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
@@ -81,8 +85,8 @@ change(Mod1, State1, Mod2, Args2, Now, Name) ->
 
 %% Internal
 
-change_init(Mod2, Args2, Now, Name) ->
-    try Mod2:init(Now,Args2) of
+change_init(Mod2, TimeUnit, Args2, Now, Name) ->
+    try Mod2:init(TimeUnit, Now, Args2) of
         State2 ->
             {ok, State2, infinity}
     catch

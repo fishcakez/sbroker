@@ -34,8 +34,7 @@
 -spec start_link() -> {ok, Pid} when
       Pid :: pid().
 start_link() ->
-    sbroker:start_link(?MODULE, undefined,
-                       [{time_unit, milli_seconds}, {read_time_after, 2}]).
+    sbroker:start_link(?MODULE, undefined, [{read_time_after, 2}]).
 
 %% sbroker api
 

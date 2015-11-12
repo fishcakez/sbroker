@@ -31,13 +31,13 @@
 
 -behaviour(sbroker_queue).
 
--export([init/2]).
+-export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
--export([config_change/3]).
+-export([config_change/4]).
 -export([to_list/1]).
 -export([len/1]).
 -export([terminate/2]).
@@ -56,15 +56,16 @@
                 queue = queue:new() :: internal_queue()}).
 
 %% @private
--spec init(Time, {Out, Drop, Max}) -> State when
+-spec init(TimeUnit, Time, {Out, Drop, Max}) -> State when
+      TimeUnit :: sbroker_time:unit(),
       Time :: integer(),
       Out :: out | out_r,
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
       State :: #state{}.
-init(Time, {Out, drop, 0}) ->
-    init(Time, {Out, drop_r, 0});
-init(_, {Out, Drop, Max})
+init(TimeUnit, Time, {Out, drop, 0}) ->
+    init(TimeUnit, Time, {Out, drop_r, 0});
+init(_, _, {Out, Drop, Max})
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        ((is_integer(Max) andalso Max >= 0) orelse Max =:= infinity) ->
@@ -157,20 +158,22 @@ handle_info({'DOWN', Ref, _, _, _}, _, #state{queue=Q} = State) ->
 handle_info(_, _, State) ->
     {State, infinity}.
 
--spec config_change({Out, Drop, Max}, Time, State) -> {NState, infinity} when
+-spec config_change(TimeUnit, {Out, Drop, Max}, Time, State) ->
+    {NState, infinity} when
+      TimeUnit :: sbroker_time:unit(),
       Out :: out | out_r,
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-config_change({Out, drop, 0}, Time, State) ->
-    config_change({Out, drop_r, 0}, Time, State);
-config_change({Out, Drop, infinity}, _, State)
+config_change(TimeUnit, {Out, drop, 0}, Time, State) ->
+    config_change(TimeUnit, {Out, drop_r, 0}, Time, State);
+config_change(_, {Out, Drop, infinity}, _, State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) ->
     {State#state{out=Out, drop=Drop, max=infinity}, infinity};
-config_change({Out, Drop, Max}, Time, #state{len=Len, queue=Q} = State)
+config_change(_, {Out, Drop, Max}, Time, #state{len=Len, queue=Q} = State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        (is_integer(Max) andalso Max >= 0) ->

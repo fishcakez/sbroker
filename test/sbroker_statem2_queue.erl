@@ -21,13 +21,13 @@
 
 -behaviour(sbroker_queue).
 
--export([init/2]).
+-export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
--export([config_change/3]).
+-export([config_change/4]).
 -export([to_list/1]).
 -export([len/1]).
 -export([terminate/2]).
@@ -35,8 +35,8 @@
 %% This sbroker_queue module is used to an alternate to sbroker_statem_queue
 %% to test config changes.
 
-init(Time, Args) ->
-    sbroker_statem_queue:init(Time, Args).
+init(TimeUnit, Time, Args) ->
+    sbroker_statem_queue:init(TimeUnit, Time, Args).
 
 handle_in(SendTime, From, Value, Time, State) ->
     sbroker_statem_queue:handle_in(SendTime, From, Value, Time, State).
@@ -53,8 +53,8 @@ handle_cancel(Tag, Time, State) ->
 handle_info(Msg, Time, State) ->
     sbroker_statem_queue:handle_info(Msg, Time, State).
 
-config_change(Args, Time, State) ->
-    sbroker_statem_queue:config_change(Args, Time, State).
+config_change(TimeUnit, Args, Time, State) ->
+    sbroker_statem_queue:config_change(TimeUnit, Args, Time, State).
 
 to_list(State) ->
     sbroker_statem_queue:to_list(State).

@@ -57,13 +57,13 @@
 
 %% public api
 
--export([init/2]).
+-export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
--export([config_change/3]).
+-export([config_change/4]).
 -export([to_list/1]).
 -export([len/1]).
 -export([terminate/2]).
@@ -92,7 +92,8 @@
 %% public API
 
 %% @private
--spec init(Time, {Out, Target, Interval, Drop, Max}) -> State when
+-spec init(TimeUnit, Time, {Out, Target, Interval, Drop, Max}) -> State when
+      TimeUnit :: sbroker_time:unit(),
       Time :: integer(),
       Out :: out | out_r,
       Target :: non_neg_integer(),
@@ -100,16 +101,15 @@
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
       State :: #state{}.
-init(Time, {Out, Target, Interval, drop, 0}) ->
-    init(Time, {Out, Target, Interval, drop_r, 0});
-init(Time, {Out, Target, Interval, Drop, Max})
+init(TimeUnit, Time, {Out, Target, Interval, drop, 0}) ->
+    init(TimeUnit, Time, {Out, Target, Interval, drop_r, 0});
+init(TimeUnit, Time, {Out, Target, Interval, Drop, Max})
   when (Out =:= out orelse Out =:= out_r) andalso
-       is_integer(Target) andalso Target >= 0 andalso
-       is_integer(Interval) andalso Interval > 0 andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        ((is_integer(Max) andalso Max >= 0) orelse Max =:= infinity) ->
-    #state{out=Out, target=Target, interval=Interval, drop=Drop, max=Max,
-           drop_next=Time, peek_next=Time}.
+    #state{out=Out, target=sbroker_util:target(Target, TimeUnit),
+           interval=sbroker_util:interval(Interval, TimeUnit), drop=Drop,
+           max=Max, drop_next=Time, peek_next=Time}.
 
 %% @private
 -spec handle_in(SendTime, From, Value, Time, State) ->
@@ -235,8 +235,10 @@ handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
 
--spec config_change({Out, Target, Interval, Drop, Max}, Time, State) ->
+-spec config_change(TimeUnit, {Out, Target, Interval, Drop, Max}, Time,
+                    State) ->
     {NState, NextTimeout} when
+      TimeUnit :: sbroker_time:unit(),
       Out :: out | out_r,
       Target :: non_neg_integer(),
       Interval :: pos_integer(),
@@ -246,8 +248,8 @@ handle_info(_, Time, State) ->
       State :: #state{},
       NState :: #state{},
       NextTimeout :: integer() | infinity.
-config_change(Arg, Time, State) ->
-    NState = change(Arg, Time, State),
+config_change(TimeUnit, Arg, Time, State) ->
+    NState = change(TimeUnit, Arg, Time, State),
     handle_timeout(Time, NState).
 
 %% @private
@@ -417,16 +419,15 @@ drop_item(Time, {SendTime, From, _, Ref}) ->
     demonitor(Ref, [flush]),
     sbroker_queue:drop(From, SendTime, Time).
 
-change({Out, Target, Interval, drop, 0}, Time, State) ->
-    change({Out, Target, Interval, drop_r, 0}, Time, State);
-change({Out, Target, Interval, Drop, Max}, Time,
+change(TimeUnit, {Out, Target, Interval, drop, 0}, Time, State) ->
+    change(TimeUnit, {Out, Target, Interval, drop_r, 0}, Time, State);
+change(TimeUnit, {Out, Target, Interval, Drop, Max}, Time,
        #state{len=Len, queue=Q} = State)
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
-       is_integer(Target) andalso Target >= 0 andalso
-       is_integer(Interval) andalso Interval > 0 andalso
        ((is_integer(Max) andalso Max >= 0) orelse Max =:= infinity) ->
-    NState = State#state{out=Out, target=Target, interval=Interval,
+    NState = State#state{out=Out, target=sbroker_util:target(Target, TimeUnit),
+                         interval=sbroker_util:interval(Interval, TimeUnit),
                          drop=Drop, max=Max, peek_next=Time},
     if
         Len > Max andalso Drop =:= drop ->

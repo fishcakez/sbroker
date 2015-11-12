@@ -170,9 +170,10 @@ tag() ->
     elements([a, b, c]).
 
 init_or_change(undefined, undefined, _, Mod, Args, Time) ->
-    Mod:init(Time, Args);
+    Mod:init(milli_seconds, Time, Args);
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
-    sbroker_queue:change(Mod1, State1, Mod2, Args2, Time, ?MODULE).
+    sbroker_queue:change(Mod1, State1, Mod2, milli_seconds, Args2, Time,
+                         ?MODULE).
 
 init_or_change_args(#state{mod=Mod, queue=Q, time=Time}) ->
     ?LET(Manager, manager(),
