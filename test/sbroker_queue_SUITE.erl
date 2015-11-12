@@ -36,9 +36,6 @@
 
 %% test cases
 
--export([drop/1]).
--export([timeout/1]).
--export([codel/1]).
 -export([statem/1]).
 
 %% common_test api
@@ -50,7 +47,7 @@ suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{property, [parallel], [drop, timeout, codel, statem]}].
+    [{property, [parallel], [statem]}].
 
 init_per_suite(Config) ->
     QcOpts = [{numtests, 1000}, long_result, {on_output, fun log/2}],
@@ -88,52 +85,15 @@ end_per_testcase(_TestCase, _Config) ->
 
 %% test cases
 
-drop(Config) ->
-    QcOpts = ?config(quickcheck_options, Config),
-    case sbroker_drop_statem:quickcheck(QcOpts) of
-        true ->
-            ok;
-        {error, Reason} ->
-            error(Reason);
-        CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
-            error(counterexample)
-    end.
-
-
-timeout(Config) ->
-    QcOpts = ?config(quickcheck_options, Config),
-    case sbroker_timeout_statem:quickcheck(QcOpts) of
-        true ->
-            ok;
-        {error, Reason} ->
-            error(Reason);
-        CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
-            error(counterexample)
-    end.
-
-codel(Config) ->
-    QcOpts = ?config(quickcheck_options, Config),
-    case sbroker_codel_statem:quickcheck(QcOpts) of
-        true ->
-            ok;
-        {error, Reason} ->
-            error(Reason);
-        CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
-            error(counterexample)
-    end.
-
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
-    case sbroker_statem_statem:quickcheck(QcOpts) of
+    case sbroker_queue_statem:quickcheck(QcOpts) of
         true ->
             ok;
         {error, Reason} ->
             error(Reason);
         CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
+            ct:pal("Counter Example:~n~p", [CounterExample]),
             error(counterexample)
     end.
 
