@@ -140,25 +140,21 @@ init_or_change_next(#state{manager=undefined} = State, M,
 init_or_change_next(#state{manager=Manager, manager_state=ManState} = State,
                    Value, [Mod, _, Manager, Mod, Args, Time]) ->
     M = {call, erlang, element, [2, Value]},
-    Timeout = {call, erlang, element, [3, Value]},
-    NManState = Manager:change(ManState, Time, Args),
+    {NManState, Timeout} = Manager:change(ManState, Time, Args),
     State#state{meter=M, manager_state=NManState, time=Time,
                 timeout_time=Timeout};
 init_or_change_next(_, Value, [_, _, Manager, Mod, Args, Time]) ->
     M = {call, erlang, element, [2, Value]},
-    Timeout = {call, erlang, element, [3, Value]},
     State = init_or_change_next(initial_state(), M, [undefined, undefined,
                                                      Manager, Mod, Args, Time]),
-    State#state{time=Time, timeout_time=Timeout}.
+    State#state{time=Time}.
 
 init_or_change_post(#state{manager=undefined}, _, _) ->
     true;
 init_or_change_post(#state{manager=Manager, manager_state=ManState},
                     [Mod, _, Manager, Mod, Args, Time], {ok, _, Timeout}) ->
-    NManState = Manager:change(ManState, Time, Args),
-    ((is_integer(Timeout) andalso Timeout >= Time)
-     orelse Timeout =:= infinity) andalso
-    Manager:timeout_post(NManState, Time, Timeout);
+    {_, Timeout2} = Manager:change(ManState, Time, Args),
+    timeout_post(Timeout2, Timeout);
 init_or_change_post(State, [_, M, _, _, _, _], {ok, _, Timeout}) ->
     Timeout =:= infinity andalso terminate_post(State, undefined, [change, M]).
 
@@ -169,24 +165,25 @@ handle_update(Mod, MsgQLen, ProcessTime, Count, Time, M) ->
     Result.
 
 handle_update_args(#state{mod=Mod, time=Time, meter=M}) ->
-    [Mod, choose(0, 3), choose(0, 9), choose(1, 3), time(Time), M].
+    [Mod, choose(0, 3), choose(0, 5), choose(0, 5), time(Time), M].
 
 handle_update_pre(#state{time=PrevTime}, [_, _, _, _, Time, _]) ->
     Time >= PrevTime.
 
 handle_update_next(#state{manager=Manager, manager_state=ManState} = State,
-                   Value, [_ | [_, _, _, Time, _] = Args]) ->
+                   Value, [_, MsgQLen, QueueDelay, ProcessDelay, Time, _]) ->
     M = {call, erlang, element, [1, Value]},
-    Timeout = {call, erlang, element, [2, Value]},
-    NManState = Manager:handle_update_next(ManState, Value, Args),
+    {NManState, Timeout} = Manager:update_next(ManState, Time, MsgQLen,
+                                               QueueDelay, ProcessDelay),
     State#state{meter=M, time=Time, timeout_time=Timeout,
                 manager_state=NManState}.
 
 handle_update_post(#state{manager=Manager, manager_state=ManState},
-                   [_ | [_, _, _, Time, _] = Args], {_, Timeout} = Result) ->
-    ((is_integer(Timeout) andalso Timeout >= Time)
-     orelse Timeout =:= infinity) andalso
-    Manager:handle_update_post(ManState, Args, Result).
+                   [_, MsgQLen, QueueDelay, ProcessDelay, Time, _],
+                   {_, Timeout}) ->
+    {Result, Timeout2} = Manager:update_post(ManState, Time, MsgQLen,
+                                             QueueDelay, ProcessDelay),
+    Result andalso timeout_post(Timeout2, Timeout).
 
 handle_info_args(#state{time=Time, meter=M}) ->
     [oneof([a, b, c]), time(Time), M].
@@ -196,14 +193,12 @@ handle_info_pre(#state{time=PrevTime}, [_, Time, _]) ->
 
 handle_info_next(State, Value, [_, Time, _]) ->
     M = {call, erlang, element, [1, Value]},
-    Timeout = {call, erlang, element, [2, Value]},
-    State#state{meter=M, time=Time, timeout_time=Timeout}.
+    State#state{meter=M, time=Time}.
 
 handle_info_post(#state{manager=Manager, manager_state=ManState},
                    [_, Time, _], {_, Timeout}) ->
-    ((is_integer(Timeout) andalso Timeout >= Time)
-     orelse Timeout =:= infinity) andalso
-    Manager:timeout_post(ManState, Time, Timeout).
+    Timeout2 = Manager:timeout(ManState, Time),
+    timeout_post(Timeout2, Timeout).
 
 terminate_args(#state{meter=M}) ->
     [oneof([shutdown, normal, abnormal]), M].
@@ -216,3 +211,11 @@ terminate_next(_, _, _) ->
 
 terminate_post(_, _, _) ->
     true.
+
+%% Helpers
+
+timeout_post(Expected, Observed) when Expected =:= Observed ->
+    true;
+timeout_post(Expected, Observed) ->
+    ct:pal("Timeout~nExpected: ~p~nObserved: ~p", [Expected, Observed]),
+    false.

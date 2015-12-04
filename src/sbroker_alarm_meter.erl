@@ -48,18 +48,18 @@ init(TimeUnit, _, {Target, Interval, AlarmId}) ->
            alarm_id=AlarmId}.
 
 %% @private
--spec handle_update(ProcessTime, Count, Time, State) ->
+-spec handle_update(QueueDelay, ProcessDelay, Time, State) ->
     {NState, Next} when
-      ProcessTime :: non_neg_integer(),
-      Count :: pos_integer(),
+      QueueDelay :: non_neg_integer(),
+      ProcessDelay :: non_neg_integer(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       Next :: integer() | infinity.
-handle_update(ProcessTime, Count, Time,
+handle_update(QueueDelay, _, Time,
               #state{status=clear, interval=Interval, alarm_id=AlarmId,
                      toggle_next=ToggleNext} = State) ->
-    case message_queue_status(ProcessTime, Count, State) of
+    case message_queue_status(QueueDelay, State) of
         slow when ToggleNext =:= infinity ->
             NToggleNext = Time + Interval,
             {State#state{toggle_next=NToggleNext}, NToggleNext};
@@ -73,10 +73,10 @@ handle_update(ProcessTime, Count, Time,
         fast ->
             {State#state{toggle_next=infinity}, infinity}
     end;
-handle_update(ProcessTime, Count, Time,
+handle_update(QueueDelay, _, Time,
               #state{status=set, interval=Interval, alarm_id=AlarmId,
                      toggle_next=ToggleNext} = State) ->
-    case message_queue_status(ProcessTime, Count, State) of
+    case message_queue_status(QueueDelay, State) of
         slow when ToggleNext =:= infinity ->
             {State, infinity};
         slow ->
@@ -127,15 +127,18 @@ terminate(_, _) ->
 
 %% Internal
 
-message_queue_status(ProcessTime, Count, #state{target=Target}) ->
+message_queue_status(QueueDelay, #state{target=Target})
+  when QueueDelay < Target ->
+    fast;
+message_queue_status(0, #state{target=0}) ->
     case process_info(self(), message_queue_len) of
         {_, 0} ->
             fast;
-        {_, Len} when (ProcessTime div Count) * Len < Target ->
-            fast;
         _ ->
             slow
-    end.
+    end;
+message_queue_status(_, _) ->
+    slow.
 
 change(TimeUnit, {Target, NInterval, AlarmId}, Time,
        #state{alarm_id=AlarmId, interval=Interval,

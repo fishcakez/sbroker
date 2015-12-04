@@ -24,10 +24,10 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/2]).
--export([handle_update_next/3]).
--export([handle_update_post/3]).
--export([timeout_post/3]).
+-export([update_next/5]).
+-export([update_post/5]).
 -export([change/3]).
+-export([timeout/2]).
 
 module() ->
     sbroker_timeout_meter.
@@ -38,28 +38,23 @@ args() ->
 init(_, Timeout) ->
     Timeout.
 
-handle_update_next(Timeout, _, _) ->
-    Timeout.
+update_next(Timeout, Time, _, _, _) ->
+    handle(Timeout, Time).
 
-handle_update_post(Timeout, [_, _, _, Time, _], {_, Timeout2}) ->
-    timeout_post(Timeout, Time, Timeout2).
+update_post(Timeout, Time, _, _, _) ->
+    {_, TimeoutTime} = handle(Timeout, Time),
+    {true, TimeoutTime}.
 
-timeout_post(infinity, _, Timeout) ->
-    case Timeout of
-        infinity ->
-            true;
-        _ ->
-            ct:pal("Timeout~nExpected: ~p~nObserved: ~p", [infinity, Timeout]),
-            false
-    end;
-timeout_post(Timeout, Time, Timeout2) ->
-    case Time + Timeout of
-        Timeout2 ->
-            true;
-        Timeout3 ->
-            ct:pal("Timeout~nExpected: ~p~nObserved: ~p", [Timeout3, Timeout2]),
-            false
-    end.
+change(_, Time, Timeout) ->
+    handle(Timeout, Time).
 
-change(_, _, Timeout) ->
-    Timeout.
+timeout(Timeout, Time) ->
+    {_, TimeoutTime} = handle(Timeout, Time),
+    TimeoutTime.
+
+%% Internal
+
+handle(infinity, _) ->
+    {infinity, infinity};
+handle(Timeout, Time) ->
+    {Timeout, Time + Timeout}.

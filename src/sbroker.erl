@@ -761,9 +761,13 @@ update_time(#time{seq=Seq, read_after=Seq} = Time, Asks, Bids, Config) ->
 update_time(#time{seq=Seq} = Time, _, _, _) ->
     Time#time{seq=Seq+1}.
 
-update_meter(Now, #time{now=Prev, seq=Seq, meter=Meter} = Time, Asks,
+update_meter(Now, #time{now=Prev, send=Send, seq=Seq, meter=Meter} = Time, Asks,
              Bids, #config{meter_mod=MeterMod} = Config) ->
-    try MeterMod:handle_update(Now-Prev, Seq, Now, Meter) of
+    ProcessDelay = (Now - Prev) div Seq,
+    %% Remove one ProcessDelay to estimate time last message was received.
+    %% NB: This gives correct QueueDelay of 0 when single message was received.
+    QueueDelay = (Now - ProcessDelay) - Send,
+    try MeterMod:handle_update(QueueDelay, ProcessDelay, Now, Meter) of
         {NMeter, Next} ->
             Time#time{now=Now, seq=0, meter=NMeter, next=Next};
         Other ->

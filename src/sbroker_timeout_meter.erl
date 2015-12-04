@@ -36,10 +36,10 @@ init(TimeUnit, _, Timeout) ->
     sbroker_util:timeout(Timeout, TimeUnit).
 
 %% @private
--spec handle_update(ProcessTime, Count, Time, Timeout) ->
+-spec handle_update(QueueDelay, ProcessDelay, Time, Timeout) ->
     {Timeout, Next} when
-      ProcessTime :: non_neg_integer(),
-      Count :: pos_integer(),
+      QueueDelay :: non_neg_integer(),
+      ProcessDelay :: non_neg_integer(),
       Time :: integer(),
       Timeout :: timeout(),
       Next :: integer() | infinity.

@@ -30,8 +30,8 @@
 -callback init(TimeUnit :: sbroker_time:unit(), Time :: integer(),
                Args :: any()) -> State :: any().
 
--callback handle_update(ProcessTime :: non_neg_integer(),
-                        Count :: pos_integer(), Time :: integer(),
+-callback handle_update(QueueDelay :: non_neg_integer(),
+                        ProcessDelay :: non_neg_integer(), Time :: integer(),
                         State :: any()) ->
     {NState :: any(), UpdateTime :: integer() | infinity}.
 

@@ -24,10 +24,10 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/2]).
--export([handle_update_next/3]).
--export([handle_update_post/3]).
--export([timeout_post/3]).
+-export([update_next/5]).
+-export([update_post/5]).
 -export([change/3]).
+-export([timeout/2]).
 
 -record(state, {target, interval, alarm, time, status, queue, interval_time}).
 
@@ -46,27 +46,33 @@ init(Time, {Target, Interval, Alarm}) ->
     #state{target=Target, interval=Interval, alarm=Alarm, status=fast,
            time=Time, queue=fast, interval_time=0}.
 
-handle_update_next(State, _, [Len, ProcessTime, Count, Time, _]) ->
-    next(queue(Len, ProcessTime, Count, State), State, Time).
+update_next(State, Time, MsgQLen, QueueDelay, _) ->
+    NState = next(queue(MsgQLen, QueueDelay, State), State, Time),
+    {NState, timeout(NState, Time)}.
 
-handle_update_post(State, Args, {_, Timeout} = Result) ->
-    NState = handle_update_next(State, Result, Args),
-    alarm_post(NState) andalso timeout_post(NState, Timeout).
+update_post(State, Time, MsgQLen, QueueDelay, _) ->
+    NState = next(queue(MsgQLen, QueueDelay, State), State, Time),
+    {alarm_post(NState), timeout(NState, Time)}.
 
-timeout_post(#state{time=PrevTime, interval_time=IntervalTime} = State, Time,
-             Timeout) ->
+change(State, Time, Args) ->
+    NState = do_change(State, Time, Args),
+    {NState, timeout(NState, Time)}.
+
+timeout(#state{status=Status, queue=Status}, _) ->
+    infinity;
+timeout(#state{time=PrevTime, interval_time=IntervalTime,
+               interval=Interval}, Time) ->
     NIntervalTime = IntervalTime-PrevTime+Time,
-    timeout_post(State#state{time=Time, interval_time=NIntervalTime}, Timeout).
+    Time + max(0, Interval - NIntervalTime).
 
-queue(Len, ProcessTime, Count, #state{target=Target}) ->
-    if
-        Len == 0 ->
-            fast;
-        Len * (ProcessTime div Count) < Target ->
-            fast;
-        true ->
-            slow
-    end.
+%% Internal
+
+queue(_, QueueDelay, #state{target=Target}) when QueueDelay < Target ->
+    fast;
+queue(0, 0, #state{target=0}) ->
+    fast;
+queue(_, _, _) ->
+    slow.
 
 next(Status, #state{status=Status, queue=Status} = State, Time) ->
     State#state{time=Time};
@@ -80,24 +86,6 @@ next(NStatus, #state{queue=NStatus, interval=Interval, time=PrevTime,
     end;
 next(NStatus, #state{} = State, Time) ->
     State#state{queue=NStatus, interval_time=0, time=Time}.
-
-timeout_post(#state{status=Status, queue=Status}, Timeout) ->
-    case Timeout of
-        infinity ->
-            true;
-        _ ->
-            ct:pal("Timeout~nExpected: ~p~nObserved: ~p", [infinity, Timeout]),
-            false
-    end;
-timeout_post(#state{time=Time, interval=Interval, interval_time=IntervalTime},
-             Timeout) ->
-    case Time + max(0, Interval - IntervalTime) of
-        Timeout ->
-            true;
-        Expected ->
-            ct:pal("Timeout~nExpected: ~p~nObserved: ~p", [Expected, Timeout]),
-            false
-    end.
 
 alarm_post(#state{status=fast, alarm=Alarm}) ->
     case sbroker_test_handler:get_alarms() of
@@ -116,10 +104,10 @@ alarm_post(#state{status=slow, alarm=Alarm}) ->
             true
     end.
 
-change(#state{alarm=Alarm, interval_time=IntervalTime, time=PrevTime} = State,
-       Time, {Target, Interval, Alarm}) ->
+do_change(#state{alarm=Alarm, interval_time=IntervalTime,
+                 time=PrevTime} = State,Time, {Target, Interval, Alarm}) ->
     NIntervalTime = IntervalTime - PrevTime + Time,
     State#state{target=Target, interval=Interval, time=Time,
                 interval_time=NIntervalTime};
-change(_, Time, Args) ->
+do_change(_, Time, Args) ->
     init(Time, Args).
