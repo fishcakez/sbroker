@@ -627,7 +627,7 @@ status_post(#state{asks=Asks, bids=Bids, sys=Sys} = State,
              {data, [{"Status", SysState},
                      {"Parent", Self},
                      {"Active queue", Active},
-                     {"Time", {TimeMod, native, Time}}]},
+                     {"Time", {TimeMod, Time}}]},
              {items, {"Installed handlers", Handlers}}]) ->
     SysState =:= Sys andalso Self =:= self() andalso
     ((length(Asks) > 0 andalso Active =:= ask) orelse

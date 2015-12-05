@@ -43,7 +43,7 @@ time_dependence() ->
     depedent.
 
 init({Out, Timeout, Drop, Max}) ->
-    {Out, Drop, Max, Timeout}.
+    {Out, Drop, Max, sbroker_util:timeout(Timeout)}.
 
 handle_timeout(_Time, L, Timeout) ->
     Drop = fun(SojournTime) -> SojournTime >= Timeout end,
@@ -56,4 +56,4 @@ handle_out_r(Time, L, Timeout) ->
     handle_timeout(Time, L, Timeout).
 
 config_change(_, {Out, Timeout, Drop, Max}, _) ->
-    {Out, Drop, Max, Timeout}.
+    {Out, Drop, Max, sbroker_util:timeout(Timeout)}.

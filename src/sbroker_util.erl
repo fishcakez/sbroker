@@ -21,9 +21,9 @@
 -module(sbroker_util).
 
 -export([whereis/1]).
--export([timeout/2]).
--export([target/2]).
--export([interval/2]).
+-export([timeout/1]).
+-export([target/1]).
+-export([interval/1]).
 
 -type process() :: pid() | atom() | {atom(), node()} | {global, any()} |
     {via, module(), any()}.
@@ -46,30 +46,29 @@ whereis({global, Name}) ->
 whereis({via, Mod, Name}) ->
     Mod:whereis_name(Name).
 
--spec timeout(Timeout, TimeUnit) -> NTimeout when
+-spec timeout(Timeout) -> NTimeout when
       Timeout :: timeout(),
-      TimeUnit :: sbroker_time:unit(),
       NTimeout :: timeout().
-timeout(infinity, _) ->
+timeout(infinity) ->
     infinity;
-timeout(Timeout, TimeUnit) ->
-    target(Timeout, TimeUnit).
+timeout(Timeout) ->
+    target(Timeout).
 
--spec target(Target, TimeUnit) -> NTarget when
+-spec target(Target) -> NTarget when
       Target :: integer(),
-      TimeUnit :: sbroker_time:unit(),
       NTarget :: integer().
-target(Target, TimeUnit) when Target >= 0 ->
-    sbroker_time:convert_time_unit(Target, milli_seconds, TimeUnit).
+target(Target) when is_integer(Target), Target >= 0 ->
+    sbroker_time:convert_time_unit(Target, milli_seconds, native);
+target(Target) ->
+    error(badarg, [Target]).
 
--spec interval(Interval, TimeUnit) -> NInterval when
+-spec interval(Interval) -> NInterval when
       Interval :: pos_integer(),
-      TimeUnit :: sbroker_time:unit(),
       NInterval :: pos_integer().
-interval(Interval, TimeUnit) ->
-    case sbroker_time:convert_time_unit(Interval, milli_seconds, TimeUnit) of
+interval(Interval) ->
+    case sbroker_time:convert_time_unit(Interval, milli_seconds, native) of
         NInterval when NInterval > 0 ->
             NInterval;
         _ ->
-            error(badarg, [Interval, TimeUnit])
+            error(badarg, [Interval])
     end.

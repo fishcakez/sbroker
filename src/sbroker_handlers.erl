@@ -20,13 +20,12 @@
 %% @private
 -module(sbroker_handlers).
 
--callback change(Module1, State1, Module2, TimeUnit, Args, Time, Name) ->
+-callback change(Module1, State1, Module2, Args, Time, Name) ->
     {ok, State2, TimeoutTime} |
     {stop, Reason, [{Module, ModReason, State}]} when
       Module1 :: module(),
       State1 :: any(),
       Module2 :: module(),
-      TimeUnit :: sbroker_time:unit(),
       Args :: any(),
       Time :: integer(),
       Name :: sbroker_handler:name(),
@@ -37,8 +36,8 @@
       ModReason :: sbroker_handler:reason(),
       State :: any().
 
--export([init/4]).
--export([change/4]).
+-export([init/3]).
+-export([change/3]).
 -export([terminate/3]).
 -export([report/6]).
 -export([exit_reason/1]).
@@ -51,9 +50,8 @@
     {local, atom()} | {global, any()} | {via, module(), any()} |
     {module(), pid()}.
 
--spec init(TimeUnit, Time, Inits, Name) ->
+-spec init(Time, Inits, Name) ->
     {ok, Callbacks} | {stop, ExitReason} when
-      TimeUnit :: sbroker_time:unit(),
       Time :: integer(),
       Inits :: [{Behaviour, Mod, Args}, ...],
       Behaviour :: module(),
@@ -63,12 +61,11 @@
       Callbacks :: [{Behaviour, Mod, State}, ...],
       State :: any(),
       ExitReason :: any().
-init(TimeUnit, Time, Inits, Name) ->
-    init(TimeUnit, Time, Inits, Name, []).
+init(Time, Inits, Name) ->
+    init(Time, Inits, Name, []).
 
--spec change(TimeUnit, Time, Changes, Name) ->
+-spec change(Time, Changes, Name) ->
     {ok, Callbacks} | {stop, ExitReason} when
-      TimeUnit :: sbroker_time:unit(),
       Time :: integer(),
       Changes :: [{Behaviour, Mod1, State1, Mod2, Args2}, ...],
       Behaviour :: module(),
@@ -81,8 +78,8 @@ init(TimeUnit, Time, Inits, Name) ->
       Callbacks :: [{Behaviour, Mod2, State2, TimeoutTime2}, ...],
       State2 :: any(),
       ExitReason :: any().
-change(TimeUnit, Now, Changes, Name) ->
-    change(TimeUnit, Now, Changes, Name, []).
+change(Now, Changes, Name) ->
+    change(Now, Changes, Name, []).
 
 -spec terminate(Reason, [{Behaviour, Module, ModReason, State}, ...], Name) ->
     {stop, NewExitReason} when
@@ -137,13 +134,13 @@ exit_reason({bad_return_value, _} = Bad) ->
 
 %% Internal
 
-init(_, _, [], _, Callbacks) ->
+init(_, [], _, Callbacks) ->
     {ok, lists:reverse(Callbacks)};
-init(TimeUnit, Time, [{Behaviour, Mod, Args} | Inits], Name, Callbacks) ->
-    try Mod:init(TimeUnit, Time, Args) of
+init(Time, [{Behaviour, Mod, Args} | Inits], Name, Callbacks) ->
+    try Mod:init(Time, Args) of
         State ->
             NCallbacks = [{Behaviour, Mod, State} | Callbacks],
-            init(TimeUnit, Time, Inits, Name, NCallbacks)
+            init(Time, Inits, Name, NCallbacks)
     catch
         Class:Reason ->
             Stack = erlang:get_stacktrace(),
@@ -154,14 +151,14 @@ init(TimeUnit, Time, [{Behaviour, Mod, Args} | Inits], Name, Callbacks) ->
 
     end.
 
-change(_, _, [], _, Callbacks) ->
+change(_, [], _, Callbacks) ->
     {ok, lists:reverse(Callbacks)};
-change(TimeUnit, Time, [{Behaviour, Mod1, State1, Mod2, Args2} | Changes], Name,
+change(Time, [{Behaviour, Mod1, State1, Mod2, Args2} | Changes], Name,
        Callbacks) ->
-    case Behaviour:change(Mod1, State1, Mod2, TimeUnit, Args2, Time, Name) of
+    case Behaviour:change(Mod1, State1, Mod2, Args2, Time, Name) of
         {ok, State2, Next2} ->
             NCallbacks = [{Behaviour, Mod2, State2, Next2} | Callbacks],
-            change(TimeUnit, Time, Changes, Name, NCallbacks);
+            change(Time, Changes, Name, NCallbacks);
         {stop, Reason, Callbacks2} ->
             NCallbacks = [{Behaviour2, Mod, stop, State} ||
                           {Behaviour2, Mod, State, _} <- Callbacks],

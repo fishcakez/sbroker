@@ -69,7 +69,9 @@ time_dependence() ->
     depedent.
 
 init({Out, Target, Interval, Drop, Max}) ->
-    {Out, Drop, Max, #state{target=Target, interval=Interval}}.
+    NTarget = sbroker_util:target(Target),
+    NInterval = sbroker_util:interval(Interval),
+    {Out, Drop, Max, #state{target=NTarget, interval=NInterval}}.
 
 %% To ensure following the reference codel implementationas closely as possible
 %% use the full dequeue approach and "undo" the following:
@@ -138,9 +140,11 @@ handle_out_r(Time, L, State) ->
 config_change(Time, {Out, Target, Interval, Drop, Max},
               #state{first_above_time=FirstAbove,
                      drop_next=DropNext} = State) ->
-    NFirstAbove = reduce(FirstAbove, Time+Interval),
-    NDropNext = reduce(DropNext, Time+Interval),
-    NState = State#state{target=Target, interval=Interval,
+    NTarget = sbroker_util:target(Target),
+    NInterval = sbroker_util:interval(Interval),
+    NFirstAbove = reduce(FirstAbove, Time+NInterval),
+    NDropNext = reduce(DropNext, Time+NInterval),
+    NState = State#state{target=NTarget, interval=NInterval,
                          first_above_time=NFirstAbove, drop_next=NDropNext},
     {Out, Drop, Max, NState}.
 

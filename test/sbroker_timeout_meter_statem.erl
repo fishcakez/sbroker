@@ -36,7 +36,7 @@ args() ->
     oneof([choose(0, 3), infinity]).
 
 init(_, Timeout) ->
-    Timeout.
+    sbroker_util:timeout(Timeout).
 
 update_next(Timeout, Time, _, _, _) ->
     handle(Timeout, Time).
@@ -46,7 +46,7 @@ update_post(Timeout, Time, _, _, _) ->
     {true, TimeoutTime}.
 
 change(_, Time, Timeout) ->
-    handle(Timeout, Time).
+    handle(sbroker_util:timeout(Timeout), Time).
 
 timeout(Timeout, Time) ->
     {_, TimeoutTime} = handle(Timeout, Time),

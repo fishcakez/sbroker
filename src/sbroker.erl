@@ -135,7 +135,6 @@
 -type start_option() ::
     {debug, debug_option()} | {timeout, timeout()} |
     {spawn_opt, [proc_lib:spawn_option()]} | {time_module, module()} |
-    {time_unit, sbroker_time:unit()} |
     {read_time_after, non_neg_integer() | infinity}.
 -type start_return() :: {ok, pid()} | ignore | {error, any()}.
 -type queue_spec() :: {module(), any()}.
@@ -152,7 +151,6 @@
                  dbg :: [sys:dbg_opt()],
                  name :: name() | pid(),
                  time_mod :: module(),
-                 time_unit :: sbroker_time:unit(),
                  ask_mod :: module(),
                  bid_mod :: module(),
                  meter_mod :: module()}).
@@ -185,8 +183,6 @@ ask(Broker) ->
 %%
 %% Returns `{go, Ref, Value, RelativeTime, SojournTime}' on a successful
 %% match or `{drop, SojournTime}'.
-%%
-%% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
 %% value of the matched request sent by the counterparty process. `RelativeTime'
 %% is the approximate time differnece (in the broker's time unit) between when
 %% the request was sent and the matching request was sent. `SojournTime' is the
@@ -491,10 +487,9 @@ len_r(Broker, Timeout) ->
 %% `Opts' is a `proplist' and supports `debug', `timeout' and `spawn_opt' used
 %% by `gen_server' and `gen_fsm'. `time_module' sets the `sbroker_time'
 %% callback module, which defaults to `erlang' if `erlang:monotonic_time/1' is
-%% exported, otherwise `sbroker_legacy', which uses `erlang:now/0'. The time
-%% units are set with `time_unit', which defaults to `native'. `read_time_after'
-%% sets the number of requests when a cached time is stale and the time is read
-%% again. Its value is a `non_neg_integer()' or `infinity' and defaults to `16'.
+%% exported, otherwise `sbroker_legacy'. `read_time_after' sets the number of
+%% requests when a cached time is stale and the time is read again. Its value is
+%% `non_neg_integer()' or `infinity' and defaults to `16'.
 %%
 %% @see gen_server:start_link/3
 %% @see sbroker_time
@@ -540,14 +535,13 @@ init_it(Starter, self, Name, Mod, Args, Opts) ->
 init_it(Starter, Parent, Name, Mod, {TimeOpts, Args}, Opts) ->
     DbgOpts = proplists:get_value(debug, Opts, []),
     Dbg = sys:debug_options(DbgOpts),
-    {TimeMod, TimeUnit, ReadAfter} = TimeOpts,
-    _ = put('$initial_call', {Mod, init, 1}),
+    {TimeMod, ReadAfter} = TimeOpts,
+     _ = put('$initial_call', {Mod, init, 1}),
     try Mod:init(Args) of
         {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, {MeterMod, MeterArgs}}} ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
-                             name=Name, time_mod=TimeMod, time_unit=TimeUnit,
-                             ask_mod=AskMod, bid_mod=BidMod,
-                             meter_mod=MeterMod},
+                             name=Name, time_mod=TimeMod, ask_mod=AskMod,
+                             bid_mod=BidMod, meter_mod=MeterMod},
             Now = monotonic_time(Config),
             Time = #time{now=Now, send=Now, read_after=ReadAfter},
             init(Starter, Time, AskArgs, BidArgs, MeterArgs, Config);
@@ -632,8 +626,7 @@ format_status(Opt,
               [PDict, SysState, Parent, _,
                [State, #time{now=Now, meter=Meter}, Asks, Bids,
                 #config{name=Name, ask_mod=AskMod, bid_mod=BidMod,
-                        meter_mod=MeterMod, time_mod=TimeMod,
-                        time_unit=TimeUnit}]]) ->
+                        meter_mod=MeterMod, time_mod=TimeMod}]]) ->
     Header = gen:format_status_header("Status for sbroker", Name),
     Handlers = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids},
                 {MeterMod, meter, Meter}],
@@ -643,7 +636,7 @@ format_status(Opt,
      {data, [{"Status", SysState},
              {"Parent", Parent},
              {"Active queue", format_state(State)},
-             {"Time", {TimeMod, TimeUnit, Now}}]},
+             {"Time", {TimeMod, Now}}]},
      {items, {"Installed handlers", Handlers2}}];
 format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
     format_status(Opt, [PDict, SysState, Parent, Dbg, Misc]).
@@ -653,9 +646,8 @@ format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
 split_options(Args, Opts0) ->
     TimeOpts = time_options(Opts0),
     Opts1 = lists:keydelete(time_module, 1, Opts0),
-    Opts2 = lists:keydelete(time_unit, 1, Opts1),
-    Opts3 = lists:keydelete(read_time_after, 1, Opts2),
-    {{TimeOpts, Args}, Opts3}.
+    Opts2 = lists:keydelete(read_time_after, 1, Opts1),
+    {{TimeOpts, Args}, Opts2}.
 
 call(Broker, Label, Msg, Timeout) ->
     case sbroker_util:whereis(Broker) of
@@ -702,9 +694,8 @@ send(Broker, Msg) ->
 
 time_options(Opts) ->
     TimeMod = proplists:get_value(time_module, Opts, time_module()),
-    TimeUnit = proplists:get_value(time_unit, Opts, native),
     ReadAfter = proplists:get_value(read_time_after, Opts, ?READ_TIME_AFTER),
-    {TimeMod, TimeUnit, ReadAfter}.
+    {TimeMod, ReadAfter}.
 
 time_module() ->
     case erlang:function_exported(erlang, monotonic_time, 1) of
@@ -713,11 +704,11 @@ time_module() ->
     end.
 
 init(Starter, #time{now=Now} = Time, AskArgs, BidArgs, MeterArgs,
-     #config{time_unit=TimeUnit, ask_mod=AskMod, bid_mod=BidMod,
-             meter_mod=MeterMod, name=Name} = Config) ->
+     #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod,
+             name=Name} = Config) ->
     Inits = [{sbroker_queue, AskMod, AskArgs}, {sbroker_queue, BidMod, BidArgs},
              {sbroker_meter, MeterMod, MeterArgs}],
-    case sbroker_handlers:init(TimeUnit, Now, Inits, report_name(Config)) of
+    case sbroker_handlers:init(Now, Inits, report_name(Config)) of
         {ok, [{_, _, Asks}, {_, _, Bids}, {_, _, Meter}]} ->
             enter_loop(Starter, Time#time{meter=Meter}, Asks, Bids, Config);
         {stop, Reason} ->
@@ -745,10 +736,8 @@ enter_loop(Starter, Time, Asks, Bids, Config) ->
     proc_lib:init_ack(Starter, {ok, self()}),
     idle_recv(asking, infinity, Time,  Asks, Bids, Config).
 
-monotonic_time(#config{time_mod=TimeMod, time_unit=native}) ->
-    TimeMod:monotonic_time();
-monotonic_time(#config{time_mod=TimeMod, time_unit=TimeUnit}) ->
-    TimeMod:monotonic_time(TimeUnit).
+monotonic_time(#config{time_mod=TimeMod}) ->
+    TimeMod:monotonic_time().
 
 mark(Time, Config) ->
     Now = monotonic_time(Config),
@@ -804,14 +793,13 @@ idle(State, Time, Asks, Bids, Next, Config) ->
     Timeout = idle_timeout(NTime, Next, Config),
     idle_recv(State, Timeout, NTime, Asks, Bids, Config).
 
-idle_timeout(#time{now=Now, next=Next1}, Next2,
-             #config{time_mod=TimeMod, time_unit=TimeUnit}) ->
+idle_timeout(#time{now=Now, next=Next1}, Next2, #config{time_mod=TimeMod}) ->
     case min(Next1, Next2) of
         infinity ->
             infinity;
         Next ->
             Diff = Next-Now,
-            Timeout = TimeMod:convert_time_unit(Diff, TimeUnit, milli_seconds),
+            Timeout = TimeMod:convert_time_unit(Diff, native, milli_seconds),
             max(Timeout, 1)
     end.
 
@@ -1137,12 +1125,11 @@ config_change(#config{mod=Mod, args=Args}) ->
 
 change(State, {NAskMod, AskArgs, NBidMod, BidArgs, NMeterMod, MeterArgs},
        #time{now=Now, meter=Meter} = Time, Asks, Bids,
-       #config{time_unit=TimeUnit, ask_mod=AskMod, bid_mod=BidMod,
-               meter_mod=MeterMod} = Config) ->
+       #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod} = Config) ->
     Inits = [{sbroker_queue, AskMod, Asks, NAskMod, AskArgs},
              {sbroker_queue, BidMod, Bids, NBidMod, BidArgs},
              {sbroker_meter, MeterMod, Meter, NMeterMod, MeterArgs}],
-    case sbroker_handlers:change(TimeUnit, Now, Inits, report_name(Config)) of
+    case sbroker_handlers:change(Now, Inits, report_name(Config)) of
         {ok, [{_, _, NAsks, AskNext}, {_, _, NBids, BidNext},
               {_, _, NMeter, MeterNext}]} ->
             NTime = Time#time{meter=NMeter, next=MeterNext},

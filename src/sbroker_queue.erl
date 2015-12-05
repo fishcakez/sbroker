@@ -22,10 +22,9 @@
 %% A custom queue must implement the `sbroker' behaviour. The first callback is
 %% `init/3', which starts the queue:
 %% ```
-%% -callback init(TimeUnit :: sbroker_time:unit(0, Time :: integer(),
-%%                Args :: any()) -> State :: any().
+%% -callback init(Time :: integer(), Args :: any()) -> State :: any().
 %% '''
-%% `Time' is the time, in `TimeUnit' time units, of the queue at creation. Some
+%% `Time' is the time, in `native' time units, of the queue at creation. Some
 %% other callbacks will receive the current time of the queue as the second last
 %% argument. It is monotically increasing, so subsequent calls will have the
 %% same or a greater time.
@@ -112,14 +111,13 @@
 %%
 %% When changing the configuration of a queue, `config_change/4':
 %% ```
-%% -callback config_change(TimeUnit :: sbroker_time:unit(), Args :: any(),
-%%                         Time :: integer(), State :: any()) ->
+%% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
 %%      {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Args' is the arguments to reconfigure the queue. The queue should change its
 %% configuration as if the same `Args' term was used in `init/3'.
 %%
-%% `Time' is the current time in `TimeUnit' time units, `State' is the current
+%% `Time' is the current time in `native' time units, `State' is the current
 %% state, `NState' is the new state and `TimeoutTime' is the time of the next
 %% timeout, see `handle_in/5'.
 %%
@@ -164,12 +162,11 @@
 %% public api
 
 -export([drop/3]).
--export([change/7]).
+-export([change/6]).
 
 %% types
 
--callback init(TimeUnit :: sbroker_time:unit(), Time :: integer(),
-               Args :: any()) -> State :: any().
+-callback init(Time :: integer(), Args :: any()) -> State :: any().
 
 -callback handle_in(SendTime :: integer(),
                     From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
@@ -191,8 +188,7 @@
 -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
     {NState :: any(), TimeoutTime :: integer() | infinity}.
 
--callback config_change(TimeUnit :: sbroker_time:unit(), Args :: any(),
-                        Time :: integer(), State :: any()) ->
+-callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
     {NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback to_list(State :: any()) ->
@@ -218,12 +214,11 @@ drop(From, SendTime, Time) ->
    ok.
 
 %% @private
--spec change(Module1, State1, Module2, TimeUnit, Args, Time, Name) ->
+-spec change(Module1, State1, Module2, Args, Time, Name) ->
     {ok, State2, TimeoutTime} | {stop, Reason, Callbacks} when
       Module1 :: module(),
       State1 :: any(),
       Module2 :: module(),
-      TimeUnit :: sbroker_time:unit(),
       Args :: any(),
       Time :: integer(),
       Name :: sbroker_handler:name(),
@@ -231,8 +226,8 @@ drop(From, SendTime, Time) ->
       TimeoutTime :: integer(),
       Reason :: sbroker_handlers:reason(),
       Callbacks :: [{Module1 | Module2, Reason | stop, State :: any()}].
-change(Mod, State, Mod, TimeUnit, Args, Now, _) ->
-    try Mod:config_change(TimeUnit, Args, Now, State) of
+change(Mod, State, Mod, Args, Now, _) ->
+    try Mod:config_change(Args, Now, State) of
         {NState, Next} ->
             {ok, NState, Next};
         Other ->
@@ -243,10 +238,10 @@ change(Mod, State, Mod, TimeUnit, Args, Now, _) ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
             {stop, Reason2, [{Mod, Reason2, State}]}
     end;
-change(Mod1, State1, Mod2, TimeUnit, Args2, Now, Name) ->
+change(Mod1, State1, Mod2, Args2, Now, Name) ->
     try Mod1:to_list(State1) of
         Items when is_list(Items) ->
-            change_init(Items, Mod1, State1, Mod2, TimeUnit, Args2, Now, Name);
+            change_init(Items, Mod1, State1, Mod2, Args2, Now, Name);
         Other ->
             Reason = {bad_return_value, Other},
             {stop, Reason, [{Mod1, Reason, State1}]}
@@ -258,8 +253,8 @@ change(Mod1, State1, Mod2, TimeUnit, Args2, Now, Name) ->
 
 %% Internal
 
-change_init(Items, Mod1, State1, Mod2, TimeUnit, Args2, Now, Name) ->
-    try Mod2:init(TimeUnit, Now, Args2) of
+change_init(Items, Mod1, State1, Mod2, Args2, Now, Name) ->
+    try Mod2:init(Now, Args2) of
         State2 ->
             change_from_list(Items, Mod1, State1, Mod2, State2, Now, Name)
     catch

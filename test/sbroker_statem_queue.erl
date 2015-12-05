@@ -21,13 +21,13 @@
 
 -behaviour(sbroker_queue).
 
--export([init/3]).
+-export([init/2]).
 -export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
--export([config_change/4]).
+-export([config_change/3]).
 -export([to_list/1]).
 -export([len/1]).
 -export([terminate/2]).
@@ -53,7 +53,7 @@
 %% Time is ignored completely to allow testing independent of time in sbroker.
 %% Timing is tested for separately using `sbroker_queue_statem`.
 
-init(_, _, {Out, Drops}) ->
+init(_, {Out, Drops}) ->
     #state{config=Drops, out=Out, drops=Drops}.
 
 handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
@@ -105,9 +105,9 @@ handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
 
-config_change(_, {Out, Config}, Time, #state{config=Config} = State) ->
+config_change({Out, Config}, Time, #state{config=Config} = State) ->
     handle_timeout(Time, State#state{out=Out});
-config_change(_, {Out, Config}, Time, State) ->
+config_change({Out, Config}, Time, State) ->
     handle_timeout(Time, State#state{config=Config, out=Out, drops=Config}).
 
 to_list(#state{queue=Q}) ->

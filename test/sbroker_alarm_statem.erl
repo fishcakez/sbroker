@@ -43,7 +43,8 @@ desc() ->
     oneof([a, b, c]).
 
 init(Time, {Target, Interval, Alarm}) ->
-    #state{target=Target, interval=Interval, alarm=Alarm, status=fast,
+    #state{target=sbroker_util:target(Target),
+           interval=sbroker_util:interval(Interval), alarm=Alarm, status=fast,
            time=Time, queue=fast, interval_time=0}.
 
 update_next(State, Time, MsgQLen, QueueDelay, _) ->
@@ -107,7 +108,8 @@ alarm_post(#state{status=slow, alarm=Alarm}) ->
 do_change(#state{alarm=Alarm, interval_time=IntervalTime,
                  time=PrevTime} = State,Time, {Target, Interval, Alarm}) ->
     NIntervalTime = IntervalTime - PrevTime + Time,
-    State#state{target=Target, interval=Interval, time=Time,
+    State#state{target=sbroker_util:target(Target),
+                interval=sbroker_util:interval(Interval), time=Time,
                 interval_time=NIntervalTime};
 do_change(_, Time, Args) ->
     init(Time, Args).
