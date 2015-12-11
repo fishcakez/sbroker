@@ -501,8 +501,9 @@ len_r(Broker, Timeout) ->
       Args :: any(),
       Opts :: [start_option()],
       StartReturn :: start_return().
-start_link(Mod, Args, Opts) ->
-    gen:start(?MODULE, link, Mod, Args, Opts).
+start_link(Mod, Args0, Opts) ->
+    {Args1, GenOpts} = split_options(Args0, Opts),
+    gen:start(?MODULE, link, Mod, Args1, GenOpts).
 
 %% @doc Starts a broker with name `Name', callback module `Module' and argument
 %% `Args', and broker options `Opts'.
@@ -514,8 +515,9 @@ start_link(Mod, Args, Opts) ->
       Args :: any(),
       Opts :: [start_option()],
       StartReturn :: start_return().
-start_link(Name, Mod, Args, Opts) ->
-    gen:start(?MODULE, link, Name, Mod, Args, Opts).
+start_link(Name, Mod, Args0, Opts) ->
+    {Args1, GenOpts} = split_options(Args0, Opts),
+    gen:start(?MODULE, link, Name, Mod, Args1, GenOpts).
 
 %% test api
 
@@ -533,10 +535,10 @@ timeout(Broker) ->
 %% @private
 init_it(Starter, self, Name, Mod, Args, Opts) ->
     init_it(Starter, self(), Name, Mod, Args, Opts);
-init_it(Starter, Parent, Name, Mod, Args, Opts) ->
+init_it(Starter, Parent, Name, Mod, {TimeOpts, Args}, Opts) ->
     DbgOpts = proplists:get_value(debug, Opts, []),
     Dbg = sys:debug_options(DbgOpts),
-    {TimeMod, TimeUnit, ReadAfter} = time_options(Opts),
+    {TimeMod, TimeUnit, ReadAfter} = TimeOpts,
     _ = put('$initial_call', {Mod, init, 1}),
     try Mod:init(Args) of
         {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, Timeout}} ->
@@ -642,6 +644,13 @@ format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
     format_status(Opt, [PDict, SysState, Parent, Dbg, Misc]).
 
 %% Internal
+
+split_options(Args, Opts0) ->
+    TimeOpts = time_options(Opts0),
+    Opts1 = lists:keydelete(time_module, 1, Opts0),
+    Opts2 = lists:keydelete(time_unit, 1, Opts1),
+    Opts3 = lists:keydelete(read_time_after, 1, Opts2),
+    {{TimeOpts, Args}, Opts3}.
 
 call(Broker, Label, Msg, Timeout) ->
     case sbroker_util:whereis(Broker) of
