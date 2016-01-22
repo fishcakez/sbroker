@@ -69,7 +69,7 @@ time_dependence() ->
     depedent.
 
 init({Out, Target, Interval, Drop, Max}) ->
-    NTarget = sbroker_util:target(Target),
+    NTarget = sbroker_util:sojourn_target(Target),
     NInterval = sbroker_util:interval(Interval),
     {Out, Drop, Max, #state{target=NTarget, interval=NInterval}}.
 
@@ -140,7 +140,7 @@ handle_out_r(Time, L, State) ->
 config_change(Time, {Out, Target, Interval, Drop, Max},
               #state{first_above_time=FirstAbove,
                      drop_next=DropNext} = State) ->
-    NTarget = sbroker_util:target(Target),
+    NTarget = sbroker_util:sojourn_target(Target),
     NInterval = sbroker_util:interval(Interval),
     NFirstAbove = reduce(FirstAbove, Time+NInterval),
     NDropNext = reduce(DropNext, Time+NInterval),

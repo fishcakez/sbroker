@@ -215,7 +215,7 @@ queue_spec() ->
      {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}}.
 
 meter_spec() ->
-    {sbroker_alarm_meter, {0, 10, ?MODULE}}.
+    {sbroker_alarm_meter, {0, 1000, ?MODULE}}.
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, Init),
@@ -465,36 +465,16 @@ ask_change_next({AskMod, {AskOut, AskDrops}},
            #state{ask_mod=AskMod, ask_drops=AskDrops} = State) ->
     ask_aqm_next(State#state{ask_out=AskOut});
 %% If module and/or args different reset the backend state.
-ask_change_next({AskMod, {AskOut, AskDrops}}, #state{ask_mod=AskMod} = State) ->
+ask_change_next({AskMod, {AskOut, AskDrops}}, State) ->
     ask_aqm_next(State#state{ask_mod=AskMod, ask_out=AskOut, ask_drops=AskDrops,
-                             ask_state=AskDrops});
-ask_change_next({AskMod, {AskOut, AskDrops}}, #state{asks=Asks} = State) ->
-    NState = State#state{ask_mod=AskMod, asks=[], ask_out=AskOut,
-                         ask_drops=AskDrops, ask_state=AskDrops},
-    In = fun(Client, StateAcc) ->
-                 ask_next(StateAcc,
-                          fun(#state{asks=NAsks} = NStateAcc) ->
-                                  NStateAcc#state{asks=NAsks++[Client]}
-                          end)
-         end,
-    lists:foldl(In, NState, Asks).
+                             ask_state=AskDrops}).
 
 bid_change_next({BidMod, {BidOut, BidDrops}},
            #state{bid_mod=BidMod, bid_drops=BidDrops} = State) ->
     bid_aqm_next(State#state{bid_out=BidOut});
-bid_change_next({BidMod, {BidOut, BidDrops}}, #state{bid_mod=BidMod} = State) ->
+bid_change_next({BidMod, {BidOut, BidDrops}}, State) ->
     bid_aqm_next(State#state{bid_mod=BidMod, bid_out=BidOut, bid_drops=BidDrops,
-                             bid_state=BidDrops});
-bid_change_next({BidMod, {BidOut, BidDrops}}, #state{bids=Bids} = State) ->
-    NState = State#state{bid_mod=BidMod, bids=[], bid_out=BidOut,
-                         bid_drops=BidDrops, bid_state=BidDrops},
-    In = fun(Client, StateAcc) ->
-                 bid_next(StateAcc,
-                          fun(#state{bids=NBids} = NStateAcc) ->
-                                  NStateAcc#state{bids=NBids++[Client]}
-                          end)
-         end,
-    lists:foldl(In, NState, Bids).
+                             bid_state=BidDrops}).
 
 change_config_post(State, [_, ignore], ok) ->
     timeout_post(State);
@@ -510,38 +490,16 @@ ask_change_post({AskMod, {AskOut, AskDrops}},
            #state{ask_mod=AskMod, ask_drops=AskDrops} = State) ->
     ask_aqm_post(State#state{ask_out=AskOut});
 %% If module and/or args different reset the backend state.
-ask_change_post({AskMod, {AskOut, AskDrops}}, #state{ask_mod=AskMod} = State) ->
+ask_change_post({AskMod, {AskOut, AskDrops}}, State) ->
     ask_aqm_post(State#state{ask_mod=AskMod, ask_out=AskOut, ask_drops=AskDrops,
-                             ask_state=AskDrops});
-ask_change_post({AskMod, {AskOut, AskDrops}}, #state{asks=Asks} = State) ->
-    NState = State#state{ask_mod=AskMod, asks=[], ask_out=AskOut,
-                         ask_drops=AskDrops, ask_state=AskDrops},
-    In = fun(Client, {true, StateAcc}) ->
-                 {Drops, #state{asks=NAsks} = NStateAcc} = ask_aqm(StateAcc),
-                 {drops_post(Drops), NStateAcc#state{asks=NAsks++[Client]}};
-            (_, {false, _} = Acc) ->
-                 Acc
-         end,
-    {Result, _} = lists:foldl(In, {true, NState}, Asks),
-    Result.
+                             ask_state=AskDrops}).
 
 bid_change_post({BidMod, {BidOut, BidDrops}},
                 #state{bid_mod=BidMod, bid_drops=BidDrops} = State) ->
     bid_aqm_post(State#state{bid_out=BidOut});
-bid_change_post({BidMod, {BidOut, BidDrops}}, #state{bid_mod=BidMod} = State) ->
+bid_change_post({BidMod, {BidOut, BidDrops}}, State) ->
     bid_aqm_post(State#state{bid_mod=BidMod, bid_out=BidOut, bid_drops=BidDrops,
-                             bid_state=BidDrops});
-bid_change_post({BidMod, {BidOut, BidDrops}}, #state{bids=Bids} = State) ->
-    NState = State#state{bid_mod=BidMod, bids=[], bid_out=BidOut,
-                         bid_drops=BidDrops, bid_state=BidDrops},
-    In = fun(Client, {true, StateAcc}) ->
-                 {Drops, #state{bids=NBids} = NStateAcc} = ask_aqm(StateAcc),
-                 {drops_post(Drops), NStateAcc#state{bids=NBids++[Client]}};
-            (_, {false, _} = Acc) ->
-                 Acc
-         end,
-    {Result, _} = lists:foldl(In, {true, NState}, Bids),
-    Result.
+                             bid_state=BidDrops}).
 
 shutdown_client_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
                    done=Done}) ->
@@ -659,9 +617,7 @@ get_state_post(State, Handlers) ->
 get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Handlers) ->
     case lists:keyfind(ask, 2, Handlers) of
         {AskMod, ask, AskState} ->
-            ClientPids = [client_pid(Client) || Client <- Asks],
-            Pids = [Pid || {_, {Pid,_}, _} <- AskMod:to_list(AskState)],
-            Pids =:= ClientPids;
+            AskMod:len(AskState) == length(Asks);
         Ask ->
             ct:pal("Ask queue: ~p", [Ask]),
             false
@@ -670,9 +626,7 @@ get_ask_post(#state{ask_mod=AskMod, asks=Asks}, Handlers) ->
 get_bid_post(#state{bid_mod=BidMod, bids=Bids}, Handlers) ->
     case lists:keyfind(ask_r, 2, Handlers) of
         {BidMod, ask_r, BidState} ->
-            ClientPids = [client_pid(Client) || Client <- Bids],
-            Pids = [Pid || {_, {Pid,_}, _} <- BidMod:to_list(BidState)],
-            Pids =:= ClientPids;
+            BidMod:len(BidState) == length(Bids);
         Bid ->
             ct:pal("Bid queue: ~p", [Bid]),
             false

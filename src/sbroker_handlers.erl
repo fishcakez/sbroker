@@ -20,21 +20,18 @@
 %% @private
 -module(sbroker_handlers).
 
--callback change(Module1, State1, Module2, Args, Time, Name) ->
-    {ok, State2, TimeoutTime} |
-    {stop, Reason, [{Module, ModReason, State}]} when
-      Module1 :: module(),
-      State1 :: any(),
-      Module2 :: module(),
-      Args :: any(),
-      Time :: integer(),
-      Name :: sbroker_handler:name(),
-      State2 :: any(),
-      TimeoutTime :: integer(),
-      Reason :: sbroker_handler:reason(),
-      Module :: module(),
-      ModReason :: sbroker_handler:reason(),
-      State :: any().
+-callback initial_state() -> BehaviourState :: any().
+
+-callback init(Mod :: module(), BehaviourState :: any(), Time :: integer(),
+               Args :: any()) ->
+    {State :: any(), TimeoutNext :: integer() | infinity}.
+
+-callback config_change(Mod :: module(), Args :: any(), Time :: integer(),
+                        State :: any()) ->
+    {NState :: any(), TimeoutNext :: integer() | infinity}.
+
+-callback terminate(Mod :: module(), Reason :: reason(), State :: any()) ->
+    BehaviourState :: any().
 
 -export([init/3]).
 -export([change/3]).
@@ -95,7 +92,7 @@ terminate({stop, _} = Stop, [], _) ->
 terminate(Reason, [], _) ->
     {stop, exit_reason(Reason)};
 terminate(Reason, [{Behaviour, Mod, ModReason, State} | Rest], Name) ->
-    try Mod:terminate(ModReason, State) of
+    try Behaviour:terminate(Mod, ModReason, State) of
         _ ->
             maybe_report(Behaviour, Mod, ModReason, State, Name),
             terminate(Reason, Rest, Name)
@@ -137,16 +134,21 @@ exit_reason({bad_return_value, _} = Bad) ->
 init(_, [], _, Callbacks) ->
     {ok, lists:reverse(Callbacks)};
 init(Time, [{Behaviour, Mod, Args} | Inits], Name, Callbacks) ->
-    try Mod:init(Time, Args) of
-        State ->
-            NCallbacks = [{Behaviour, Mod, State} | Callbacks],
-            init(Time, Inits, Name, NCallbacks)
+    try Behaviour:init(Mod, Behaviour:initial_state(), Time, Args) of
+        {State, Next} ->
+            NCallbacks = [{Behaviour, Mod, State, Next} | Callbacks],
+            init(Time, Inits, Name, NCallbacks);
+        Other ->
+            Reason = {bad_return_value, Other},
+            NCallbacks = [{Behaviour2, Mod2, stop, State2} ||
+                          {Behaviour2, Mod2, State2, _} <- Callbacks],
+            terminate(Reason, NCallbacks, Name)
     catch
         Class:Reason ->
             Stack = erlang:get_stacktrace(),
             Reason2 = {Class, Reason, Stack},
             NCallbacks = [{Behaviour2, Mod2, stop, State2} ||
-                          {Behaviour2, Mod2, State2} <- Callbacks],
+                          {Behaviour2, Mod2, State2, _} <- Callbacks],
             terminate(Reason2, NCallbacks, Name)
 
     end.
@@ -155,19 +157,56 @@ change(_, [], _, Callbacks) ->
     {ok, lists:reverse(Callbacks)};
 change(Time, [{Behaviour, Mod1, State1, Mod2, Args2} | Changes], Name,
        Callbacks) ->
-    case Behaviour:change(Mod1, State1, Mod2, Args2, Time, Name) of
-        {ok, State2, Next2} ->
-            NCallbacks = [{Behaviour, Mod2, State2, Next2} | Callbacks],
+    case change(Behaviour, Mod1, State1, Mod2, Args2, Time, Name) of
+        {ok, NState, Next} ->
+            NCallbacks = [{Behaviour, Mod2, NState, Next} | Callbacks],
             change(Time, Changes, Name, NCallbacks);
-        {stop, Reason, Callbacks2} ->
+        {stop, Reason, Failures} ->
             NCallbacks = [{Behaviour2, Mod, stop, State} ||
                           {Behaviour2, Mod, State, _} <- Callbacks],
-            NCallbacks2 = [{Behaviour, Mod, ModReason, State} ||
-                           {Mod, ModReason, State} <- Callbacks2],
-            NCallbacks3 = [{Behaviour3, Mod, stop, State} ||
-                           {Behaviour3, Mod, State, _, _} <- Changes],
-            NCallbacks4 = lists:reverse(NCallbacks, NCallbacks2 ++ NCallbacks3),
-            terminate(Reason, NCallbacks4, Name)
+            NChanges = [{Behaviour3, Mod, stop, State} ||
+                        {Behaviour3, Mod, State, _, _} <- Changes],
+            NCallbacks2 = lists:reverse(NCallbacks, Failures ++ NChanges),
+            terminate(Reason, NCallbacks2, Name)
+    end.
+
+
+change(Behaviour, Mod, State, Mod, Args, Now, _) ->
+    try Behaviour:config_change(Mod, Args, Now, State) of
+        {NState, Next} ->
+            {ok, NState, Next};
+        Other ->
+            Reason = {bad_return_value, Other},
+            {stop, Reason, [{Behaviour, Mod, Reason, State}]}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            {stop, Reason2, [{Behaviour, Mod, Reason2, State}]}
+    end;
+change(Behaviour, Mod1, State1, Mod2, Args2, Now, Name) ->
+    try Behaviour:terminate(Mod1, change, State1) of
+        Result ->
+            change_init(Behaviour, Result, Mod2, Args2, Now, Name)
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(Behaviour, handler_crashed, Mod1, Reason, State1, Name),
+            {stop, Reason2, []}
+    end.
+
+change_init(Behaviour, Result, Mod, Args, Now, Name) ->
+    try Behaviour:init(Mod, Result, Now, Args) of
+        {NState, Next} ->
+            {ok, NState, Next};
+        Other ->
+            Reason = {bad_return_value, Other},
+            report(?MODULE, start_error, Mod, Reason, Args, Name),
+            {stop, Reason, []}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(?MODULE, start_error, Mod, Reason2, Args, Name),
+            {stop, Reason2, []}
     end.
 
 report_name({local, Name}) when is_atom(Name) ->

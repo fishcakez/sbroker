@@ -125,5 +125,5 @@ convert_time_unit(InTime, InTimeUnit, OutTimeUnit) ->
             OutTime
     catch
         error:undef ->
-            sbroker_legacy:convert_time_unit(InTime, InTime, OutTimeUnit)
+            sbroker_legacy:convert_time_unit(InTime, InTimeUnit, OutTimeUnit)
     end.

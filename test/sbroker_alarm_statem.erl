@@ -43,7 +43,7 @@ desc() ->
     oneof([a, b, c]).
 
 init(Time, {Target, Interval, Alarm}) ->
-    #state{target=sbroker_util:target(Target),
+    #state{target=sbroker_util:sojourn_target(Target),
            interval=sbroker_util:interval(Interval), alarm=Alarm, status=fast,
            time=Time, queue=fast, interval_time=0}.
 
@@ -108,7 +108,7 @@ alarm_post(#state{status=slow, alarm=Alarm}) ->
 do_change(#state{alarm=Alarm, interval_time=IntervalTime,
                  time=PrevTime} = State,Time, {Target, Interval, Alarm}) ->
     NIntervalTime = IntervalTime - PrevTime + Time,
-    State#state{target=sbroker_util:target(Target),
+    State#state{target=sbroker_util:sojourn_target(Target),
                 interval=sbroker_util:interval(Interval), time=Time,
                 interval_time=NIntervalTime};
 do_change(_, Time, Args) ->

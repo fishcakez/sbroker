@@ -22,8 +22,10 @@
 
 -export([whereis/1]).
 -export([timeout/1]).
--export([target/1]).
+-export([sojourn_target/1]).
+-export([relative_target/1]).
 -export([interval/1]).
+-export([min_max/2]).
 
 -type process() :: pid() | atom() | {atom(), node()} | {global, any()} |
     {via, module(), any()}.
@@ -52,23 +54,41 @@ whereis({via, Mod, Name}) ->
 timeout(infinity) ->
     infinity;
 timeout(Timeout) ->
-    target(Timeout).
+    sojourn_target(Timeout).
 
--spec target(Target) -> NTarget when
+-spec sojourn_target(Target) -> NTarget when
+      Target :: non_neg_integer(),
+      NTarget :: non_neg_integer().
+sojourn_target(Target) when Target >= 0 ->
+    native(Target);
+sojourn_target(Other) ->
+    error(badarg, [Other]).
+
+-spec relative_target(Target) -> NTarget when
       Target :: integer(),
       NTarget :: integer().
-target(Target) when is_integer(Target), Target >= 0 ->
-    sbroker_time:convert_time_unit(Target, milli_seconds, native);
-target(Target) ->
-    error(badarg, [Target]).
+relative_target(Target) ->
+      native(Target).
 
 -spec interval(Interval) -> NInterval when
       Interval :: pos_integer(),
       NInterval :: pos_integer().
-interval(Interval) ->
-    case sbroker_time:convert_time_unit(Interval, milli_seconds, native) of
-        NInterval when NInterval > 0 ->
-            NInterval;
-        _ ->
-            error(badarg, [Interval])
-    end.
+interval(Interval) when Interval > 0->
+    native(Interval);
+interval(Other) ->
+    error(badarg, [Other]).
+
+-spec min_max(Min, Max) -> {Min, Max} when
+      Min :: non_neg_integer(),
+      Max :: non_neg_integer() | infinity.
+min_max(Min, infinity) when is_integer(Min), Min >= 0 ->
+    {Min, infinity};
+min_max(Min, Max) when is_integer(Min), is_integer(Max), Min >= 0, Max >= Min ->
+    {Min, Max};
+min_max(Min, Max) ->
+    error(badarg, [Min, Max]).
+
+%% Internal
+
+native(Time) ->
+    sbroker_time:convert_time_unit(Time, milli_seconds, native).

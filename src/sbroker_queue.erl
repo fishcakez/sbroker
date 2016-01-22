@@ -60,7 +60,8 @@
 %% ```
 %% -callback handle_out(Time :: integer(), State :: any()) ->
 %%     {SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()},
-%%      Value:: any(), NState :: any(), TimeoutTime :: integer() | infinity} |
+%%      Value:: any(), Ref :: reference, NState :: any(),
+%%      TimeoutTime :: integer() | infinity} |
 %%     {empty, NState :: any()}.
 %% '''
 %%
@@ -69,6 +70,8 @@
 %%
 %% `SendTime', `From' and `Value' should be the same values passed as
 %% arguments to `handle_in/5'.
+%%
+%% `Ref' is the monitor reference of the `Sender' process.
 %%
 %% `TimeoutTime' is the time of the next timeout, see `handle_in/5'.
 %%
@@ -121,17 +124,6 @@
 %% state, `NState' is the new state and `TimeoutTime' is the time of the next
 %% timeout, see `handle_in/5'.
 %%
-%% When returning a list of queued requests, `to_list/1':
-%% ```
-%% -callback to_list(State :: any()) ->
-%%     [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()}}].
-%% '''
-%% `State' is the current state of the queue, `SendTime' and `From' are the
-%% values from requests inserted into the queue. The list should be ordered so
-%% that the first request is at the head and last added request is at the tail.
-%% This means that `SendTime' should increase from the head to the tail of the
-%% list. This callback must be idempotent and so not drop any requests,
-%%
 %% When returning the number of queued requests, `len/1':
 %% ```
 %% -callback len(State :: any()) -> Len :: non_neg_integer().
@@ -162,11 +154,27 @@
 %% public api
 
 -export([drop/3]).
--export([change/6]).
+
+%% sbroker_handlers api
+
+-export([initial_state/0]).
+-export([init/4]).
+-export([config_change/4]).
+-export([terminate/3]).
 
 %% types
 
--callback init(Time :: integer(), Args :: any()) -> State :: any().
+-ifdef(LEGACY_TYPES).
+-type internal_queue() :: queue().
+-else.
+-type internal_queue() ::
+    queue:queue({integer(), {pid(), any()}, any(), reference()}).
+-endif.
+
+-export_type([internal_queue/0]).
+
+-callback init(Q :: internal_queue(), Time :: integer(), Args :: any()) ->
+    {State :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback handle_in(SendTime :: integer(),
                     From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
@@ -191,14 +199,10 @@
 -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
     {NState :: any(), TimeoutTime :: integer() | infinity}.
 
--callback to_list(State :: any()) ->
-    [{SendTime :: integer(), From :: {Sender :: pid(), Tag :: any()},
-      Value :: any()}].
-
 -callback len(State :: any()) -> Len :: non_neg_integer().
 
 -callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
-    any().
+    Q :: internal_queue().
 
 %% public api
 
@@ -213,94 +217,46 @@ drop(From, SendTime, Time) ->
    _ = gen:reply(From, {drop, Time-SendTime}),
    ok.
 
+%% sbroker_handlers api
+
 %% @private
--spec change(Module1, State1, Module2, Args, Time, Name) ->
-    {ok, State2, TimeoutTime} | {stop, Reason, Callbacks} when
-      Module1 :: module(),
-      State1 :: any(),
-      Module2 :: module(),
-      Args :: any(),
-      Time :: integer(),
-      Name :: sbroker_handler:name(),
-      State2 :: any(),
-      TimeoutTime :: integer(),
+-spec initial_state() -> Q when
+      Q :: internal_queue().
+initial_state() ->
+    queue:new().
+
+%% @private
+-spec init(Module, Q, Time, Args) -> {State, TimeoutTime} when
+    Module :: module(),
+    Q :: internal_queue(),
+    Time :: integer(),
+    Args :: any(),
+    State :: any(),
+    TimeoutTime :: integer() | infinity.
+init(Mod, Q, Now, Args) ->
+    Mod:init(Q, Now, Args).
+
+%% @private
+-spec config_change(Module, Args, Time, State) ->
+    {NState, TimeoutTime} when
+    Module :: module(),
+    Args :: any(),
+    Time :: integer(),
+    State :: any(),
+    NState :: any(),
+    TimeoutTime :: integer() | infinity.
+config_change(Mod, Args, Now, State) ->
+    Mod:config_change(Args, Now, State).
+
+%% @private
+-spec terminate(Module, Reason, State) -> Q when
+      Module :: module(),
       Reason :: sbroker_handlers:reason(),
-      Callbacks :: [{Module1 | Module2, Reason | stop, State :: any()}].
-change(Mod, State, Mod, Args, Now, _) ->
-    try Mod:config_change(Args, Now, State) of
-        {NState, Next} ->
-            {ok, NState, Next};
-        Other ->
-            Reason = {bad_return_value, Other},
-            {stop, Reason, [{Mod, Reason, State}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            {stop, Reason2, [{Mod, Reason2, State}]}
-    end;
-change(Mod1, State1, Mod2, Args2, Now, Name) ->
-    try Mod1:to_list(State1) of
-        Items when is_list(Items) ->
-            change_init(Items, Mod1, State1, Mod2, Args2, Now, Name);
-        Other ->
-            Reason = {bad_return_value, Other},
-            {stop, Reason, [{Mod1, Reason, State1}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            {stop, Reason2, [{Mod1, stop, State1}]}
-    end.
-
-%% Internal
-
-change_init(Items, Mod1, State1, Mod2, Args2, Now, Name) ->
-    try Mod2:init(Now, Args2) of
-        State2 ->
-            change_from_list(Items, Mod1, State1, Mod2, State2, Now, Name)
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            sbroker_handler:report(?MODULE, start_error, Name, Mod2, Reason2,
-                                   Args2),
-            {stop, Reason2, [{Mod1, stop, State1}]}
-    end.
-
-change_from_list(Items, Mod1, State1, Mod2, State2, Now, Name) ->
-    case change_in(Items, Mod2, State2, infinity, Now) of
-        {ok, NState2, Next} ->
-            change_terminate(Mod1, State1, Mod2, NState2, Next, Name);
-        {stop, Reason, Callbacks} ->
-            {stop, Reason, [{Mod1, stop, State1} | Callbacks]};
-        {bad_items, Callbacks} ->
-            Reason = {bad_return_value, Items},
-            {stop, Reason, [{Mod1, Reason, State1} | Callbacks]}
-    end.
-
-change_in([], _, State, Next, _) ->
-    {ok, State, Next};
-change_in([{Send, From, Value} | Items], Mod, State, _, Now) ->
-    try Mod:handle_in(Send, From, Value, Now, State) of
-        {NState, Next} ->
-            change_in(Items, Mod, NState, Next, Now);
-        Other ->
-            Reason = {bad_return_value, Other},
-            {stop, Reason, [{Mod, Reason, State}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            {stop, Reason2, [{Mod, Reason2, State}]}
-    end;
-change_in(_, Mod, State, _, _) ->
-    {bad_items, [{Mod, stop, State}]}.
-
-change_terminate(Mod1, State1, Mod2, State2, Next, Name) ->
-    try Mod1:terminate(change, State1) of
-        _ ->
-            {ok, State2, Next}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            sbroker_handler:report(?MODULE, handler_crashed, Mod1, Reason2,
-                                   State1, Name),
-            {stop, Reason2, [{Mod2, stop, State2}]}
+      State :: any(),
+      Q :: internal_queue().
+terminate(Mod, Reason, State) ->
+    Q = Mod:terminate(Reason, State),
+    case queue:is_queue(Q) of
+        true -> Q;
+        false -> exit({bad_return_value, Q})
     end.

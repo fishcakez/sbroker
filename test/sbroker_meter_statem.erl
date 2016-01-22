@@ -117,13 +117,20 @@ time(undefined) ->
 time(Time) ->
     oneof([Time,
            ?LET(Incr, choose(5, 5),
-                sbroker_time:convert_time_unit(Time + Incr, milli_seconds,
-                                               native))]).
+                Time + sbroker_time:convert_time_unit(Incr, milli_seconds,
+                                                      native))]).
 
 init_or_change(undefined, undefined, _, Mod, Args, Time) ->
-    Mod:init(Time, Args);
+    {State, Timeout} = Mod:init(Time, Args),
+    {ok, State, Timeout};
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
-    sbroker_meter:change(Mod1, State1, Mod2, Args2, Time, ?MODULE).
+    Callback = {sbroker_meter, Mod1, State1, Mod2, Args2},
+    case sbroker_handlers:change(Time, [Callback], {?MODULE, self()}) of
+        {ok, [{_, _, NState, Timeout}]} ->
+            {ok, NState, Timeout};
+        {stop, _} = Stop ->
+            Stop
+    end.
 
 init_or_change_args(#state{mod=Mod, meter=M, time=Time}) ->
     ?LET(Manager, manager(),
@@ -134,8 +141,9 @@ init_or_change_pre(#state{manager=undefined, mod=undefined}, _) ->
 init_or_change_pre(#state{time=PrevTime}, [_, _, _, _, _, Time]) ->
     PrevTime >= Time.
 
-init_or_change_next(#state{manager=undefined} = State, M,
+init_or_change_next(#state{manager=undefined} = State, Value,
                     [_, _, Manager, Mod, Args, Time]) ->
+    M = {call, erlang, element, [2, Value]},
     ManState = Manager:init(Time, Args),
     State#state{manager=Manager, mod=Mod, meter=M, time=Time, timeout_time=Time,
                 manager_state=ManState};
@@ -146,9 +154,9 @@ init_or_change_next(#state{manager=Manager, manager_state=ManState} = State,
     State#state{meter=M, manager_state=NManState, time=Time,
                 timeout_time=Timeout};
 init_or_change_next(_, Value, [_, _, Manager, Mod, Args, Time]) ->
-    M = {call, erlang, element, [2, Value]},
-    State = init_or_change_next(initial_state(), M, [undefined, undefined,
-                                                     Manager, Mod, Args, Time]),
+    State = init_or_change_next(initial_state(), Value,
+                                [undefined, undefined, Manager, Mod, Args,
+                                 Time]),
     State#state{time=Time}.
 
 init_or_change_post(#state{manager=undefined}, _, _) ->
@@ -157,17 +165,26 @@ init_or_change_post(#state{manager=Manager, manager_state=ManState},
                     [Mod, _, Manager, Mod, Args, Time], {ok, _, Timeout}) ->
     {_, Timeout2} = Manager:change(ManState, Time, Args),
     timeout_post(Timeout2, Timeout);
-init_or_change_post(State, [_, M, _, _, _, _], {ok, _, Timeout}) ->
-    Timeout =:= infinity andalso terminate_post(State, undefined, [change, M]).
+init_or_change_post(State, [_, M, _, _, _, _], {ok, _, _}) ->
+    terminate_post(State, undefined, [change, M]).
 
-handle_update(Mod, MsgQLen, ProcessTime, Count, Time, M) ->
+handle_update(Mod, MsgQLen, QueueTime, ProcessTime, Time, M) ->
     Refs = [self() ! make_ref() || _ <- lists:seq(1, MsgQLen)],
-    Result = Mod:handle_update(ProcessTime, Count, Time, M),
+    Result = Mod:handle_update(QueueTime, ProcessTime, Time, M),
     _ = [receive Ref -> ok after 0 -> exit(timeout) end || Ref <- Refs],
     Result.
 
 handle_update_args(#state{mod=Mod, time=Time, meter=M}) ->
-    [Mod, choose(0, 3), choose(0, 5), choose(0, 5), time(Time), M].
+    ?LET({QueueTime, ProcessTime}, {choose(0, 5), choose(0, 5)},
+         begin
+             NQueueTime = sbroker_time:convert_time_unit(QueueTime,
+                                                         milli_seconds,
+                                                         native),
+             NProcessTime = sbroker_time:convert_time_unit(ProcessTime,
+                                                           milli_seconds,
+                                                           native),
+             [Mod, choose(0,5), NQueueTime, NProcessTime, time(Time), M]
+         end).
 
 handle_update_pre(#state{time=PrevTime}, [_, _, _, _, Time, _]) ->
     Time >= PrevTime.

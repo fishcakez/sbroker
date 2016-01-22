@@ -21,9 +21,12 @@
 
 -behaviour(sbroker_handlers).
 
-%% public api
+%% sbroker_handlers api
 
--export([change/6]).
+-export([initial_state/0]).
+-export([init/4]).
+-export([config_change/4]).
+-export([terminate/3]).
 
 %% types
 
@@ -43,53 +46,40 @@
 -callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
     any().
 
+%% sbroker_handlers api
+
 %% @private
--spec change(Module1, State1, Module2, Args, Time, Name) ->
-    {ok, State2, TimeoutTime} | {stop, Reason, Callbacks} when
-      Module1 :: module(),
-      State1 :: any(),
-      Module2 :: module(),
-      Args :: any(),
-      Time :: integer(),
-      Name :: sbroker_handler:name(),
-      State2 :: any(),
-      TimeoutTime :: integer(),
+-spec initial_state() -> undefined.
+initial_state() ->
+    undefined.
+
+%% @private
+-spec init(Module, any(), Time, Args) -> {State, TimeoutTime} when
+    Module :: module(),
+    Time :: integer(),
+    Args :: any(),
+    State :: any(),
+    TimeoutTime :: integer() | infinity.
+init(Mod, _, Now, Args) ->
+    Mod:init(Now, Args).
+
+%% @private
+-spec config_change(Module, Args, Time, State) ->
+    {NState, TimeoutTime} when
+    Module :: module(),
+    Args :: any(),
+    Time :: integer(),
+    State :: any(),
+    NState :: any(),
+    TimeoutTime :: integer() | infinity.
+config_change(Mod, Args, Now, State) ->
+    Mod:config_change(Args, Now, State).
+
+%% @private
+-spec terminate(Module, Reason, State) -> undefined when
+      Module :: module(),
       Reason :: sbroker_handlers:reason(),
-      Callbacks :: [{Module1, Reason, State :: any()}].
-change(Mod, State, Mod, Args, Now, _) ->
-    try Mod:config_change(Args, Now, State) of
-        {NState, Next} ->
-            {ok, NState, Next};
-        Other ->
-            Reason = {bad_return_value, Other},
-           {stop, Reason, [{Mod, Reason, State}]}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            {stop, Reason2, [{Mod, Reason2, State}]}
-    end;
-change(Mod1, State1, Mod2, Args2, Now, Name) ->
-    try Mod1:terminate(change, State1) of
-        _ ->
-            change_init(Mod2, Args2, Now, Name)
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            sbroker_handler:report(?MODULE, handler_crashed, Mod1, Reason2,
-                                   State1, Name),
-            {stop, Reason2, []}
-    end.
-
-%% Internal
-
-change_init(Mod2, Args2, Now, Name) ->
-    try Mod2:init(Now, Args2) of
-        State2 ->
-            {ok, State2, infinity}
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            sbroker_handler:report(?MODULE, start_error, Name, Mod2, Reason2,
-                                   Args2),
-            {stop, Reason2, []}
-    end.
+      State :: any().
+terminate(Mod, Reason, State) ->
+    _ = Mod:terminate(Reason, State),
+    undefined.

@@ -42,8 +42,9 @@
       State :: #state{}.
 init(_, {Target, Interval, AlarmId}) ->
     alarm_handler:clear_alarm(AlarmId),
-    #state{target=sbroker_util:target(Target),
-           interval=sbroker_util:interval(Interval), alarm_id=AlarmId}.
+    State = #state{target=sbroker_util:sojourn_target(Target),
+                   interval=sbroker_util:interval(Interval), alarm_id=AlarmId},
+    {State, infinity}.
 
 %% @private
 -spec handle_update(QueueDelay, ProcessDelay, Time, State) ->
@@ -108,9 +109,26 @@ handle_info(_, Time, #state{toggle_next=ToggleNext} = State) ->
       State :: #state{},
       NState :: #state{},
       Next :: integer() | infinity.
-config_change(Args, Time, State) ->
-    #state{toggle_next=ToggleNext} = NState = change(Args, Time, State),
-    {NState, ToggleNext}.
+config_change({Target, NInterval, AlarmId}, Time,
+       #state{alarm_id=AlarmId, interval=Interval,
+              toggle_next=ToggleNext} = State)
+  when is_integer(Target) andalso Target >= 0 andalso
+       is_integer(NInterval) andalso NInterval > 0 ->
+    NTarget = sbroker_util:sojourn_target(Target),
+    NInterval2 = sbroker_util:interval(NInterval),
+    NState = State#state{target=NTarget, interval=NInterval2, alarm_id=AlarmId},
+    case ToggleNext of
+        infinity ->
+            {NState, infinity};
+        _ ->
+            NToggleNext = max(Time, ToggleNext+NInterval2-Interval),
+            {NState#state{toggle_next=NToggleNext}, NToggleNext}
+    end;
+config_change(Args, Time, #state{status=set, alarm_id=AlarmId}) ->
+    alarm_handler:clear_alarm(AlarmId),
+    init(Time, Args);
+config_change(Args, Time, _) ->
+    init(Time, Args).
 
 %% @private
 -spec terminate(Reason, State) -> ok when
@@ -135,23 +153,3 @@ message_queue_status(0, #state{target=0}) ->
     end;
 message_queue_status(_, _) ->
     slow.
-
-change({Target, NInterval, AlarmId}, Time,
-       #state{alarm_id=AlarmId, interval=Interval,
-              toggle_next=ToggleNext} = State)
-  when is_integer(Target) andalso Target >= 0 andalso
-       is_integer(NInterval) andalso NInterval > 0 ->
-    NTarget = sbroker_util:target(Target),
-    NInterval2 = sbroker_util:interval(NInterval),
-    NState = State#state{target=NTarget, interval=NInterval2, alarm_id=AlarmId},
-    case ToggleNext of
-        infinity ->
-            NState;
-        _ ->
-            NState#state{toggle_next=max(Time, ToggleNext+NInterval2-Interval)}
-    end;
-change(Args, Time, #state{status=set, alarm_id=AlarmId}) ->
-    alarm_handler:clear_alarm(AlarmId),
-    init(Time, Args);
-change(Args, Time, _) ->
-    init(Time, Args).

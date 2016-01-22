@@ -38,54 +38,40 @@
 
 %% public api
 
--export([init/2]).
+-export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
 -export([config_change/3]).
--export([to_list/1]).
 -export([len/1]).
 -export([terminate/2]).
 
 %% types
-
--ifdef(LEGACY_TYPES).
--type internal_queue() :: queue().
--else.
--type internal_queue() ::
-    queue:queue({integer(), {pid(), any()}, any(), reference()}).
--endif.
 
 -record(state, {out :: out | out_r,
                 timeout :: timeout(),
                 drop :: drop | drop_r,
                 max :: non_neg_integer() | infinity,
                 timeout_next :: integer() | infinity,
-                len = 0 :: non_neg_integer(),
-                queue = queue:new() :: internal_queue()}).
+                len :: non_neg_integer(),
+                queue :: sbroker_queue:internal_queue()}).
 
 %% public api
 
 %% @private
--spec init(Time, {Out, Timeout, Drop, Max}) -> State when
+-spec init(Q, Time, {Out, Timeout, Drop, Max}) -> {State, TimeoutNext} when
+      Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
       Out :: out | out_r,
       Timeout :: timeout(),
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
-      State :: #state{}.
-init(Time, {Out, Timeout, drop, 0}) ->
-    init(Time, {Out, Timeout, drop_r, 0});
-init(Time, {Out, Timeout, Drop, Max})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) andalso
-       ((is_integer(Max) andalso Max >= 0) orelse Max =:= infinity) ->
-    NTimeout = sbroker_util:timeout(Timeout),
-    TimeoutNext = first_timeout_next(Time, NTimeout),
-    #state{out=Out, timeout=NTimeout, drop=Drop, max=Max,
-           timeout_next=TimeoutNext}.
+      State :: #state{},
+      TimeoutNext :: integer() | infinity.
+init(Q, Time, Args) ->
+    handle_timeout(Time, from_queue(Q, queue:len(Q), Time, Args)).
 
 %% @private
 -spec handle_in(SendTime, From, Value, Time, State) ->
@@ -124,12 +110,13 @@ handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
 
 %% @private
 -spec handle_out(Time, State) ->
-    {SendTime, From, Value, NState, TimeoutNext} | {empty, NState} when
+    {SendTime, From, Value, Ref, NState, TimeoutNext} | {empty, NState} when
       Time :: integer(),
       State :: #state{},
       SendTime :: integer(),
       From :: {pid(), any()},
       Value :: any(),
+      Ref :: reference(),
       NState :: #state{},
       TimeoutNext :: integer() | infinity.
 handle_out(Time, State) ->
@@ -138,15 +125,13 @@ handle_out(Time, State) ->
             {empty, NState};
         #state{out=out, len=Len, queue=Q, timeout_next=TimeoutNext} = NState ->
             {{value, {SendTime, From, Value, Ref}}, NQ} = queue:out(Q),
-            demonitor(Ref, [flush]),
             NState2 = NState#state{len=Len-1, queue=NQ},
-            {SendTime, From, Value, NState2, TimeoutNext};
+            {SendTime, From, Value, Ref, NState2, TimeoutNext};
         #state{out=out_r, len=Len, queue=Q,
                timeout_next=TimeoutNext} = NState ->
             {{value, {SendTime, From, Value, Ref}}, NQ} = queue:out_r(Q),
-            demonitor(Ref, [flush]),
             NState2 = NState#state{len=Len-1, queue=NQ},
-            {SendTime, From, Value, NState2, TimeoutNext}
+            {SendTime, From, Value, Ref, NState2, TimeoutNext}
     end.
 
 %% @private
@@ -207,18 +192,8 @@ handle_info(_, Time, State) ->
       State :: #state{},
       NState :: #state{},
       TimeoutNext :: integer() | infinity.
-config_change(Arg, Time, State) ->
-    NState = change(Arg, Time, State),
-    handle_timeout(Time, NState).
-
-%% @private
--spec to_list(State) -> [{SendTime, From, Value}] when
-      State :: #state{},
-      SendTime :: integer(),
-      From :: {pid(), any()},
-      Value :: any().
-to_list(#state{queue=Q}) ->
-    [erlang:delete_element(4, Item) || Item <- queue:to_list(Q)].
+config_change(Arg, Time, #state{queue=Q, len=Len}) ->
+    handle_timeout(Time, from_queue(Q, Len, Time, Arg)).
 
 %% @private
 -spec len(State) -> Len when
@@ -228,12 +203,12 @@ len(#state{len=Len}) ->
     Len.
 
 %% @private
--spec terminate(Reason, State) -> ok when
+-spec terminate(Reason, State) -> Q when
       Reason :: any(),
-      State :: #state{}.
+      State :: #state{},
+      Q :: sbroker_queue:internal_queue().
 terminate(_, #state{queue=Q}) ->
-    _ = [demonitor(Ref, [flush]) || {_, _, _, Ref} <- queue:to_list(Q)],
-    ok.
+    Q.
 
 %% Internal
 
@@ -267,34 +242,33 @@ timeout(MinSend, Time, Len, Q, #state{timeout=Timeout} = State) ->
             timeout(MinSend, Time, Len-1, queue:drop(Q), State)
     end.
 
-change({Out, Timeout, drop, 0}, Time, State) ->
-    change({Out, Timeout, drop_r, 0}, Time, State);
-change({Out, Timeout, Drop, infinity}, Time, State)
+from_queue(Q, Len, Time, {Out, Timeout, Drop, infinity})
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) ->
     NTimeout = sbroker_util:timeout(Timeout),
-    State#state{out=Out, drop=Drop, max=infinity, timeout=NTimeout,
-                timeout_next=first_timeout_next(Time, NTimeout)};
-change({Out, Timeout, Drop, Max}, Time,
-       #state{len=Len, queue=Q} = State)
+    #state{out=Out, drop=Drop, max=infinity, timeout=NTimeout,
+           timeout_next=first_timeout_next(Time, NTimeout), len=Len, queue=Q};
+from_queue(Q, Len, Time, {Out, Timeout, drop, 0}) ->
+    from_queue(Q, Len, Time, {Out, Timeout, drop_r, 0});
+from_queue(Q, Len, Time, {Out, Timeout, Drop, Max})
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) andalso
        (is_integer(Max) andalso Max >= 0) ->
     NTimeout = sbroker_util:timeout(Timeout),
     Next = first_timeout_next(Time, NTimeout),
-    NState = State#state{out=Out, drop=Drop, max=Max, timeout=Timeout,
-                         timeout_next=Next},
+    State = #state{out=Out, drop=Drop, max=Max, timeout=NTimeout,
+                   timeout_next=Next, len=Len, queue=Q},
     case Len - Max of
         DropCount when DropCount > 0 andalso Drop =:= drop ->
             {DropQ, NQ} = queue:split(DropCount, Q),
             drop_queue(Time, DropQ),
-            NState#state{len=Max, queue=NQ};
+            State#state{len=Max, queue=NQ};
         DropCount when DropCount > 0 andalso Drop =:= drop_r ->
             {NQ, DropQ} = queue:split(Max, Q),
             drop_queue(Time, DropQ),
-            NState#state{len=Max, queue=NQ};
+            State#state{len=Max, queue=NQ};
         _ ->
-            NState
+            State
     end.
 
 drop_queue(Time, Q) ->

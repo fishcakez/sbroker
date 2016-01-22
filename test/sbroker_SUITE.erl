@@ -41,6 +41,7 @@
 -export([ask_r/1]).
 -export([await_timeout/1]).
 -export([await_down/1]).
+-export([skip_down_match/1]).
 -export([statem/1]).
 
 %% common_test api
@@ -53,7 +54,7 @@ suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{simple, [ask, ask_r, await_timeout, await_down]},
+    [{simple, [ask, ask_r, await_timeout, await_down, skip_down_match]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -159,6 +160,21 @@ await_down(_) ->
       {sbroker, await,
        [Ref, ?TIMEOUT]}}} = (catch sbroker:await(Ref, ?TIMEOUT)),
     ok.
+
+skip_down_match(_) ->
+    {ok, Broker} = sbroker_test:start_link(),
+    ok = sys:suspend(Broker),
+    {_, MRef} = spawn_monitor(fun() ->
+                          sbroker:async_ask(Broker),
+                          exit(normal)
+                  end),
+    receive
+        {'DOWN', MRef, _, _, normal} ->
+            {await, Ref, _} = sbroker:async_ask_r(Broker, self(), make_ref()),
+            sys:resume(Broker),
+            {drop, _} = sbroker:await(Ref, ?TIMEOUT),
+            ok
+    end.
 
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),

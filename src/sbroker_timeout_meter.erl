@@ -31,8 +31,8 @@
 -spec init(Time, Timeout) -> Timeout when
       Time :: integer(),
       Timeout :: timeout().
-init(_, Timeout) ->
-    sbroker_util:timeout(Timeout).
+init(Time, Timeout) ->
+    handle(Time, sbroker_util:timeout(Timeout)).
 
 %% @private
 -spec handle_update(QueueDelay, ProcessDelay, Time, Timeout) ->
@@ -61,7 +61,7 @@ handle_info(_, Time, Timeout) ->
       Timeout :: timeout(),
       Next :: integer() | infinity.
 config_change(NTimeout, Time, _) ->
-    handle(Time, init(Time, NTimeout)).
+    init(Time, NTimeout).
 
 %% @private
 -spec terminate(Reason, Timeout) -> ok when
