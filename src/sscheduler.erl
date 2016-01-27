@@ -49,7 +49,7 @@ whereis_name(Tuple) ->
     Scheduler = erlang:system_info(scheduler_id),
     N = (Scheduler rem Size) + 1,
     Name = element(N, Tuple),
-    sbroker_util:whereis(Name).
+    sbroker_gen:whereis(Name).
 
 %% @doc Send a message to one element, selected based on the scheduler id, in a
 %% tuple of process names. Returns `ok' if the element chosen is a `pid()'.

@@ -115,12 +115,6 @@
 -export([system_terminate/4]).
 -export([format_status/2]).
 
-%% macros
-
--ifndef(READ_TIME_AFTER).
--define(READ_TIME_AFTER, 16).
--endif.
-
 %% types
 
 -type regulator() :: pid() | atom() | {atom(), node()} | {global, any()}
@@ -200,7 +194,7 @@
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask(Regulator) ->
-    call(Regulator, ask, self(), infinity).
+    sbroker_gen:call(Regulator, ask, self(), infinity).
 
 %% @doc Send a run request to the regulator, `Regulator`, but do not enqueue the
 %% request if not immediately allowed to run.
@@ -224,7 +218,7 @@ ask(Regulator) ->
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask(Regulator) ->
-    call(Regulator, nb_ask, self(), infinity).
+    sbroker_gen:call(Regulator, nb_ask, self(), infinity).
 
 %% @doc Monitor the regulator and send an asynchronous run request. Returns
 %% `{await, Tag, Process}'.
@@ -256,7 +250,7 @@ nb_ask(Regulator) ->
       Tag :: reference(),
       Pid :: pid().
 async_ask(Regulator) ->
-    async_call(Regulator, ask, self()).
+    sbroker_gen:async_call(Regulator, ask, self()).
 
 %% @doc Send an asynchronous run request using tag, `Tag'. Returns
 %% `{await, Tag, Process}'.
@@ -275,7 +269,7 @@ async_ask(Regulator) ->
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
 async_ask(Regulator, Tag) ->
-    async_call(Regulator, ask, self(), Tag).
+    sbroker_gen:async_call(Regulator, ask, self(), Tag).
 
 %% @doc Await the response to an asynchronous request idenitifed by `Tag'.
 %%
@@ -321,7 +315,7 @@ await(Tag, Timeout) ->
       Timeout :: timeout(),
       Count :: pos_integer().
 cancel(Regulator, Tag, Timeout) ->
-    call(Regulator, cancel, Tag, Timeout).
+    sbroker_gen:call(Regulator, cancel, Tag, Timeout).
 
 %% @doc Send a request to continue running using an existing lock reference,
 %% `Ref'. The request is not queued.
@@ -349,7 +343,7 @@ cancel(Regulator, Tag, Timeout) ->
       Stop :: {stop, SojournTime},
       NotFound :: {not_found, SojournTime}.
 continue(Regulator, Ref) ->
-    call(Regulator, continue, Ref, infinity).
+    sbroker_gen:call(Regulator, continue, Ref, infinity).
 
 %% @doc Inform the regulator the process has finished running and release the
 %% lock, `Ref'.
@@ -369,7 +363,7 @@ continue(Regulator, Ref) ->
       SojournTime :: non_neg_integer(),
       NotFound :: {not_found, SojournTime}.
 done(Regulator, Ref, Timeout) ->
-    call(Regulator, done, Ref, Timeout).
+    sbroker_gen:call(Regulator, done, Ref, Timeout).
 
 %% @doc Synchronously update the valve in the regulator.
 %%
@@ -382,7 +376,7 @@ done(Regulator, Ref, Timeout) ->
       Value :: integer(),
       Timeout :: timeout().
 update(Regulator, Value, Timeout) when is_integer(Value) ->
-    call(Regulator, update, Value, Timeout).
+    sbroker_gen:call(Regulator, update, Value, Timeout).
 
 %% @doc Update the valve in the regulator without waiting for the regulator to
 %% handle the update.
@@ -394,7 +388,7 @@ update(Regulator, Value, Timeout) when is_integer(Value) ->
       Regulator :: regulator(),
       Value :: integer().
 cast(Regulator, Value) when is_integer(Value) ->
-    send(Regulator, {update, cast, Value}).
+    sbroker_gen:send(Regulator, {update, cast, Value}).
 
 %% @doc Change the configuration of the regulator. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason' is the reason for failure.
@@ -406,7 +400,7 @@ cast(Regulator, Value) when is_integer(Value) ->
       Timeout :: timeout(),
       Reason :: any().
 change_config(Regulator, Timeout) ->
-    call(Regulator, change_config, undefined, Timeout).
+    sbroker_gen:call(Regulator, change_config, undefined, Timeout).
 
 %% @doc Get the length of the internal queue in the regulator, `Regulator'.
 -spec len(Regulator, Timeout) -> Length when
@@ -414,7 +408,7 @@ change_config(Regulator, Timeout) ->
       Timeout :: timeout(),
       Length :: non_neg_integer().
 len(Regulator, Timeout) ->
-    call(Regulator, len, undefined, Timeout).
+    sbroker_gen:call(Regulator, len, undefined, Timeout).
 
 %% @doc Get the number of processes holding a lock with the regulator,
 %% `Regulator'.
@@ -423,7 +417,7 @@ len(Regulator, Timeout) ->
       Timeout :: timeout(),
       Size :: non_neg_integer().
 size(Regulator, Timeout) ->
-    call(Regulator, size, undefined, Timeout).
+    sbroker_gen:call(Regulator, size, undefined, Timeout).
 
 %% @doc Starts a regulator with callback module `Module' and argument `Args',
 %% and regulator options `Opts'.
@@ -443,7 +437,7 @@ size(Regulator, Timeout) ->
       Opts :: [start_option()],
       StartReturn :: start_return().
 start_link(Mod, Args, Opts) ->
-    gen:start(?MODULE, link, Mod, Args, Opts).
+    sbroker_gen:start_link(?MODULE, Mod, Args, Opts).
 
 %% @doc Starts a regulator with name `Name', callback module `Module' and
 %% argument `Args', and regulator options `Opts'.
@@ -456,7 +450,7 @@ start_link(Mod, Args, Opts) ->
       Opts :: [start_option()],
       StartReturn :: start_return().
 start_link(Name, Mod, Args, Opts) ->
-    gen:start(?MODULE, link, Name, Mod, Args, Opts).
+    sbroker_gen:start_link(Name, ?MODULE, Mod, Args, Opts).
 
 %% test api
 
@@ -464,18 +458,15 @@ start_link(Name, Mod, Args, Opts) ->
 -spec timeout(Regulator) -> ok when
       Regulator :: regulator().
 timeout(Regulator) ->
-    send(Regulator, timeout).
+    sbroker_gen:send(Regulator, timeout).
 
 %% gen api
 
 %% @private
-init_it(Starter, self, Name, Mod, Args, Opts) ->
-    init_it(Starter, self(), Name, Mod, Args, Opts);
 init_it(Starter, Parent, Name, Mod, Args, Opts) ->
     DbgOpts = proplists:get_value(debug, Opts, []),
     Dbg = sys:debug_options(DbgOpts),
     {TimeMod, ReadAfter} = time_options(Opts),
-    _ = put('$initial_call', {Mod, init, 1}),
     try Mod:init(Args) of
         {ok, {{QMod, QArgs}, {VMod, VArgs}, {MMod, MArgs}}} ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
@@ -580,59 +571,10 @@ format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
 
 %% Internal
 
-call(Regulator, Label, Msg, Timeout) ->
-    case sbroker_util:whereis(Regulator) of
-        undefined ->
-            exit({noproc, {?MODULE, call, [Regulator, Label, Msg, Timeout]}});
-        Process ->
-            try gen:call(Process, Label, Msg, Timeout) of
-                {ok, Reply} ->
-                    Reply
-            catch
-                exit:Reason ->
-                    Args = [Regulator, Label, Msg, Timeout],
-                    exit({Reason, {?MODULE, call, Args}})
-            end
-    end.
-
-async_call(Regulator, Label, Msg) ->
-    case sbroker_util:whereis(Regulator) of
-         undefined ->
-            exit({noproc, {?MODULE, async_call, [Regulator, Label, Msg]}});
-        Process ->
-            Tag = monitor(process, Process),
-            _ = Process ! {Label, {self(), Tag}, Msg},
-            {await, Tag, Process}
-    end.
-
-async_call(Regulator, Label, Msg, Tag) ->
-    case sbroker_util:whereis(Regulator) of
-         undefined ->
-            exit({noproc, {?MODULE, async_call, [Regulator, Label, Msg, Tag]}});
-        Process ->
-            _ = Process ! {Label, {self(), Tag}, Msg},
-            {await, Tag, Process}
-    end.
-
-send(Regulator, Msg) ->
-    case sbroker_util:whereis(Regulator) of
-        undefined ->
-            exit({noproc, {?MODULE, send, [Regulator, Msg]}});
-        Process ->
-            _ = Process ! Msg,
-            ok
-    end.
-
 time_options(Opts) ->
-    TimeMod = proplists:get_value(time_module, Opts, time_module()),
-    ReadAfter = proplists:get_value(read_time_after, Opts, ?READ_TIME_AFTER),
+    TimeMod = proplists:get_value(time_module, Opts),
+    ReadAfter = proplists:get_value(read_time_after, Opts),
     {TimeMod, ReadAfter}.
-
-time_module() ->
-    case erlang:function_exported(erlang, monotonic_time, 0) of
-        true  -> erlang;
-        false -> sbroker_legacy
-    end.
 
 init(Starter, #time{now=Now} = Time, QArgs, VArgs, MArgs,
      #config{queue_mod=QMod, valve_mod=VMod, meter_mod=MMod,

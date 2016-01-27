@@ -121,12 +121,6 @@
 -export([system_terminate/4]).
 -export([format_status/2]).
 
-%% macros
-
--ifndef(READ_TIME_AFTER).
--define(READ_TIME_AFTER, 16).
--endif.
-
 %% types
 
 -type broker() :: pid() | atom() | {atom(), node()} | {global, any()}
@@ -180,7 +174,7 @@
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask(Broker) ->
-    call(Broker, ask, self(), infinity).
+    sbroker_gen:call(Broker, ask, self(), infinity).
 
 %% @doc Send a match request, with value `ReqValue', to try to match with a
 %% process calling `ask_r/2' on the broker, `Broker'.
@@ -221,7 +215,7 @@ ask(Broker) ->
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask(Broker, ReqValue) ->
-    call(Broker, ask, ReqValue, infinity).
+    sbroker_gen:call(Broker, ask, ReqValue, infinity).
 
 %% @equiv ask_r(Broker, self())
 -spec ask_r(Broker) -> Go | Drop when
@@ -233,7 +227,7 @@ ask(Broker, ReqValue) ->
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask_r(Broker) ->
-    call(Broker, bid, self(), infinity).
+    sbroker_gen:call(Broker, bid, self(), infinity).
 
 %% @doc Tries to match with a process calling `ask/2' on the same broker.
 %%
@@ -248,7 +242,7 @@ ask_r(Broker) ->
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask_r(Broker, ReqValue) ->
-    call(Broker, bid, ReqValue, infinity).
+    sbroker_gen:call(Broker, bid, ReqValue, infinity).
 
 %% @equiv nb_ask(Broker, self())
 -spec nb_ask(Broker) -> Go | Retry when
@@ -260,7 +254,7 @@ ask_r(Broker, ReqValue) ->
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask(Broker) ->
-    call(Broker, nb_ask, self(), infinity).
+    sbroker_gen:call(Broker, nb_ask, self(), infinity).
 
 %% @doc Tries to match with a process calling `ask_r/2' on the same broker but
 %% does not enqueue the request if no immediate match. Returns
@@ -283,7 +277,7 @@ nb_ask(Broker) ->
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask(Broker, ReqValue) ->
-    call(Broker, nb_ask, ReqValue, infinity).
+    sbroker_gen:call(Broker, nb_ask, ReqValue, infinity).
 
 %% @equiv nb_ask_r(Broker, self())
 -spec nb_ask_r(Broker) -> Go | Retry when
@@ -295,7 +289,7 @@ nb_ask(Broker, ReqValue) ->
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask_r(Broker) ->
-    call(Broker, nb_bid, self(), infinity).
+    sbroker_gen:call(Broker, nb_bid, self(), infinity).
 
 %% @doc Tries to match with a process calling `ask/2' on the same broker but
 %% does not enqueue the request if no immediate match.
@@ -311,7 +305,7 @@ nb_ask_r(Broker) ->
       SojournTime :: non_neg_integer(),
       Retry :: {retry, SojournTime}.
 nb_ask_r(Broker, ReqValue) ->
-    call(Broker, nb_bid, ReqValue, infinity).
+    sbroker_gen:call(Broker, nb_bid, ReqValue, infinity).
 
 %% @equiv async_ask(Broker, self())
 -spec async_ask(Broker) -> {await, Tag, Process} when
@@ -319,7 +313,7 @@ nb_ask_r(Broker, ReqValue) ->
       Tag :: reference(),
       Process :: pid() | {atom(), node()}.
 async_ask(Broker) ->
-    async_call(Broker, ask, self()).
+    sbroker_gen:async_call(Broker, ask, self()).
 
 %% @doc Monitors the broker and sends an asynchronous request to match with a
 %% process calling `ask_r/2'. Returns `{await, Tag, Pid}'.
@@ -350,7 +344,7 @@ async_ask(Broker) ->
       Tag :: reference(),
       Process :: pid() | {atom(), node()}.
 async_ask(Broker, ReqValue) ->
-    async_call(Broker, ask, ReqValue).
+    sbroker_gen:async_call(Broker, ask, ReqValue).
 
 %% @doc Sends an asynchronous request to match with a process calling `ask_r/2'.
 %% Returns `{await, Tag, Pid}'.
@@ -380,7 +374,7 @@ async_ask(Broker, ReqValue) ->
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
 async_ask(Broker, ReqValue, Tag) ->
-    async_call(Broker, ask, ReqValue, Tag).
+    sbroker_gen:async_call(Broker, ask, ReqValue, Tag).
 
 %% @equiv async_ask_r(Broker, self())
 -spec async_ask_r(Broker) -> {await, Tag, Process} when
@@ -388,7 +382,7 @@ async_ask(Broker, ReqValue, Tag) ->
       Tag :: reference(),
       Process :: pid() | {atom(), node()}.
 async_ask_r(Broker) ->
-    async_call(Broker, bid, self()).
+    sbroker_gen:async_call(Broker, bid, self()).
 
 %% @doc Monitors the broker and sends an asynchronous request to match with a
 %% process calling `ask/2'.
@@ -401,7 +395,7 @@ async_ask_r(Broker) ->
       Tag :: reference(),
       Process :: pid() | {atom(), node()}.
 async_ask_r(Broker, ReqValue) ->
-    async_call(Broker, bid, ReqValue).
+    sbroker_gen:async_call(Broker, bid, ReqValue).
 
 %% @doc Sends an asynchronous request to match with a process calling `ask/2'.
 %%
@@ -413,7 +407,7 @@ async_ask_r(Broker, ReqValue) ->
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
 async_ask_r(Broker, ReqValue, Tag) ->
-    async_call(Broker, bid, ReqValue, Tag).
+    sbroker_gen:async_call(Broker, bid, ReqValue, Tag).
 
 %% @doc Await the response to an asynchronous request identified by `Tag'.
 %%
@@ -457,7 +451,7 @@ await(Tag, Timeout) ->
       Timeout :: timeout(),
       Count :: pos_integer().
 cancel(Broker, Tag, Timeout) ->
-    call(Broker, cancel, Tag, Timeout).
+    sbroker_gen:call(Broker, cancel, Tag, Timeout).
 
 %% @doc Change the configuration of the broker. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason', is the reason for failure.
@@ -469,7 +463,7 @@ cancel(Broker, Tag, Timeout) ->
       Timeout :: timeout(),
       Reason :: any().
 change_config(Broker, Timeout) ->
-    call(Broker, change_config, undefined, Timeout).
+    sbroker_gen:call(Broker, change_config, undefined, Timeout).
 
 %% @doc Get the length of the `ask' queue in the broker, `Broker'.
 -spec len(Broker, Timeout) -> Length when
@@ -477,7 +471,7 @@ change_config(Broker, Timeout) ->
       Timeout :: timeout(),
       Length :: non_neg_integer().
 len(Broker, Timeout) ->
-    call(Broker, len_ask, undefined, Timeout).
+    sbroker_gen:call(Broker, len_ask, undefined, Timeout).
 
 %% @doc Get the length of the `ask_r' queue in the broker, `Broker'.
 -spec len_r(Broker, Timeout) -> Length when
@@ -485,7 +479,7 @@ len(Broker, Timeout) ->
       Timeout :: timeout(),
       Length :: non_neg_integer().
 len_r(Broker, Timeout) ->
-    call(Broker, len_bid, undefined, Timeout).
+    sbroker_gen:call(Broker, len_bid, undefined, Timeout).
 
 %% @doc Starts a broker with callback module `Module' and argument `Args', and
 %% broker options `Opts'.
@@ -504,9 +498,8 @@ len_r(Broker, Timeout) ->
       Args :: any(),
       Opts :: [start_option()],
       StartReturn :: start_return().
-start_link(Mod, Args0, Opts) ->
-    {Args1, GenOpts} = split_options(Args0, Opts),
-    gen:start(?MODULE, link, Mod, Args1, GenOpts).
+start_link(Mod, Args, Opts) ->
+    sbroker_gen:start_link(?MODULE, Mod, Args, Opts).
 
 %% @doc Starts a broker with name `Name', callback module `Module' and argument
 %% `Args', and broker options `Opts'.
@@ -518,9 +511,8 @@ start_link(Mod, Args0, Opts) ->
       Args :: any(),
       Opts :: [start_option()],
       StartReturn :: start_return().
-start_link(Name, Mod, Args0, Opts) ->
-    {Args1, GenOpts} = split_options(Args0, Opts),
-    gen:start(?MODULE, link, Name, Mod, Args1, GenOpts).
+start_link(Name, Mod, Args, Opts) ->
+    sbroker_gen:start_link(Name, ?MODULE, Mod, Args, Opts).
 
 %% test api
 
@@ -528,7 +520,7 @@ start_link(Name, Mod, Args0, Opts) ->
 -spec timeout(Broker) -> ok when
       Broker :: broker().
 timeout(Broker) ->
-    send(Broker, timeout).
+    sbroker_gen:send(Broker, timeout).
 
 %% gen api
 
@@ -536,13 +528,10 @@ timeout(Broker) ->
 %% difference between ask and ask_r clearer.
 
 %% @private
-init_it(Starter, self, Name, Mod, Args, Opts) ->
-    init_it(Starter, self(), Name, Mod, Args, Opts);
-init_it(Starter, Parent, Name, Mod, {TimeOpts, Args}, Opts) ->
+init_it(Starter, Parent, Name, Mod, Args, Opts) ->
     DbgOpts = proplists:get_value(debug, Opts, []),
     Dbg = sys:debug_options(DbgOpts),
-    {TimeMod, ReadAfter} = TimeOpts,
-     _ = put('$initial_call', {Mod, init, 1}),
+    {TimeMod, ReadAfter} = time_options(Opts),
     try Mod:init(Args) of
         {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, {MeterMod, MeterArgs}}} ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
@@ -649,65 +638,10 @@ format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
 
 %% Internal
 
-split_options(Args, Opts0) ->
-    TimeOpts = time_options(Opts0),
-    Opts1 = lists:keydelete(time_module, 1, Opts0),
-    Opts2 = lists:keydelete(read_time_after, 1, Opts1),
-    {{TimeOpts, Args}, Opts2}.
-
-call(Broker, Label, Msg, Timeout) ->
-    case sbroker_util:whereis(Broker) of
-        undefined ->
-            exit({noproc, {?MODULE, call, [Broker, Label, Msg, Timeout]}});
-        Process ->
-            try gen:call(Process, Label, Msg, Timeout) of
-                {ok, Reply} ->
-                    Reply
-            catch
-                exit:Reason ->
-                    Args = [Broker, Label, Msg, Timeout],
-                    exit({Reason, {?MODULE, call, Args}})
-            end
-    end.
-
-async_call(Broker, Label, Msg) ->
-    case sbroker_util:whereis(Broker) of
-         undefined ->
-            exit({noproc, {?MODULE, async_call, [Broker, Label, Msg]}});
-        Process ->
-            Tag = monitor(process, Process),
-            _ = Process ! {Label, {self(), Tag}, Msg},
-            {await, Tag, Process}
-    end.
-
-async_call(Broker, Label, Msg, Tag) ->
-    case sbroker_util:whereis(Broker) of
-         undefined ->
-            exit({noproc, {?MODULE, async_call, [Broker, Label, Msg, Tag]}});
-        Process ->
-            _ = Process ! {Label, {self(), Tag}, Msg},
-            {await, Tag, Process}
-    end.
-
-send(Broker, Msg) ->
-    case sbroker_util:whereis(Broker) of
-        undefined ->
-            exit({noproc, {?MODULE, send, [Broker, Msg]}});
-        Process ->
-            _ = Process ! Msg,
-            ok
-    end.
-
 time_options(Opts) ->
-    TimeMod = proplists:get_value(time_module, Opts, time_module()),
-    ReadAfter = proplists:get_value(read_time_after, Opts, ?READ_TIME_AFTER),
+    TimeMod = proplists:get_value(time_module, Opts),
+    ReadAfter = proplists:get_value(read_time_after, Opts),
     {TimeMod, ReadAfter}.
-
-time_module() ->
-    case erlang:function_exported(erlang, monotonic_time, 0) of
-        true  -> erlang;
-        false -> sbroker_legacy
-    end.
 
 init(Starter, #time{now=Now} = Time, AskArgs, BidArgs, MeterArgs,
      #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod,
