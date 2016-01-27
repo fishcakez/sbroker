@@ -28,9 +28,10 @@
 -export([terminate/2]).
 
 %% @private
--spec init(Time, Timeout) -> Timeout when
+-spec init(Time, Timeout) -> {Timeout, Next} when
       Time :: integer(),
-      Timeout :: timeout().
+      Timeout :: timeout(),
+      Next :: integer() | infinity.
 init(Time, Timeout) ->
     handle(Time, sbroker_util:timeout(Timeout)).
 

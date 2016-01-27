@@ -48,7 +48,7 @@
                 queue :: sbroker_queue:internal_queue()}).
 
 %% @private
--spec init(Q, Time, {Out, Drop, Max}) -> State when
+-spec init(Q, Time, {Out, Drop, Max}) -> {State, infinity} when
       Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
       Out :: out | out_r,
@@ -60,10 +60,10 @@ init(Q, Time, Arg) ->
 
 %% @private
 -spec handle_in(SendTime, From, Value, Time, State) -> {NState, infinity} when
-      Time :: integer(),
       SendTime :: integer(),
       From :: {pid(), any()},
       Value :: any(),
+      Time :: integer(),
       State :: #state{},
       NState :: #state{}.
 handle_in(SendTime, From, _, Time,

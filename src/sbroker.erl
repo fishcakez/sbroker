@@ -49,7 +49,7 @@
 %% `start_link' returns `ignore'.
 %%
 %% Both queue and meter specifcations take the form: `{Module, Args}'. `Module'
-%% is the callback module and `Args` are its arguments.
+%% is the callback module and `Args' are its arguments.
 %%
 %% For example:
 %%
@@ -75,7 +75,8 @@
 %% init([]) ->
 %%     AskQueueSpec = {sbroker_codel_queue, {out, 5, 100, drop_r, 64}},
 %%     AskRQueueSpec = {sbroker_timeout_queue, {out_r, 5000, drop, infinity}},
-%%     {ok, {AskQueueSpec, AskRQueueSpec}}.
+%%     MeterSpec = {sbroker_alarm_meter, {50, 500, {?MODULE, overload}}},
+%%     {ok, {AskQueueSpec, AskRQueueSpec, MeterSpec}}.
 %% '''
 -module(sbroker).
 
@@ -139,13 +140,14 @@
     {spawn_opt, [proc_lib:spawn_option()]} | {time_module, module()} |
     {read_time_after, non_neg_integer() | infinity}.
 -type start_return() :: {ok, pid()} | ignore | {error, any()}.
--type queue_spec() :: {module(), any()}.
+-type handler_spec() :: {module(), any()}.
 
 -export_type([broker/0]).
--export_type([queue_spec/0]).
+-export_type([handler_spec/0]).
 
 -callback init(Args :: any()) ->
-    {ok, {queue_spec(), queue_spec(), pos_integer()}} | ignore.
+    {ok, {AskQueueSpec :: handler_spec(), AskRQueueSpec :: handler_spec(),
+          MeterSpec :: handler_spec()}} | ignore.
 
 -record(config, {mod :: module(),
                  args :: any(),
@@ -312,10 +314,10 @@ nb_ask_r(Broker, ReqValue) ->
     call(Broker, nb_bid, ReqValue, infinity).
 
 %% @equiv async_ask(Broker, self())
--spec async_ask(Broker) -> {await, Tag, Pid} when
+-spec async_ask(Broker) -> {await, Tag, Process} when
       Broker :: broker(),
       Tag :: reference(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask(Broker) ->
     async_call(Broker, ask, self()).
 
@@ -323,8 +325,9 @@ async_ask(Broker) ->
 %% process calling `ask_r/2'. Returns `{await, Tag, Pid}'.
 %%
 %% `Tag' is a monitor `reference()' that uniquely identifies the reply
-%% containing the result of the request. `Pid', is the pid (`pid()') of the
-%% monitored broker. To cancel the request call `cancel(Pid, Tag)'.
+%% containing the result of the request. `Process', is the `pid()' of the
+%% monitored broker or `{atom(), node()}' if the broker is registered locally
+%% in another node. To cancel the request call `cancel(Process, Tag)'.
 %%
 %% The reply is of the form `{Tag, {go, Ref, Value, RelativeTime, SojournTime}'
 %% or `{Tag, {drop, SojournTime}}'.
@@ -341,11 +344,11 @@ async_ask(Broker) ->
 %%
 %% @see cancel/2
 %% @see async_ask/3
--spec async_ask(Broker, ReqValue) -> {await, Tag, Pid} when
+-spec async_ask(Broker, ReqValue) -> {await, Tag, Process} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: reference(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask(Broker, ReqValue) ->
     async_call(Broker, ask, ReqValue).
 
@@ -353,8 +356,9 @@ async_ask(Broker, ReqValue) ->
 %% Returns `{await, Tag, Pid}'.
 %%
 %% `Tag' is a `any()' that identifies the reply containing the result of the
-%% request. `Pid', is the pid (`pid()') of the broker. To cancel all requests
-%% identified by `Tag' on broker `Pid' call `cancel(Pid, Tag)'.
+%% request. `Process/' is the `pid()' of the broker or `{atom(), node()}' if the
+%% broker is registered locally on a different node. To cancel all requests
+%% identified by `Tag' on broker `Process' call `cancel(Process, Tag)'.
 %%
 %% The reply is of the form `{Tag, {go, Ref, Value, RelativeTime, SojournTime}'
 %% or `{Tag, {drop, SojournTime}}'.
@@ -370,19 +374,19 @@ async_ask(Broker, ReqValue) ->
 %% the caller should take appropriate steps to handle this scenario.
 %%
 %% @see cancel/2
--spec async_ask(Broker, ReqValue, Tag) -> {await, Tag, Pid} when
+-spec async_ask(Broker, ReqValue, Tag) -> {await, Tag, Process} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: any(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask(Broker, ReqValue, Tag) ->
     async_call(Broker, ask, ReqValue, Tag).
 
 %% @equiv async_ask_r(Broker, self())
--spec async_ask_r(Broker) -> {await, Tag, Pid} when
+-spec async_ask_r(Broker) -> {await, Tag, Process} when
       Broker :: broker(),
       Tag :: reference(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask_r(Broker) ->
     async_call(Broker, bid, self()).
 
@@ -391,11 +395,11 @@ async_ask_r(Broker) ->
 %%
 %% @see async_ask/2
 %% @see cancel/2
--spec async_ask_r(Broker, ReqValue) -> {await, Tag, Pid} when
+-spec async_ask_r(Broker, ReqValue) -> {await, Tag, Process} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: reference(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask_r(Broker, ReqValue) ->
     async_call(Broker, bid, ReqValue).
 
@@ -403,11 +407,11 @@ async_ask_r(Broker, ReqValue) ->
 %%
 %% @see async_ask/3
 %% @see cancel/2
--spec async_ask_r(Broker, ReqValue, Tag) -> {await, Tag, Pid} when
+-spec async_ask_r(Broker, ReqValue, Tag) -> {await, Tag, Process} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: any(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask_r(Broker, ReqValue, Tag) ->
     async_call(Broker, bid, ReqValue, Tag).
 
@@ -526,9 +530,9 @@ start_link(Name, Mod, Args0, Opts) ->
 timeout(Broker) ->
     send(Broker, timeout).
 
-%% gen_fsm api
+%% gen api
 
-%% Inside the gen_fsm an ask_r request is refered to as a bid to make the
+%% Inside the broker an ask_r request is refered to as a bid to make the
 %% difference between ask and ask_r clearer.
 
 %% @private
@@ -949,7 +953,7 @@ handle_out(Mod, Now, Queue) ->
         {empty, _} = Result ->
             Result;
         Other ->
-            {bad_return_value, Other}
+            {bad_return_value, Other, Queue}
     catch
         Class:Reason ->
             {exception, Class, Reason, Queue}

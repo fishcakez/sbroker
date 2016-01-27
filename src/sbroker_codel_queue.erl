@@ -84,7 +84,8 @@
 %% public API
 
 %% @private
--spec init(Q, Time, {Out, Target, Interval, Drop, Max}) -> State when
+-spec init(Q, Time, {Out, Target, Interval, Drop, Max}) ->
+    {State, NextTimeout} when
       Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
       Out :: out | out_r,
@@ -92,7 +93,8 @@
       Interval :: pos_integer(),
       Drop :: drop | drop_r,
       Max :: non_neg_integer() | infinity,
-      State :: #state{}.
+      State :: #state{},
+      NextTimeout :: integer() | infinity.
 init(Q, Time, Args) ->
     handle_timeout(Time, from_queue(Q, queue:len(Q), Time, Args)).
 
@@ -295,7 +297,6 @@ timeout_drop(MinSend, Time, Len, Q,
             NState = drop_control(C+1, DropNext, State),
             timeout_drop(MinSend, Time, Len-1, queue:drop(Q), NState)
     end.
-
 
 %% Item below target sojourn time and getting dequeued
 out_peek({{value, {Send, From, Value, Ref}}, Q}, MinSend, _Time, Len,

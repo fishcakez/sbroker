@@ -55,8 +55,9 @@
       Mod :: module(),
       Args :: any(),
       Name :: name(),
-      Callbacks :: [{Behaviour, Mod, State}, ...],
+      Callbacks :: [{Behaviour, Mod, State, TimeoutTime}, ...],
       State :: any(),
+      TimeoutTime :: integer() | infinity,
       ExitReason :: any().
 init(Time, Inits, Name) ->
     init(Time, Inits, Name, []).

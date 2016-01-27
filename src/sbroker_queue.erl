@@ -17,13 +17,23 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @doc Behaviour for implement queues for `sbroker'.
+%% @doc Behaviour for implementing queues for `sbroker' and `sregulator'.
 %%
-%% A custom queue must implement the `sbroker' behaviour. The first callback is
-%% `init/3', which starts the queue:
+%% A custom queue must implement the `sbroker_queue' behaviour. The first
+%% callback is `init/3', which starts the queue:
 %% ```
-%% -callback init(Time :: integer(), Args :: any()) -> State :: any().
+%% -callback init(InternalQueue :: internal_queue(), Time :: integer(),
+%%                Args :: any()) ->
+%%      {State :: any(), TimeoutTime :: integer | infinity}.
 %% '''
+%% `InternalQueue' is the internal queue of requests, it is a `queue:queue()'
+%% with items of the form `{SendTime, From, Value, Reference}'. `SendTime' is
+%% the approximate time the request was sent in `native' time units and is
+%% always less than or equal to `Time'.`From' is the a 2-tuple containing the
+%% senders pid and a response tag. `SendTime' and `From' can be used with
+%% `drop/3' to drop a request. `Value' is any term, `Reference' is the monitor
+%% reference of the sender.
+%%
 %% `Time' is the time, in `native' time units, of the queue at creation. Some
 %% other callbacks will receive the current time of the queue as the second last
 %% argument. It is monotically increasing, so subsequent calls will have the
@@ -33,28 +43,22 @@
 %%
 %% `State' is the state of the queue and used in the next call.
 %%
-%% When inserting a request into the queue, `handle_in/5':
-%% ```
-%% -callback handle_in(SendTime :: integer(),
-%%                     From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
-%%                     Time :: integer(), State :: any()) ->
-%%     {NState :: any(), TimeoutTime :: integer() | infinity}.
-%% '''
-%% `SendTime' is the (approximate) time a request was sent. It is always less
-%% than or equal to `Time'.
-%%
-%% `From' is a 2-tuple containing the senders pid and a response tag. `From' can
-%% be used with `drop/3' to drop a request.
-%%
-%% `Value' is any term, `Time' is the current time, `State' is the current
-%% state and `NState'.
-%%
 %% `TimeoutTime' represents the next time a queue wishes to call
 %% `handle_timeout/2' to drop items. If a message is not received the timeout
 %% should occur at or after `TimeoutTime'. The time must be greater than or
 %% equal to `Time'. If a queue does not require a timeout then `TimeoutTime'
 %% should be `infinity'. The value may be ignored or unavailable in other
 %% callbacks if the queue is empty.
+%%
+%% When inserting a request into the queue, `handle_in/6':
+%% ```
+%% -callback handle_in(SendTime :: integer(),
+%%                     From :: {Sender :: pid(), Tag :: any()}, Value :: any(),
+%%                     Time :: integer(), State :: any()) ->
+%%     {NState :: any(), TimeoutTime :: integer() | infinity}.
+%% '''
+%% The variables are equivalent to those in `init/3', with `NState' being the
+%% new state.
 %%
 %% When removing a request from the queue, `handle_out/2':
 %% ```
@@ -65,24 +69,18 @@
 %%     {empty, NState :: any()}.
 %% '''
 %%
-%% `Time' is the current time, `State' is the current state and `NState' is the
-%% new state.
-%%
-%% `SendTime', `From' and `Value' should be the same values passed as
-%% arguments to `handle_in/5'.
-%%
-%% `Ref' is the monitor reference of the `Sender' process.
-%%
-%% `TimeoutTime' is the time of the next timeout, see `handle_in/5'.
+%% The variables are equivalent to those in `init/3', with `NState' being the
+%% new state. This callback either returns a single request, added in the
+%% `InternalQueue' from `init/3' or enqueued with `handle_in/6'. If the queue is
+%% empty an `empty' tuple is returned.
 %%
 %% When a timeout occurs, `handle_timeout/2':
 %% ```
 %% -callback handle_timeout(Time :: integer(), State :: any()) ->
 %%     {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
-%% `Time' is the current time, `State' is the current state, `NState' is the
-%% new state and `TimeoutTime' is the time of the next timeout, see
-%% `handle_in/5'.
+%% The variables are equivalent to those in `init/3', with `NState' being the
+%% new state.
 %%
 %% When cancelling requests, `handle_cancel/3':
 %% ```
@@ -90,16 +88,15 @@
 %%     {Reply :: false | pos_integer(), NState :: any(),
 %%      TimeoutTime :: integer() | infinity}.
 %% '''
-%% `Tag' is a response tag, which is part of the `From' tuple passed to
-%% `handle_in/5'. There may be multiple requests with the same tag and all
-%% should be removed.
+%% `Tag' is a response tag, which is part of the `From' tuple passed via
+%% `InternalQueue' in `init/3' or directly in `handle_in/6'. There may be
+%% multiple requests with the same tag and all should be removed.
 %%
 %% If no requests are cancelled the `Reply' is `false', otherwise it is the
 %% number of cancelled requests.
 %%
-%% `Time' is the current time, `State' is the current state, `NState' is the
-%% new state and `TimeoutTime' is the time of the next timeout, see
-%% `handle_in/5'.
+%% The other variables are equivalent to those in `init/3', with `NState' being
+%% the new state.
 %%
 %% When handling a message, `handle_info/3':
 %% ```
@@ -108,21 +105,16 @@
 %% '''
 %% `Msg' is the message, and may be intended for another queue.
 %%
-%% `Time' is the current time, `State' is the current state, `NState' is the
-%% new state and `TimeoutTime' is the time of the next timeout, see
-%% `handle_in/5'.
+%% The other variables are equivalent to those in `init/3', with `NState' being
+%% the new state.
 %%
 %% When changing the configuration of a queue, `config_change/4':
 %% ```
 %% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
 %%      {NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
-%% `Args' is the arguments to reconfigure the queue. The queue should change its
-%% configuration as if the same `Args' term was used in `init/3'.
-%%
-%% `Time' is the current time in `native' time units, `State' is the current
-%% state, `NState' is the new state and `TimeoutTime' is the time of the next
-%% timeout, see `handle_in/5'.
+%% The variables are equivalent to those in `init/3', with `NState' being the
+%% new state.
 %%
 %% When returning the number of queued requests, `len/1':
 %% ```
@@ -133,9 +125,8 @@
 %%
 %% When cleaning up the queue, `terminate/2':
 %% ```
-%% -callback terminate(Reason :: stop | {bad_return_value, Return :: any()} |
-%%                     {error | throw | exit, Reason :: any(), Stack :: list()},
-%%                     State :: any()) -> any().
+%% -callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
+%%      InternalQueue :: internal_queue().
 %% '''
 %% `Reason' is `stop' if the queue is being shutdown, `change' if the queue is
 %% being replaced by another queue, `{bad_return_value, Return}' if a previous
@@ -144,9 +135,11 @@
 %%
 %% `State' is the current state of the queue.
 %%
+%% `InternalQueue' is the same as `init/3' and is passed to the next queue if
+%% `Reason' is `change'.
+%%
 %% The process controlling the queue may not be terminating with the queue and
 %% so `terminate/2' should do any clean up required.
-%% @private
 -module(sbroker_queue).
 
 -behaviour(sbroker_handlers).
@@ -183,7 +176,7 @@
 
 -callback handle_out(Time :: integer(), State :: any()) ->
     {SendTime :: integer(), From :: {pid(), Tag :: any()}, Value :: any(),
-     NState :: any(), TimeoutTime :: integer() | infinity} |
+     Ref :: reference(), NState :: any(), TimeoutTime :: integer() | infinity} |
     {empty, NState :: any()}.
 
 -callback handle_timeout(Time :: integer(), State :: any()) ->

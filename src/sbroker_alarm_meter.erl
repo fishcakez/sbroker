@@ -17,6 +17,21 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
+%% @doc Sets a SASL `alarm_handler' alarm when the process's message queue is
+%% slow for an interval. Once the message queue becomes fast for an interval the
+%% alarm is cleared.
+%%
+%% `sbroker_alarm_meter' can be used as the `sbroker_meter' in a `sbroker' or
+%% a `sregulator'. Its argument is of the form:
+%% ```
+%% {Target :: non_neg_integer(), Interval :: pos_integer(), AlarmId :: any()}
+%% '''
+%% `Target' is the target sojourn time of the message queue in milliseconds. The
+%% meter will set the alarm `AlarmId' in `alarm_handler' if the sojourn time of
+%% the message queue is above the target for `Interval' milliseconds. Once set
+%% if the sojourn time is below `Target'  for `Interval' milliseconds the alarm
+%% is cleared. The description of the alarm is `{message_queue_slow, Pid}' where
+%% `Pid' is the `pid()' of the process.
 -module(sbroker_alarm_meter).
 
 -behaviour(sbroker_meter).
@@ -34,7 +49,7 @@
                 toggle_next = infinity :: integer() | infinity}).
 
 %% @private
--spec init(Time, {Target, Interval, AlarmId}) -> State when
+-spec init(Time, {Target, Interval, AlarmId}) -> {State, infinity} when
       Time :: integer(),
       Target :: non_neg_integer(),
       Interval :: pos_integer(),
