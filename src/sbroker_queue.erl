@@ -157,12 +157,8 @@
 
 %% types
 
--ifdef(LEGACY_TYPES).
--type internal_queue() :: queue().
--else.
 -type internal_queue() ::
     queue:queue({integer(), {pid(), any()}, any(), reference()}).
--endif.
 
 -export_type([internal_queue/0]).
 
