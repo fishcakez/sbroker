@@ -40,12 +40,19 @@
 -export([exit_reason/1]).
 
 -type reason() :: stop | change |
-    {exit | throw | error, any(), erlang:raise_stacktrace()} |
+    {exit | throw | error, any(), stacktrace()} |
     {bad_return_value, any()}.
+
+-export_type([reason/0]).
 
 -type name() ::
     {local, atom()} | {global, any()} | {via, module(), any()} |
     {module(), pid()}.
+
+-type stacktrace() ::
+    [{module(), atom(), arity() | [term()]} | {function(), [term()]}] |
+    [{module(), atom(), arity() | [term()], [{atom(),term()}]} |
+     {function(), [term()], [{atom(),term()}]}].
 
 -spec init(Time, Inits, Name) ->
     {ok, Callbacks} | {stop, ExitReason} when
@@ -118,7 +125,7 @@ report(Behaviour, Type, Mod, Reason, State, Name) ->
     send_report(Behaviour, Type, Mod, NReason, State, NName).
 
 -spec exit_reason(Reason) -> ExitReason when
-      Reason :: {exit | throw | error, any(), erlang:raise_stacktrace()} |
+      Reason :: {exit | throw | error, any(), stacktrace()} |
         {bad_return_value, any()},
       ExitReason :: any().
 exit_reason({throw, Value, Stack}) ->

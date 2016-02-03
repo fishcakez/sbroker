@@ -72,7 +72,7 @@
                 max :: non_neg_integer() | infinity,
                 target :: integer(),
                 last=init :: integer() | init | ask | continue,
-                map :: sbroker_valve:internal_map()}).
+                map :: sregulator_valve:internal_map()}).
 
 %% sregulator_valve api
 

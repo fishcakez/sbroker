@@ -165,7 +165,7 @@
 
 -callback size(State :: any()) -> Size :: non_neg_integer().
 
--callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
+-callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
     Map :: internal_map().
 
 %% sbroker_handlers api

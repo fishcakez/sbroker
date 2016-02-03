@@ -97,7 +97,7 @@
                 count=0 :: non_neg_integer(),
                 open_next :: integer(),
                 open_first=infinity :: integer() | infinity | opening | await,
-                map :: sbroker_valve:internal_map()}).
+                map :: sregulator_valve:internal_map()}).
 
 %% sregulator_valve api
 

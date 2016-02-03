@@ -190,7 +190,7 @@
 
 -callback len(State :: any()) -> Len :: non_neg_integer().
 
--callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
+-callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
     Q :: internal_queue().
 
 %% public api

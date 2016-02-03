@@ -112,7 +112,7 @@
 -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
     {NState :: any(), UpdateTime :: integer() | infinity}.
 
--callback terminate(Reason :: sbroker_handler:reason(), State :: any()) ->
+-callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
     any().
 
 %% sbroker_handlers api
