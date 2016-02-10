@@ -132,8 +132,7 @@ handle_out(Time, #state{module=Module, robin=Robin, queues=Qs} = State) ->
     out(queue:out(Robin), Time, Module, Qs, State).
 
 %% @private
--spec handle_timeout(Time, State) ->
-    {NState, TimeoutNext} | {empty, NState} when
+-spec handle_timeout(Time, State) -> {NState, TimeoutNext} when
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
@@ -145,10 +144,11 @@ handle_timeout(Time, #state{module=Module, queues=Qs} = State) ->
     {State#state{queues=NQs, next=Next}, Next}.
 
 %% @private
--spec handle_cancel(Tag, Time, State) -> {NState, TimeoutNext} when
+-spec handle_cancel(Tag, Time, State) -> {Reply, NState, TimeoutNext} when
       Tag :: any(),
       Time :: integer(),
       State :: #state{},
+      Reply :: false | pos_integer(),
       NState :: #state{},
       TimeoutNext :: integer() | infinity.
 handle_cancel(Tag, Time, #state{module=Module, queues=Qs} = State) ->
@@ -157,8 +157,7 @@ handle_cancel(Tag, Time, #state{module=Module, queues=Qs} = State) ->
     {Reply, State#state{queues=NQs, next=Next}, Next}.
 
 %% @private
--spec handle_info(Msg, Time, State) ->
-    {NState, TimeoutNext} | {empty, NState} when
+-spec handle_info(Msg, Time, State) -> {NState, TimeoutNext} when
       Msg :: any(),
       Time :: integer(),
       State :: #state{},
