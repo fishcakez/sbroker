@@ -148,6 +148,7 @@ manager() ->
     frequency([{1, sbroker_statem_statem},
                {2, sbroker_drop_statem},
                {4, sbroker_timeout_queue_statem},
+               {6, sbroker_fair_statem},
                {8, sbroker_codel_statem}]).
 
 time() ->
@@ -264,7 +265,7 @@ change_post(#state{max=Max, list=L, drop=Drop, drops=Drops} = State, Time, Q,
     end.
 
 info() ->
-    oneof([x, y, z]).
+    oneof([{x}, {y}, {z}]).
 
 in_args(#state{mod=Mod, send_time=SendTime, time=Time, queue=Q}) ->
     [Mod, oneof([SendTime, choose(SendTime, Time)]), tag(), info(), time(Time),
@@ -573,24 +574,31 @@ manager_post(State, Fun, Time, Q, Timeout) ->
 manager_post(#state{manager=Manager, timeout_time=PrevTimeout} = State, Fun,
              Time, Q, Timeout, Skip) ->
     NState = State#state{queue=Q, timeout_time=Timeout},
-    {Drops, #state{list=L} = NState2} = manager(NState, Fun, Time),
+    {Drops, NState2} = manager(NState, Fun, Time),
+    #state{list=L, manager_state=ManState} = NState2,
     Result = lists:all(fun({_, From, _}) when From =:= Skip ->
                                true;
                           ({Sojourn, From, _}) ->
                                drop_post(From, Sojourn)
                        end, Drops),
-    case Manager:time_dependence() of
+    case Manager:time_dependence(ManState) of
         _ when Timeout =:= ignore ->
             {true, NState2};
-        dependent when PrevTimeout > Time andalso Drops =/= [] ->
+        dependent
+          when is_integer(PrevTimeout), PrevTimeout > Time, Drops =/= [] ->
+            ct:pal("No drops and previous timeout ~p>~p", [PrevTimeout, Time]),
             {false, NState2};
         dependent when Timeout < Time ->
+            ct:pal("Timeout ~p<~p", [Timeout]),
             {false, NState2};
         dependent when Timeout =:= infinity andalso L =/= [] ->
+            ct:pal("Infinity timeout but non-empty queue ~p", [L]),
             {false, NState2};
         dependent when not (is_integer(Timeout) orelse Timeout =:= infinity) ->
+            ct:pal("Invalid timeout ~p", [Timeout]),
             {false, NState2};
         independent when Timeout =/= infinity ->
+            ct:pal("Non-infinity timeout ~p", [Timeout]),
             {false, NState2};
         _ ->
             {Result, NState2}

@@ -271,18 +271,21 @@ spawn_client(Broker, Fun) ->
     {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Broker, Fun]),
     {Pid, MRef}.
 
-spawn_client_next(#state{asks=[]} = State, Bid, [_, async_bid]) ->
-    bid_next(State,
+spawn_client_next(#state{asks=[], ask_drops=AskDrops} = State, Bid,
+                  [_, async_bid]) ->
+    bid_next(State#state{ask_state=AskDrops},
              fun(#state{bids=NBids} = NState) ->
                      NState#state{bids=NBids++[Bid]}
              end);
-spawn_client_next(#state{asks=[]} = State, _, [_, nb_bid]) ->
-    timeout_next(State);
+spawn_client_next(#state{asks=[], ask_drops=AskDrops} = State, _,
+                  [_, nb_bid]) ->
+    timeout_next(State#state{ask_state=AskDrops});
 spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
   when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
     ask_next(State,
-             fun(#state{asks=[]} = NState) ->
-                     spawn_client_next(NState, Bid, Args);
+             fun(#state{asks=[], ask_drops=AskDrops} = NState) ->
+                     NState2 = NState#state{ask_state=AskDrops},
+                     spawn_client_next(NState2, Bid, Args);
                 (#state{asks=NAsks, ask_out=out, done=Done} = NState) ->
                      NState#state{asks=dropfirst(NAsks),
                                   done=Done++[Bid, hd(NAsks)]};
@@ -290,18 +293,21 @@ spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
                      NState#state{asks=droplast(NAsks),
                                   done=Done++[Bid, lists:last(NAsks)]}
              end);
-spawn_client_next(#state{bids=[]} = State, Ask, [_, async_ask]) ->
-    ask_next(State,
+spawn_client_next(#state{bids=[], bid_drops=BidDrops} = State, Ask,
+                  [_, async_ask]) ->
+    ask_next(State#state{bid_state=BidDrops},
              fun(#state{asks=NAsks} = NState) ->
                      NState#state{asks=NAsks++[Ask]}
              end);
-spawn_client_next(#state{bids=[]} = State, _, [_, nb_ask]) ->
-    timeout_next(State);
+spawn_client_next(#state{bids=[], bid_drops=BidDrops} = State, _,
+                  [_, nb_ask]) ->
+    timeout_next(State#state{bid_state=BidDrops});
 spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
   when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
     bid_next(State,
-             fun(#state{bids=[]} = NState) ->
-                     spawn_client_next(NState, Ask, Args);
+             fun(#state{bids=[], bid_drops=BidDrops} = NState) ->
+                     NState2 = NState#state{bid_state=BidDrops},
+                     spawn_client_next(NState2, Ask, Args);
                 (#state{bids=NBids, bid_out=out, done=Done} = NState) ->
                      NState#state{bids=dropfirst(NBids),
                                   done=Done++[Ask, hd(NBids)]};
@@ -310,29 +316,35 @@ spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
                                   done=Done++[Ask, lists:last(NBids)]}
              end).
 
-spawn_client_post(#state{asks=[]} = State, [_, async_bid], _) ->
-    bid_aqm_post(State);
-spawn_client_post(#state{asks=[]} = State, [_, nb_bid], Bid) ->
-    retry_post(Bid) andalso timeout_post(State);
+spawn_client_post(#state{asks=[], ask_drops=AskDrops} = State,
+                  [_, async_bid], _) ->
+    bid_aqm_post(State#state{ask_state=AskDrops});
+spawn_client_post(#state{asks=[], ask_drops=AskDrops} = State,
+                  [_, nb_bid], Bid) ->
+    retry_post(Bid) andalso timeout_post(State#state{ask_state=AskDrops});
 spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
   when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
     ask_post(State,
-             fun(#state{asks=[]} = NState) ->
-                     spawn_client_post(NState, Args, Bid);
+             fun(#state{asks=[], ask_drops=AskDrops} = NState) ->
+                     NState2 = NState#state{ask_state=AskDrops},
+                     spawn_client_post(NState2, Args, Bid);
                 (#state{asks=NAsks, ask_out=out}) ->
                      settled_post(Bid, hd(NAsks));
                 (#state{asks=NAsks, ask_out=out_r}) ->
                      settled_post(Bid, lists:last(NAsks))
              end);
-spawn_client_post(#state{bids=[]} = State, [_, async_ask], _) ->
-    ask_aqm_post(State);
-spawn_client_post(#state{bids=[]} = State, [_, nb_ask], Ask) ->
-    retry_post(Ask) andalso timeout_post(State);
+spawn_client_post(#state{bids=[], bid_drops=BidDrops} = State,
+                  [_, async_ask], _) ->
+    ask_aqm_post(State#state{bid_state=BidDrops});
+spawn_client_post(#state{bids=[], bid_drops=BidDrops} = State,
+                  [_, nb_ask], Ask) ->
+    retry_post(Ask) andalso timeout_post(State#state{bid_state=BidDrops});
 spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
   when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
     bid_post(State,
-             fun(#state{bids=[]} = NState) ->
-                     spawn_client_post(NState, Args, Ask);
+             fun(#state{bids=[], bid_drops=BidDrops} = NState) ->
+                     NState2 = NState#state{bid_state=BidDrops},
+                     spawn_client_post(NState2, Args, Ask);
                 (#state{bids=NBids, bid_out=out}) ->
                      settled_post(Ask, hd(NBids));
                 (#state{bids=NBids, bid_out=out_r}) ->

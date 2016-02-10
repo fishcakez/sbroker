@@ -23,7 +23,7 @@
 
 -export([module/0]).
 -export([args/0]).
--export([time_dependence/0]).
+-export([time_dependence/1]).
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
@@ -39,8 +39,8 @@ args() ->
 init({Out, Drops}) ->
     {Out, drop, infinity, {Drops, Drops}}.
 
-time_dependence() ->
-    indepedent.
+time_dependence({_, _}) ->
+    independent.
 
 handle_timeout(_, _, {[], []} = State) ->
     {0, State};
@@ -52,12 +52,22 @@ handle_timeout(_, L, {[Drop | Drops], Config}) ->
     {min(Drop, length(L)), {Drops, Config}}.
 
 handle_out(Time, L, State) ->
-    handle_timeout(Time, L, State).
+    do_handle_out(Time, L, State).
 
 handle_out_r(Time, L, State) ->
-    handle_timeout(Time, L, State).
+    do_handle_out(Time, L, State).
 
 config_change(_, {Out, Config}, {_, Config} = State) ->
     {Out, drop, infinity, State};
 config_change(_, {Out, Drops}, _) ->
     {Out, drop, infinity, {Drops, Drops}}.
+
+%% Internal
+
+do_handle_out(Time, L, State) ->
+    case handle_timeout(Time, L, State) of
+        {Drop, {_, Config}} when Drop == length(L) ->
+            {Drop, {Config, Config}};
+        NonEmpty ->
+            NonEmpty
+    end.

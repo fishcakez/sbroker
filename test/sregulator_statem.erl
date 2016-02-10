@@ -655,8 +655,8 @@ valve_next(#state{valve_state=[], valve_opens=[_|_] = VState} = State) ->
 valve_next(#state{valve_state=[open | VState]} = State) ->
     NState = State#state{valve_status=open, valve_state=VState},
     queue_next(NState,
-               fun(#state{queue=[]} = NState2) ->
-                       NState2;
+               fun(#state{queue=[], queue_drops=QDrops} = NState2) ->
+                       NState2#state{queue_state=QDrops};
                   (#state{queue_out=out, queue=Q, valve=V} = NState2) ->
                        NState3 = NState2#state{queue=tl(Q),
                                                valve=V++[hd(Q)]},

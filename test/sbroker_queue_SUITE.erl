@@ -36,6 +36,7 @@
 
 %% test cases
 
+-export([fair/1]).
 -export([statem/1]).
 
 %% common_test api
@@ -47,7 +48,8 @@ suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{property, [parallel], [statem]}].
+    [{simple, [fair]},
+     {property, [statem]}].
 
 init_per_suite(Config) ->
     QcOpts = [{numtests, 1000}, long_result, {on_output, fun log/2}],
@@ -84,6 +86,20 @@ end_per_testcase(_TestCase, _Config) ->
     ok.
 
 %% test cases
+
+fair(_) ->
+    Args = {sbroker_drop_queue, {out, drop, infinity}, value},
+    {State, _} = sbroker_fair_queue:init(queue:new(), 1, Args),
+    From = {self(), make_ref()},
+    {State1, _} = sbroker_fair_queue:handle_in(1, From, a, 2, State),
+    {State2, _} = sbroker_fair_queue:handle_in(2, From, a, 3, State1),
+    {State3, _} = sbroker_fair_queue:handle_in(3, From, b, 4, State2),
+    {1, From, a, _, State4, _} = sbroker_fair_queue:handle_out(5, State3),
+    {3, From, b, _, State5, _} = sbroker_fair_queue:handle_out(6, State4),
+    {2, From, a, _, State6, _} = sbroker_fair_queue:handle_out(7, State5),
+    {empty, _} = sbroker_fair_queue:handle_out(5, State6),
+
+    ok.
 
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),

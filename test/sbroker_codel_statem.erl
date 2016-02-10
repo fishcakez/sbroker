@@ -45,7 +45,7 @@
 
 -export([module/0]).
 -export([args/0]).
--export([time_dependence/0]).
+-export([time_dependence/1]).
 -export([init/1]).
 -export([handle_timeout/3]).
 -export([handle_out/3]).
@@ -65,8 +65,8 @@ args() ->
      oneof([drop, drop_r]),
      oneof([choose(0, 5), infinity])}.
 
-time_dependence() ->
-    depedent.
+time_dependence(#state{}) ->
+    dependent.
 
 init({Out, Target, Interval, Drop, Max}) ->
     NTarget = sbroker_util:sojourn_target(Target),

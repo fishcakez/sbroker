@@ -58,7 +58,8 @@ handle_out(Time, #state{out=Out} = State) ->
     {#state{queue=Q} = NState, TimeoutNext} = handle_timeout(Time, State),
     case queue:Out(Q) of
         {empty, _} ->
-            {empty, NState};
+            #state{config=Drops} = NState,
+            {empty, NState#state{drops=Drops}};
         {{value, {SendTime, From, Value, Ref}}, NQ} ->
             {SendTime, From, Value, Ref, NState#state{queue=NQ}, TimeoutNext}
     end.
