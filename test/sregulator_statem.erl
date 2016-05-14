@@ -306,18 +306,18 @@ spawn_client_next(#state{valve_status=open, queue=[], valve=V} = State, Client,
     valve_next(State#state{valve=V++[Client]});
 spawn_client_next(#state{valve_status=closed} = State, _, [_, nb_ask]) ->
     queue_next(State);
-spawn_client_next(#state{valve_status=closed} = State, Client,
+spawn_client_next(#state{valve_status=closed, queue=Q} = State, Client,
                   [_, async_ask]) ->
-    queue_next(State,
-               fun(#state{queue=Q} = NState) ->
-                       NState#state{queue=Q++[Client]}
-               end).
+    queue_next(State#state{queue=Q++[Client]}).
 
 spawn_client_post(#state{valve_status=open, queue=[], valve=V} = State,
                   [_, _], Client) ->
     go_post(Client) andalso valve_post(State#state{valve=V++[Client]});
-spawn_client_post(#state{valve_status=closed} = State, _, _) ->
-    queue_post(State).
+spawn_client_post(#state{valve_status=closed} = State, [_, nb_ask], _) ->
+    queue_post(State);
+spawn_client_post(#state{valve_status=closed, queue=Q} = State, [_, async_ask],
+                  Client) ->
+    queue_post(State#state{queue=Q++[Client]}).
 
 continue(Regulator, undefined) ->
     Result = sregulator:continue(Regulator, make_ref()),
@@ -424,34 +424,28 @@ cancel(Regulator, undefined) ->
 cancel(_, Client) ->
     client_call(Client, cancel).
 
-cancel_next(State, _, [_, Client]) ->
-    queue_next(State,
-             fun(#state{queue=Q, cancels=Cancels} = NState) ->
-                     case lists:member(Client, Q) of
-                         true ->
-                             NState#state{queue=Q--[Client],
-                                          cancels=Cancels++[Client]};
-                         false ->
-                             NState
-                     end
-             end).
+cancel_next(#state{queue=Q, cancels=Cancels} =State, _, [_, Client]) ->
+    case lists:member(Client, Q) of
+        true ->
+            queue_next(State#state{queue=Q--[Client],
+                                   cancels=Cancels++[Client]});
+        false ->
+            queue_next(State)
+    end.
 
-cancel_post(State, [_, Client], Result) ->
-    queue_post(State,
-             fun(#state{queue=Q}) ->
-                     case lists:member(Client, Q) of
-                         true when Result =:= 1 ->
-                             true;
-                         true ->
-                             ct:pal("Cancel: ~p", [Result]),
-                             false;
-                         false when Result =:= false ->
-                             true;
-                         false ->
-                             ct:pal("Cancel: ~p", [Result]),
-                             false
-                     end
-             end).
+cancel_post(#state{queue=Q} = State, [_, Client], Result) ->
+    case lists:member(Client, Q) of
+        true when Result =:= 1 ->
+            queue_post(State#state{queue=Q--[Client]});
+        true ->
+            ct:pal("Cancel: ~p", [Result]),
+            false;
+        false when Result =:= false ->
+            queue_post(State#state{queue=Q--[Client]});
+        false ->
+            ct:pal("Cancel: ~p", [Result]),
+            false
+    end.
 
 len_args(#state{sregulator=Regulator}) ->
     [Regulator, ?TIMEOUT].
@@ -525,11 +519,10 @@ shutdown_client_next(#state{queue=Q, valve=V, cancels=Cancels,
                             done=Done} = State, _, [_, Client]) ->
     case lists:member(Client, Q) orelse lists:member(Client, V) of
         true ->
-            queue_next(State,
-                       fun(#state{queue=NQ, valve=NV} = NState) ->
-                               NState2 = NState#state{queue=NQ--[Client],
-                                                      valve=NV--[Client],
-                                                      done=Done--[Client]},
+            queue_next(State#state{queue=Q--[Client]},
+                       fun(#state{valve=NV, done=NDone} = NState) ->
+                               NState2 = NState#state{valve=NV--[Client],
+                                                      done=NDone--[Client]},
                                valve_next(NState2)
                        end);
         false ->
@@ -541,10 +534,9 @@ shutdown_client_post(State, [_, undefined], _) ->
 shutdown_client_post(#state{queue=Q, valve=V} = State, [_, Client], _) ->
     case lists:member(Client, Q) orelse lists:member(Client, V) of
         true ->
-            {Drops, NState} = queue_aqm(State),
-            #state{queue=NQ, valve=NV, cancels=Cancels, done=Done} = NState,
-            NState2 = NState#state{queue=NQ--[Client],
-                                   valve=NV--[Client],
+            {Drops, NState} = queue_aqm(State#state{queue=Q--[Client]}),
+            #state{valve=NV, cancels=Cancels, done=Done} = NState,
+            NState2 = NState#state{valve=NV--[Client],
                                    cancels=Cancels--[Client],
                                    done=Done--[Client]},
             drops_post(Drops--[Client]) andalso valve_post(NState2);
@@ -624,9 +616,6 @@ change_code_post(_, [_, bad, _], {error, {bad_return_value, bad}}) ->
     true;
 change_code_post(_, _, _) ->
     false.
-
-
-
 
 resume_args(State) ->
     sys_args(State).

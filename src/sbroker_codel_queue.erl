@@ -108,27 +108,22 @@ init(Q, Time, Args) ->
       State :: #state{},
       NState :: #state{},
       NextTimeout :: integer() | infinity.
-handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
-    {NState, TimeoutNext} = handle_timeout(Time, State),
-    case NState of
-        #state{max=Max, len=Max, drop=drop_r} ->
-            sbroker_queue:drop(From, SendTime, Time),
-            {NState, TimeoutNext};
-        #state{max=Max, len=Max, drop=drop, queue=Q} = NState ->
-            {{value, Item}, NQ} = queue:out(Q),
-            drop_item(Time, Item),
-            Ref = monitor(process, Pid),
-            NQ2 = queue:in({SendTime, From, Value, Ref}, NQ),
-            {NState#state{queue=NQ2}, TimeoutNext};
-        #state{len=0, queue=Q, target=Target} = NState ->
-            Ref = monitor(process, Pid),
-            NQ = queue:in({SendTime, From, Value, Ref}, Q),
-            {NState#state{len=1, queue=NQ}, max(Time, SendTime+Target)};
-        #state{len=Len, queue=Q} = NState ->
-            Ref = monitor(process, Pid),
-            NQ = queue:in({SendTime, From, Value, Ref}, Q),
-            {NState#state{len=Len+1, queue=NQ}, TimeoutNext}
-    end.
+handle_in(SendTime, From, _, Time,
+          #state{max=Max, len=Max, drop=drop_r} = State) ->
+    sbroker_queue:drop(From, SendTime, Time),
+    handle_timeout(Time, State);
+handle_in(SendTime, {Pid, _} = From, Value, Time,
+          #state{max=Max, len=Max, drop=drop, queue=Q} = State) ->
+    {{value, Item}, NQ} = queue:out(Q),
+    drop_item(Time, Item),
+    Ref = monitor(process, Pid),
+    NQ2 = queue:in({SendTime, From, Value, Ref}, NQ),
+    in_timeout(Time, Max, NQ2, State);
+handle_in(SendTime, {Pid, _} = From, Value, Time,
+          #state{len=Len, queue=Q} = State) ->
+    Ref = monitor(process, Pid),
+    NQ = queue:in({SendTime, From, Value, Ref}, Q),
+    in_timeout(Time, Len+1, NQ, State).
 
 %% @private
 -spec handle_out(Time, State) ->
@@ -177,7 +172,7 @@ handle_timeout(Time, #state{peek_next=PeekNext} = State) when PeekNext > Time ->
 handle_timeout(Time, #state{drop_first=dropping, drop_next=DropNext} = State)
   when DropNext > Time ->
     {State, DropNext};
-handle_timeout(Time,  #state{drop_first=DropFirst} = State)
+handle_timeout(Time, #state{drop_first=DropFirst} = State)
   when is_integer(DropFirst) andalso DropFirst > Time ->
     {State, DropFirst};
 handle_timeout(Time, #state{target=Target, len=Len, queue=Q} = State) ->
@@ -191,9 +186,7 @@ handle_timeout(Time, #state{target=Target, len=Len, queue=Q} = State) ->
       Cancelled :: false | pos_integer(),
       NState :: #state{},
       NextTimeout :: integer() | infinity.
-handle_cancel(Tag, Time, State) ->
-    {#state{len=Len, queue=Q} = NState, TimeoutNext} =
-        handle_timeout(Time, State),
+handle_cancel(Tag, Time, #state{len=Len, queue=Q} = State) ->
     Cancel = fun({_, {_, Tag2}, _, Ref}) when Tag2 =:= Tag ->
                      demonitor(Ref, [flush]),
                      false;
@@ -201,11 +194,14 @@ handle_cancel(Tag, Time, State) ->
                      true
              end,
     NQ = queue:filter(Cancel, Q),
-    case queue:len(NQ) of
+    NLen = queue:len(NQ),
+    NState = State#state{len=NLen, queue=NQ},
+    {NState2, TimeoutNext} = handle_timeout(Time, NState),
+    case NLen of
         Len ->
-            {false, NState, TimeoutNext};
-        NLen ->
-            {Len - NLen, NState#state{len=NLen, queue=NQ}, TimeoutNext}
+            {false, NState2, TimeoutNext};
+        _ ->
+            {Len - NLen, NState2, TimeoutNext}
     end.
 
 %% @private
@@ -215,10 +211,9 @@ handle_cancel(Tag, Time, State) ->
       State :: #state{},
       NState :: #state{},
       NextTimeout :: integer() | infinity.
-handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
-    {#state{queue=Q} = NState, TimeoutNext} = handle_timeout(Time, State),
+handle_info({'DOWN', Ref, _, _, _}, Time, #state{queue=Q} = State) ->
     NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
-    {NState#state{len=queue:len(NQ), queue=NQ}, TimeoutNext};
+    handle_timeout(Time, State#state{len=queue:len(NQ), queue=NQ});
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
 
@@ -256,6 +251,20 @@ terminate(_, #state{queue=Q}) ->
     Q.
 
 %% Internal
+
+in_timeout(Time, Len, Q, #state{peek_next=PeekNext} = State)
+  when PeekNext > Time ->
+    {State#state{len=Len, queue=Q}, PeekNext};
+in_timeout(Time, Len, Q,
+               #state{drop_first=dropping, drop_next=DropNext} = State)
+  when DropNext > Time ->
+    {State#state{len=Len, queue=Q}, DropNext};
+in_timeout(Time, Len, Q, #state{drop_first=DropFirst} = State)
+  when is_integer(DropFirst) andalso DropFirst > Time ->
+    {State#state{len=Len, queue=Q}, DropFirst};
+in_timeout(Time, Len, Q, #state{target=Target} = State) ->
+    NState = State#state{len=Len, queue=Q},
+    timeout_peek(queue:get(Q), Time - Target, Time, Len, Q, NState).
 
 timeout_peek({Send, _, _, _}, MinSend, _, _, _,
              #state{drop_first=infinity, target=Target} = State)

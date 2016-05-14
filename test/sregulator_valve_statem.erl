@@ -488,8 +488,6 @@ result_post(Observed, Expected) ->
     ct:pal("Result~nExpected: ~p~nObserved: ~p", [Expected, Observed]),
     false.
 
-
-
 spawn_client() ->
     Parent = self(),
     spawn_monitor(fun() -> client_init(Parent) end).

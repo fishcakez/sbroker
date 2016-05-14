@@ -211,20 +211,19 @@ init_or_change_next(#state{list=L, time=PrevTime, send_time=SendTime}, Value,
     NState = State#state{list=L, time=PrevTime, send_time=SendTime},
     change_next(NState, Time, Q, Timeout).
 
-change_next(#state{max=Max, list=L, drop=Drop, drops=Drops} = State, Time, Q,
-            Timeout) ->
-    case length(L) of
-        Len when Len > Max andalso Drop =:= drop ->
-            {Drops2, NL} = lists:split(Len-Max, L),
-            NState = State#state{list=NL, drops=Drops++Drops2},
-            manager_next(NState, handle_timeout, Time, Q, Timeout);
-        Len when Len > Max andalso Drop =:= drop_r ->
-            {NL, Drops2} = lists:split(Max, L),
-            NState = State#state{list=NL, drops=Drops++Drops2},
-            manager_next(NState, handle_timeout, Time, Q, Timeout);
-        _ ->
-            manager_next(State, handle_timeout, Time, Q, Timeout)
-    end.
+change_next(State, Time, Q, Timeout) ->
+    Next = fun(#state{list=L, max=Max, drop=drop, drops=Drops} = NState)
+                 when length(L) > Max ->
+                   {Drops2, NL} = lists:split(length(L)-Max, L),
+                   NState#state{list=NL, drops=Drops++Drops2};
+              (#state{list=L, max=Max, drop=drop_r, drops=Drops} = NState)
+                when length(L) > Max ->
+                   {NL, Drops2} = lists:split(Max, L),
+                   NState#state{list=NL, drops=Drops++Drops2};
+              (NState) ->
+                   NState
+           end,
+    manager_next(State, handle_timeout, Time, Q, Timeout, Next).
 
 init_or_change_post(#state{manager=undefined}, _, _) ->
     true;
@@ -243,26 +242,21 @@ init_or_change_post(#state{list=L, time=PrevTime, send_time=SendTime},
     NState = State#state{list=L, time=PrevTime, send_time=SendTime},
     change_post(NState, Time, Q, Timeout).
 
-change_post(#state{max=Max, list=L, drop=Drop, drops=Drops} = State, Time, Q,
-            Timeout) ->
-    case length(L) of
-        Len when Len > Max andalso Drop =:= drop ->
-            {Drops2, NL} = lists:split(Len-Max, L),
-            NState = State#state{list=NL, drops=Drops++Drops2},
-            {Result, NState2} =
-                manager_post(NState, handle_timeout, Time, Q, Timeout),
-            Result andalso post(NState2);
-        Len when Len > Max andalso Drop =:= drop_r ->
-            {NL, Drops2} = lists:split(Max, L),
-            NState = State#state{list=NL, drops=Drops++Drops2},
-            {Result, NState2} =
-                manager_post(NState, handle_timeout, Time, Q, Timeout),
-            Result andalso post(NState2);
-        _ ->
-            {Result, NState} =
-                manager_post(State, handle_timeout, Time, Q, Timeout),
-            Result andalso post(NState)
-    end.
+change_post(State, Time, Q, Timeout) ->
+    Post = fun(#state{list=L, max=Max, drop=drop, drops=Drops} = NState)
+                 when length(L) > Max ->
+                   {Drops2, NL} = lists:split(length(L)-Max, L),
+                   Result = drops_post(Drops2),
+                   {Result, NState#state{list=NL, drops=Drops++Drops2}};
+              (#state{list=L, max=Max, drop=drop_r, drops=Drops} = NState)
+                when length(L) > Max ->
+                   {NL, Drops2} = lists:split(Max, L),
+                   Result = drops_post(Drops2),
+                   {Result, NState#state{list=NL, drops=Drops++Drops2}};
+              (NState) ->
+                   {true, NState}
+           end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post).
 
 info() ->
     oneof([{x}, {y}, {z}]).
@@ -288,42 +282,37 @@ in_next(State, Value,
     Elem = {Time - SendTime, {Pid, Tag}, Info},
     Q = {call, erlang, element, [2, Value]},
     Timeout = {call, erlang, element, [3, Value]},
-    in_next(State#state{send_time=SendTime}, Time, Elem, Q, Timeout).
-
-in_next(State, Time, Elem, Q, Timeout) ->
-    case manager_next(State, handle_timeout, Time, Q, Timeout) of
-        #state{max=0, drops=Drops} = NState2 ->
-            NState2#state{drops=Drops ++ [Elem]};
-        #state{drop=drop, max=Max, list=L, drops=Drops} = NState2
-          when length(L) =:= Max ->
-            NState2#state{list=tl(L)++[Elem], drops=Drops ++ [hd(L)]};
-        #state{drop=drop_r, max=Max, list=L, drops=Drops} = NState2
-          when length(L) =:= Max ->
-            NState2#state{drops=Drops ++ [Elem]};
-        #state{list=L} = NState2 ->
-            NState2#state{list=L++[Elem]}
-    end.
+    Next = fun(#state{max=0, drops=Drops} = NState) ->
+                   NState#state{drops=Drops ++ [Elem]};
+              (#state{drop=drop, max=Max, list=L, drops=Drops} = NState)
+                when length(L) =:= Max ->
+                   NState#state{list=tl(L)++[Elem], drops=Drops ++ [hd(L)]};
+              (#state{drop=drop_r, max=Max, list=L, drops=Drops} = NState)
+                when length(L) =:= Max ->
+                   NState#state{drops=Drops ++ [Elem]};
+              (#state{list=L} = NState) ->
+                   NState#state{list=L++[Elem]}
+           end,
+    manager_next(State#state{send_time=SendTime}, handle_timeout, Time, Q,
+                 Timeout, Next).
 
 in_post(State, [_, SendTime, Tag, Info, Time, _], {Pid, Q, Timeout}) ->
-    Elem = {Time - SendTime, {Pid, Tag}, Info},
-    {Result, NState} = in_post(State, Time, Elem, Q, Timeout),
-    Result andalso post(NState).
-
-in_post(State, Time, {Sojourn, From, _} = Elem, Q, Timeout) ->
-    case manager_post(State, handle_timeout, Time, Q, Timeout) of
-        {true, #state{max=0} = NState} ->
-            {drop_post(From, Sojourn), NState};
-        {true,
-         #state{drop=drop, max=Max,
-                list=[{Sojourn2, From2, _} | NL] = L} = NState}
-          when length(L) =:= Max ->
-            {drop_post(From2, Sojourn2), NState#state{list=NL++[Elem]}};
-        {true, #state{drop=drop_r, max=Max, list=L} = NState}
-          when length(L) =:= Max ->
-            {drop_post(From, Sojourn), NState};
-        {Result, #state{list=L} = NState} ->
-            {Result, NState#state{list=L++[Elem]}}
-    end.
+    From = {Pid, Tag},
+    Sojourn = Time - SendTime,
+    Elem = {Time - SendTime, From, Info},
+    Post = fun(#state{max=0} = NState) ->
+                   {drop_post(From, Sojourn), NState};
+              (#state{drop=drop, max=Max,
+                      list=[{Sojourn2, From2, _} | NL] = L} = NState)
+                when length(L) =:= Max ->
+                   {drop_post(From2, Sojourn2), NState#state{list=NL++[Elem]}};
+              (#state{drop=drop_r, max=Max, list=L} = NState)
+                when length(L) =:= Max ->
+                   {drop_post(From, Sojourn), NState};
+              (#state{list=L} = NState) ->
+                   {true, NState#state{list=L++[Elem]}}
+           end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post).
 
 out_args(#state{time=Time, queue=Q}) ->
     [time(Time), Q].
@@ -334,21 +323,21 @@ handle_out_pre(#state{time=PrevTime}, [Time, _]) ->
 handle_out_next(#state{out=out} = State, Value, [Time, _]) ->
     Q = {call, ?MODULE, handle_out_queue, [Value]},
     Timeout = {call, ?MODULE, handle_out_timeout, [Value]},
-    case manager_next(State, handle_out, Time, Q, Timeout) of
-        #state{list=[]} = NState ->
-            NState;
-        #state{list=[_|L]} = NState ->
-            NState#state{list=L}
-    end;
+    Next = fun(#state{list=[]} = NState) ->
+                   NState;
+              (#state{list=[_|L]} = NState) ->
+                   NState#state{list=L}
+           end,
+    manager_next(State, handle_out, Time, Q, Timeout, Next);
 handle_out_next(#state{out=out_r} = State, Value, [Time, _]) ->
     Q = {call, ?MODULE, handle_out_queue, [Value]},
     Timeout = {call, ?MODULE, handle_out_timeout, [Value]},
-    case manager_next(State, handle_out_r, Time, Q, Timeout) of
-        #state{list=[]} = NState ->
-            NState;
-        #state{list=L} = NState ->
-            NState#state{list=droplast(L)}
-    end.
+    Next = fun(#state{list=[]} = NState) ->
+                   NState;
+              (#state{list=L} = NState) ->
+                   NState#state{list=droplast(L)}
+           end,
+    manager_next(State, handle_out_r, Time, Q, Timeout, Next).
 
 handle_out_queue({_, _, _, _, Q, _}) ->
     Q;
@@ -361,44 +350,53 @@ handle_out_timeout({empty, _}) ->
     infinity.
 
 handle_out_post(#state{out=out} = State, [Time, _], {empty, Q}) ->
-    case manager_post(State, handle_out, Time, Q, infinity) of
-        {true, #state{list=[]} = NState} ->
-            post(NState);
-        _ ->
-            false
-    end;
+    Post = fun(#state{list=[]} = NState) ->
+                   {true, NState};
+              (#state{list=[_|_]} = NState) ->
+                   {false, NState}
+           end,
+    manager_post(State, handle_out, Time, Q, infinity, Post);
 handle_out_post(#state{out=out} = State, [Time, _],
                 {SendTime, From, Info, Ref, Q, Timeout}) ->
-    case manager_post(State, handle_out, Time, Q, Timeout) of
-        {true, #state{list=[{Sojourn, From, Info} | NL]} = NState} ->
-            Time - SendTime =:= Sojourn andalso out_post(Ref) andalso
-            post(NState#state{list=NL});
-        _ ->
-            false
-    end;
+    Post = fun(#state{list=[{Sojourn2, From2, Info2} | NL]} = NState) ->
+                   Result = (Time - SendTime =:= Sojourn2) andalso
+                            From == From2 andalso Info == Info2 andalso
+                            out_post(Ref),
+                   {Result, NState#state{list=NL}};
+              (#state{list=[]} = NState) ->
+                   {false, NState}
+    end,
+    manager_post(State, handle_out, Time, Q, Timeout, Post);
 handle_out_post(#state{out=out_r} = State, [Time, _], {empty, Q}) ->
-    case manager_post(State, handle_out_r, Time, Q, infinity) of
-        {true, #state{list=[]} = NState} ->
-            post(NState);
-        _ ->
-            false
-    end;
+    Post = fun(#state{list=[]} = NState) ->
+                   {true, NState};
+              (#state{list=[_|_]} = NState) ->
+                   {false, NState}
+           end,
+    manager_post(State, handle_out_r, Time, Q, infinity, Post);
 handle_out_post(#state{out=out_r} = State, [Time, _],
                 {SendTime, From, Info, Ref, Q, Timeout}) ->
-    case manager_post(State, handle_out, Time, Q, Timeout) of
-        {true, #state{list=[_|_] = L} = NState} ->
-            Sojourn = Time - SendTime,
-            NL = droplast(L),
-            lists:last(L) =:= {Sojourn, From, Info} andalso
-            out_post(Ref) andalso post(NState#state{list=NL});
-        _ ->
-            false
-    end;
+    Post = fun(#state{list=[_|_] = L} = NState) ->
+                   Sojourn = Time - SendTime,
+                   NL = droplast(L),
+                   Result = lists:last(L) =:= {Sojourn, From, Info} andalso
+                       out_post(Ref),
+                   {Result, NState#state{list=NL}};
+              (#state{list=[]} = NState) ->
+                   {false, NState}
+           end,
+    manager_post(State, handle_out_r, Time, Q, Timeout, Post);
 handle_out_post(_, _, _) ->
     false.
 
 out_post(Ref) ->
-    demonitor(Ref, [flush, info]).
+    case demonitor(Ref, [flush, info]) of
+        true ->
+            true;
+        false ->
+            ct:pal("Monitor ~p does not exist", [Ref]),
+            false
+    end.
 
 timeout_args(#state{time=Time, queue=Q}) ->
     [time(Time), Q].
@@ -409,11 +407,12 @@ handle_timeout_pre(#state{time=PrevTime}, [Time, _]) ->
 handle_timeout_next(State, Value, [Time, _]) ->
     Q = {call, erlang, element, [1, Value]},
     Timeout = {call, erlang, element, [2, Value]},
-    manager_next(State, handle_timeout, Time, Q, Timeout).
+    Next = fun(NState) -> NState end,
+    manager_next(State, handle_timeout, Time, Q, Timeout, Next).
 
 handle_timeout_post(State, [Time, _], {Q, Timeout}) ->
-    {Result, _} =  manager_post(State, handle_timeout, Time, Q, Timeout),
-    Result.
+    Post = fun(NState) -> {true, NState} end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post).
 
 cancel_args(#state{time=Time, queue=Q}) ->
     [tag(), time(Time), Q].
@@ -421,30 +420,38 @@ cancel_args(#state{time=Time, queue=Q}) ->
 handle_cancel_pre(#state{time=PrevTime}, [_, Time, _]) ->
     Time >= PrevTime.
 
-handle_cancel_next(#state{cancels=Cancels} = State, Value, [Tag, Time,  _]) ->
+handle_cancel_next(State, Value, [Tag, Time,  _]) ->
     Q = {call, erlang, element, [2, Value]},
     Timeout = {call, erlang, element, [3, Value]},
-    #state{list=L} = NState =
-        manager_next(State, handle_timeout, Time, Q, Timeout),
-    {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}, _}) -> Tag =/= Tag2 end,
-                                     L),
-    NState#state{list=NL, cancels=Cancels++Cancels2, queue=Q}.
+    Next = fun(#state{list=L, cancels=Cancels} = NState) ->
+                   {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}, _}) ->
+                                                            Tag =/= Tag2
+                                                    end, L),
+                   NState#state{list=NL, cancels=Cancels++Cancels2}
+           end,
+    manager_next(State, handle_timeout, Time, Q, Timeout, Next).
 
-handle_cancel_post(#state{cancels=Cancels} = State, [Tag, Time, _],
-                   {Cancelled, Q, Timeout}) ->
-    {Result, #state{list=L} = NState} =
-        manager_post(State, handle_timeout, Time, Q, Timeout),
-    {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}, _}) -> Tag =/= Tag2 end,
-                                     L),
-    NState2 = NState#state{list=NL, cancels=Cancels ++ Cancels2},
-    case length(Cancels2) of
-        0 when Cancelled =:= false ->
-            Result andalso post(NState2);
-        N when N =:= Cancelled ->
-            Result andalso post(NState2);
-        _ ->
-            false
-    end.
+handle_cancel_post(State, [Tag, Time, _], {Cancelled, Q, Timeout}) ->
+    Post =  fun(#state{list=L, cancels=Cancels} = NState) ->
+                   {NL, Cancels2} = lists:partition(fun({_, {_, Tag2}, _}) ->
+                                                            Tag =/= Tag2
+                                                    end, L),
+                   Result = cancel_post(Cancels2, Cancelled),
+                   {Result, NState#state{list=NL, cancels=Cancels++Cancels2}}
+           end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post).
+
+cancel_post([], false) ->
+    true;
+cancel_post([_|_] = Cancels, Cancelled) when length(Cancels) == Cancelled ->
+    true;
+cancel_post([], Cancelled) ->
+    ct:pal("Cancelled~nExpected: ~p~nObserved: ~p", [false, Cancelled]),
+    false;
+cancel_post([_|_] = Cancels, Cancelled) ->
+    ct:pal("Cancelled~nExpected: ~p~nObserved: ~p", [length(Cancels),
+                                                     Cancelled]),
+    false.
 
 info_args(#state{time=Time, queue=Q}) ->
     [tag(), time(Time), Q].
@@ -455,11 +462,12 @@ handle_info_pre(#state{time=PrevTime}, [_, Time, _]) ->
 handle_info_next(State, Value, [_, Time, _]) ->
     Q = {call, erlang, element, [1, Value]},
     Timeout = {call, erlang, element, [2, Value]},
-    manager_next(State, handle_timeout, Time, Q, Timeout).
+    Next = fun(NState) -> NState end,
+    manager_next(State, handle_timeout, Time, Q, Timeout, Next).
 
 handle_info_post(State, [_, Time, _], {Q, Timeout}) ->
-    {Result, _} =  manager_post(State, handle_timeout, Time, Q, Timeout),
-    Result.
+    Post = fun(NState) -> {true, NState} end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post).
 
 shutdown_args(#state{list=L, cancels=Cancels, outs=Outs, drops=Drops, mod=Mod,
                      time=Time, queue=Q}) ->
@@ -500,38 +508,41 @@ shutdown_pre(#state{time=PrevTime, cancels=Cancels, outs=Outs, drops=Drops},
 shutdown_pre(_, _) ->
     true.
 
-shutdown_next(#state{cancels=Cancels, outs=Outs} = State, Value,
-              [_, {_, From, _}, _, Time, _]) ->
+shutdown_next(State, Value, [_, {_, From, _}, _, Time, _]) ->
     Q = {call, erlang, element, [1, Value]},
     Timeout = {call, erlang, element, [2, Value]},
-    #state{list=L, drops=Drops} = NState =
-        manager_next(State, handle_timeout, Time, Q, Timeout),
-    Remove = fun({_, From2, _}) -> From2 =/= From end,
-    NL = lists:filter(Remove, L),
-    NDrops = lists:filter(Remove, Drops),
-    NCancels = lists:filter(Remove, Cancels),
-    NOuts = lists:filter(Remove, Outs),
-    NDrops = lists:filter(Remove, Drops),
-    NState#state{list=NL, drops=NDrops, cancels=NCancels, outs=NOuts, queue=Q};
+    Next = fun(#state{list=L, cancels=Cancels, outs=Outs,
+                      drops=Drops} = NState) ->
+                   Remove = fun({_, From2, _}) -> From2 =/= From end,
+                   NL = lists:filter(Remove, L),
+                   NCancels = lists:filter(Remove, Cancels),
+                   NOuts = lists:filter(Remove, Outs),
+                   NDrops = lists:filter(Remove, Drops),
+                   NState#state{list=NL, drops=NDrops, cancels=NCancels,
+                                outs=NOuts}
+           end,
+    manager_next(State, handle_timeout, Time, Q, Timeout, Next);
 shutdown_next(State, Value, [_, self, _, Time, _]) ->
     Q = {call, erlang, element, [1, Value]},
     Timeout = {call, erlang, element, [2, Value]},
-    manager_next(State, handle_timeout, Time, Q, Timeout).
+    Next = fun(NState) -> NState end,
+    manager_next(State, handle_timeout, Time, Q, Timeout, Next).
 
-shutdown_post(#state{cancels=Cancels, outs=Outs} = State,
-              [_, {_, From, _}, _, Time, _], {Q, Timeout}) ->
-    {Result, #state{list=L, drops=Drops} = NState} =
-        manager_post(State, handle_timeout, Time, Q, Timeout, From),
-    Remove = fun({_, From2, _}) -> From2 =/= From end,
-    NL = lists:filter(Remove, L),
-    NCancels = lists:filter(Remove, Cancels),
-    NOuts = lists:filter(Remove, Outs),
-    NDrops = lists:filter(Remove, Drops),
-    Result andalso
-    post(NState#state{list=NL, cancels=NCancels, outs=NOuts, drops=NDrops});
+shutdown_post(State, [_, {_, From, _}, _, Time, _], {Q, Timeout}) ->
+    Post = fun(#state{list=L, cancels=Cancels, outs=Outs,
+                      drops=Drops} = NState) ->
+                   Remove = fun({_, From2, _}) -> From2 =/= From end,
+                   NL = lists:filter(Remove, L),
+                   NCancels = lists:filter(Remove, Cancels),
+                   NOuts = lists:filter(Remove, Outs),
+                   NDrops = lists:filter(Remove, Drops),
+                   {true, NState#state{list=NL, drops=NDrops, cancels=NCancels,
+                                       outs=NOuts}}
+           end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post, From);
 shutdown_post(State, [_, self, _, Time, _], {Q, Timeout}) ->
-    {Result, NState} = manager_post(State, handle_timeout, Time, Q, Timeout),
-    Result andalso post(NState);
+    Post = fun(NState) -> {true, NState} end,
+    manager_post(State, handle_timeout, Time, Q, Timeout, Post);
 shutdown_post(_, [_, {_, {Pid, _}, _}, _, _, _], timeout) ->
     ct:pal("Pid ~p DOWN timeout", [Pid]),
     false.
@@ -546,7 +557,13 @@ len_next(State, _, _) ->
     State.
 
 len_post(#state{list=L}, _, Len) ->
-    length(L) =:= Len.
+    case length(L) of
+        Len ->
+            true;
+        ExpLen ->
+            ct:pal("Length~nExpected: ~p~nObserved: ~p", [ExpLen, Len]),
+            false
+    end.
 
 terminate_args(#state{queue=Q}) ->
     [oneof([shutdown, normal, abnormal]), Q].
@@ -563,56 +580,79 @@ terminate_post(#state{time=Time, list=L} = State, _, Result) ->
      {SendTime, From, Info, _} <- queue:to_list(Result)] =:= L andalso
     post(State).
 
-manager_next(State, Fun, Time, Q, Timeout) ->
-    NState = State#state{queue=Q, timeout_time=Timeout},
-    {_, NState2} = manager(NState, Fun, Time),
-    NState2.
+manager_next(State, Fun, Time, Q, Timeout, Next) ->
+    NState = update_time(State#state{queue=Q, timeout_time=Timeout}, Time),
+    {_, NState2} = manager(manager_before(NState, Fun, Next, next), Fun, Time),
+    manager_after(NState2, Fun, Next, next).
 
-manager_post(State, Fun, Time, Q, Timeout) ->
-    manager_post(State, Fun, Time, Q, Timeout, ignore).
+manager_post(State, Fun, Time, Q, Timeout, Post) ->
+    manager_post(State, Fun, Time, Q, Timeout, Post, ignore).
 
 manager_post(#state{manager=Manager, timeout_time=PrevTimeout} = State, Fun,
-             Time, Q, Timeout, Skip) ->
-    NState = State#state{queue=Q, timeout_time=Timeout},
-    {Drops, NState2} = manager(NState, Fun, Time),
-    #state{list=L, manager_state=ManState} = NState2,
-    Result = lists:all(fun({_, From, _}) when From =:= Skip ->
-                               true;
-                          ({Sojourn, From, _}) ->
-                               drop_post(From, Sojourn)
-                       end, Drops),
+             Time, Q, Timeout, Post, Skip) ->
+    NState = update_time(State#state{queue=Q, timeout_time=Timeout}, Time),
+    {Result1, NState2} = manager_before(NState, Fun, Post, post),
+    {Drops, NState3} = manager(NState2, Fun, Time),
+    Result2 = lists:all(fun({_, From, _}) when From =:= Skip ->
+                                true;
+                           ({Sojourn, From, _}) ->
+                                drop_post(From, Sojourn)
+                        end, Drops),
+    {Result3, NState4} = manager_after(NState3, Fun, Post, post),
+    Result = Result1 andalso Result2 andalso Result3 andalso post(NState4),
+    #state{list=L, manager_state=ManState} = NState4,
     case Manager:time_dependence(ManState) of
         _ when Timeout =:= ignore ->
-            {true, NState2};
+            Result;
         dependent
           when is_integer(PrevTimeout), PrevTimeout > Time, Drops =/= [] ->
             ct:pal("No drops and previous timeout ~p>~p", [PrevTimeout, Time]),
-            {false, NState2};
+            false;
         dependent when Timeout < Time ->
             ct:pal("Timeout ~p<~p", [Timeout]),
-            {false, NState2};
+            false;
         dependent when Timeout =:= infinity andalso L =/= [] ->
             ct:pal("Infinity timeout but non-empty queue ~p", [L]),
-            {false, NState2};
+            false;
         dependent when not (is_integer(Timeout) orelse Timeout =:= infinity) ->
             ct:pal("Invalid timeout ~p", [Timeout]),
-            {false, NState2};
+            false;
         independent when Timeout =/= infinity ->
             ct:pal("Non-infinity timeout ~p", [Timeout]),
-            {false, NState2};
+            false;
         _ ->
-            {Result, NState2}
+            Result
     end.
 
-manager(#state{manager=Manager, manager_state=ManState, list=L, drops=Drops,
-               time=PrevTime} = State, Fun, Time) ->
+update_time(#state{list=L, time=PrevTime} = State, Time) ->
     NL = [{Sojourn + Time - PrevTime, From, Info} ||
           {Sojourn, From, Info} <- L],
-    {Sojourns, _, _} = lists:unzip3(NL),
+    State#state{list=NL, time=Time}.
+
+manager_before(State, handle_timeout, Fun, _) ->
+    Fun(State);
+manager_before(State, _, _, next) ->
+    State;
+manager_before(State, _, _, post) ->
+    {true, State}.
+
+manager(#state{manager=Manager, manager_state=ManState, list=L,
+               drops=Drops} = State, Fun, Time) ->
+    {Sojourns, _, _} = lists:unzip3(L),
     {DropCount, NManState} = Manager:Fun(Time, Sojourns, ManState),
-    {Drops2, NL2} = lists:split(DropCount, NL),
-    {Drops2, State#state{time=Time, list=NL2, drops=Drops++Drops2,
+    {Drops2, NL} = lists:split(DropCount, L),
+    {Drops2, State#state{time=Time, list=NL, drops=Drops++Drops2,
                          manager_state=NManState}}.
+
+manager_after(State, handle_timeout, _, next) ->
+    State;
+manager_after(State, handle_timeout, _, post) ->
+    {true, State};
+manager_after(State, _, Fun, _) ->
+    Fun(State).
+
+drops_post(Drops) ->
+    lists:all(fun({Sojourn, From, _}) -> drop_post(From, Sojourn) end, Drops).
 
 drop_post({Pid, Tag} = From, Sojourn) ->
     client_msgs(Pid, [{Tag, {drop, Sojourn}}]) andalso no_monitor(From).

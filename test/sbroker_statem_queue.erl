@@ -48,11 +48,10 @@
 init(Q, Time, {Out, Drops}) ->
     handle_timeout(Time, #state{config=Drops, out=Out, drops=Drops, queue=Q}).
 
-handle_in(SendTime, {Pid, _} = From, Value, Time, State) ->
-    {#state{queue=Q} = NState, TimeoutNext} = handle_timeout(Time, State),
+handle_in(SendTime, {Pid, _} = From, Value, Time, #state{queue=Q} = State) ->
     Ref = monitor(process, Pid),
-    NState2 = NState#state{queue=queue:in({SendTime, From, Value, Ref}, Q)},
-    {NState2, TimeoutNext}.
+    NState = State#state{queue=queue:in({SendTime, From, Value, Ref}, Q)},
+    handle_timeout(Time, NState).
 
 handle_out(Time, #state{out=Out} = State) ->
     {#state{queue=Q} = NState, TimeoutNext} = handle_timeout(Time, State),
@@ -73,8 +72,7 @@ handle_timeout(Time, #state{queue=Q} = State) ->
             {timeout(Time, State), infinity}
     end.
 
-handle_cancel(Tag, Time, State) ->
-    {#state{queue=Q} = NState, TimeoutNext} = handle_timeout(Time, State),
+handle_cancel(Tag, Time, #state{queue=Q} = State) ->
     Len = queue:len(Q),
     Cancel = fun({_, {_, Tag2}, _, Ref}) when Tag2 =:= Tag ->
                      demonitor(Ref, [flush]),
@@ -83,17 +81,17 @@ handle_cancel(Tag, Time, State) ->
                      true
              end,
     NQ = queue:filter(Cancel, Q),
+    {NState, TimeoutNext} = handle_timeout(Time, State#state{queue=NQ}),
     case queue:len(NQ) of
         Len ->
             {false, NState, TimeoutNext};
         NLen ->
-            {Len - NLen, NState#state{queue=NQ}, TimeoutNext}
+            {Len - NLen, NState, TimeoutNext}
     end.
 
-handle_info({'DOWN', Ref, _, _, _}, Time, State) ->
-    {#state{queue=Q} = NState, TimeoutNext} = handle_timeout(Time, State),
+handle_info({'DOWN', Ref, _, _, _}, Time, #state{queue=Q} = State) ->
     NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
-    {NState#state{queue=NQ}, TimeoutNext};
+    handle_timeout(Time, State#state{queue=NQ});
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
 
