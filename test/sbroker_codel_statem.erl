@@ -52,26 +52,30 @@
 -export([handle_out_r/3]).
 -export([config_change/3]).
 
--record(state, {target, interval, count=0, drop_next=undefined,
+-record(state, {target, interval, max_packet, count=0, drop_next=undefined,
                 first_above_time=undefined, dropping=false, now=undefined}).
 
 module() ->
     sbroker_codel_queue.
 
 args() ->
-    {oneof([out, out_r]),
-     choose(0, 3),
-     choose(1, 3),
-     oneof([drop, drop_r]),
-     oneof([choose(0, 5), infinity])}.
+    ?SUCHTHAT({_, _, _, _, Min, Max},
+              {oneof([out, out_r]),
+               choose(0, 3),
+               choose(1, 3),
+               oneof([drop, drop_r]),
+               choose(0, 3),
+               oneof([choose(0, 5), infinity])},
+              Min =< Max).
 
 time_dependence(#state{}) ->
     dependent.
 
-init({Out, Target, Interval, Drop, Max}) ->
+init({Out, Target, Interval, Drop, Min, Max}) ->
     NTarget = sbroker_util:sojourn_target(Target),
     NInterval = sbroker_util:interval(Interval),
-    {Out, Drop, Max, #state{target=NTarget, interval=NInterval}}.
+    {Out, Drop, Min, Max, #state{target=NTarget, interval=NInterval,
+                                 max_packet=Min}}.
 
 %% To ensure following the reference codel implementationas closely as possible
 %% use the full dequeue approach and "undo" the following:
@@ -82,41 +86,45 @@ init({Out, Target, Interval, Drop, Max}) ->
 handle_timeout(Time, L, #state{first_above_time=undefined} = State) ->
     handle_out(Time, L, State);
 handle_timeout(Time, L, #state{dropping=true, target=Target,
+                               max_packet=MaxPacket,
                                first_above_time=FirstAbove} = State) ->
     {N, NState} = handle_out(Time, L, State),
     case lists:split(N, L) of
         {[], _} ->
             %% No items dropped so state does not change.
             {0, State};
-        {_, [Sojourn | _]} when Sojourn >= Target ->
-            %% Next item is slow and was not dropped so still dropping.
+        {_, [Sojourn | _] = NL}
+          when Sojourn >= Target, length(NL) > MaxPacket ->
+            %% Next item is slow, queue size is greater than max packet and item
+            %% was not dropped so still dropping.
             {N, NState};
         {Dropped, _} ->
-            %% Next item is not below target or queue is empty, so dropping may
-            %% have been set to false. Reverse any state changes that occured by
-            %% observing this.
-            case handle_out(Time, Dropped ++ [Target], State) of
+            %% Next item is below target, queue size is less than max packet or
+            %% queue is empty, so dropping may have been set to false.
+            %% Reverse any state changes that occured by observing this.
+            Pad = lists:duplicate(MaxPacket + 1, Target),
+            case handle_out(Time, Dropped ++ Pad, State) of
                 {N, NState2} ->
                     {N, NState2};
-                _ ->
+                {M, _} when M == N+1 ->
                     NState2 = NState#state{count=NState#state.count+1,
                                            dropping=true,
                                            first_above_time=FirstAbove},
-                    NState3 = control_law(NState#state.drop_next, NState2),
-                    {N, NState3}
+                    {N, control_law(NState#state.drop_next, NState2)}
             end
     end;
 handle_timeout(Time, L, #state{dropping=false,
                                first_above_time=FirstAbove} = State) ->
     case handle_out(Time, L, State) of
         {0, NState} ->
-            %% Head might be below target, or empty queue, maintain previous
-            %% first_above_time.
+            %% Head might be below target, queue size below max packet or empty
+            %% queue, maintain previous first_above_time.
             {0, NState#state{first_above_time=FirstAbove}};
         {1, NState} ->
             %% End of first interval resulted in drop. If new head is below
-            %% target, or empty queue, first_above_time is reset, maintain
-            %% previous. Dropping is always true after first drop.
+            %% target, queue size is less than or equal to max packet
+            %% first_above_time is reset, maintain previous. Dropping is always
+            %% true after first drop.
             {1, NState#state{first_above_time=FirstAbove}}
     end.
 
@@ -129,24 +137,24 @@ handle_out(Time, L, State) ->
             dequeue_not_dropping(Item, NL, NState)
     end.
 
-handle_out_r(Time, L, State) ->
+handle_out_r(Time, L, #state{max_packet=MaxPacket} = State) ->
     case handle_timeout(Time, L, State) of
-        {Drops, NState} when Drops =:= length(L) ->
+        {Drops, NState} when (length(L) - Drops) =< MaxPacket ->
             {Drops, NState#state{first_above_time=undefined}};
         {Drops, NState} ->
             {Drops, NState}
     end.
 
-config_change(Time, {Out, Target, Interval, Drop, Max},
+config_change(Time, {Out, Target, Interval, Drop, Min, Max},
               #state{first_above_time=FirstAbove,
                      drop_next=DropNext} = State) ->
     NTarget = sbroker_util:sojourn_target(Target),
     NInterval = sbroker_util:interval(Interval),
     NFirstAbove = reduce(FirstAbove, Time+NInterval),
     NDropNext = reduce(DropNext, Time+NInterval),
-    NState = State#state{target=NTarget, interval=NInterval,
+    NState = State#state{target=NTarget, interval=NInterval, max_packet=Min,
                          first_above_time=NFirstAbove, drop_next=NDropNext},
-    {Out, Drop, Max, NState}.
+    {Out, Drop, Min, Max, NState}.
 
 reduce(undefined, _) ->
     undefined;
@@ -197,6 +205,9 @@ do_dequeue([], State) ->
 do_dequeue([SojournTime | L], #state{target=Target} = State)
   when SojournTime < Target ->
     {{nodrop, SojournTime}, L, State#state{first_above_time=undefined}};
+do_dequeue([SojournTime | NL] = L, #state{max_packet=MaxPacket} = State)
+  when length(L) =< MaxPacket ->
+    {{nodrop, SojournTime}, NL, State#state{first_above_time=undefined}};
 do_dequeue([SojournTime | L], #state{interval=Interval, now=Now,
                                      first_above_time=undefined} = State) ->
     FirstAbove = Now + Interval,

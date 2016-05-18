@@ -41,7 +41,7 @@
 -export([shutdown/5]).
 
 -record(state, {manager, manager_state, mod, queue, list=[], outs=[],
-                cancels=[], drops=[], out, drop, max, time, send_time,
+                cancels=[], drops=[], out, drop, min, max, time, send_time,
                 timeout_time}).
 
 quickcheck() ->
@@ -191,16 +191,18 @@ init_or_change_next(#state{manager=undefined} = State, Value,
                     [_, _, Manager, Mod, Args, Time]) ->
     Q = {call, erlang, element, [2, Value]},
     Timeout = {call, erlang, element, [3, Value]},
-    {Out, Drop, Max, ManState} = Manager:init(Args),
+    {Out, Drop, Min, Max, ManState} = Manager:init(Args),
     State#state{manager=Manager, mod=Mod, queue=Q, time=Time, send_time=Time,
                 timeout_time=Timeout, manager_state=ManState, out=Out,
-                drop=Drop, max=Max};
+                drop=Drop, min=Min, max=Max};
 init_or_change_next(#state{manager=Manager, manager_state=ManState} = State,
                    Value, [Mod, _, Manager, Mod, Args, Time]) ->
     Q = {call, erlang, element, [2, Value]},
     Timeout = {call, erlang, element, [3, Value]},
-    {Out, Drop, Max, NManState} = Manager:config_change(Time, Args, ManState),
-    NState = State#state{manager_state=NManState, out=Out, drop=Drop, max=Max},
+    {Out, Drop, Min, Max, NManState} = Manager:config_change(Time, Args,
+                                                             ManState),
+    NState = State#state{manager_state=NManState, out=Out, drop=Drop, min=Min,
+                         max=Max},
     change_next(NState, Time, Q, Timeout);
 init_or_change_next(#state{list=L, time=PrevTime, send_time=SendTime}, Value,
                     [_, _, Manager, Mod, Args, Time]) ->
@@ -229,9 +231,10 @@ init_or_change_post(#state{manager=undefined}, _, _) ->
     true;
 init_or_change_post(#state{manager=Manager, manager_state=ManState} = State,
                     [Mod, _, Manager, Mod, Args, Time], {ok, Q, Timeout}) ->
-    {Out, Drop, Max, NManState} = Manager:config_change(Time, Args, ManState),
-    NState = State#state{manager_state=NManState, out=Out, drop=Drop, max=Max,
-                         timeout_time=Time},
+    {Out, Drop, Min, Max, NManState} = Manager:config_change(Time, Args,
+                                                             ManState),
+    NState = State#state{manager_state=NManState, out=Out, drop=Drop, min=Min,
+                         max=Max, timeout_time=Time},
     change_post(NState, Time, Q, Timeout);
 init_or_change_post(#state{list=L, time=PrevTime, send_time=SendTime},
                     [_, _, Manager, Mod, Args, Time],
@@ -352,7 +355,8 @@ handle_out_timeout({empty, _}) ->
 handle_out_post(#state{out=out} = State, [Time, _], {empty, Q}) ->
     Post = fun(#state{list=[]} = NState) ->
                    {true, NState};
-              (#state{list=[_|_]} = NState) ->
+              (#state{list=[_|_] = L} = NState) ->
+                   ct:pal("Not empty ~p", [L]),
                    {false, NState}
            end,
     manager_post(State, handle_out, Time, Q, infinity, Post);
@@ -364,13 +368,15 @@ handle_out_post(#state{out=out} = State, [Time, _],
                             out_post(Ref),
                    {Result, NState#state{list=NL}};
               (#state{list=[]} = NState) ->
+                   ct:pal("Should be empty", []),
                    {false, NState}
     end,
     manager_post(State, handle_out, Time, Q, Timeout, Post);
 handle_out_post(#state{out=out_r} = State, [Time, _], {empty, Q}) ->
     Post = fun(#state{list=[]} = NState) ->
                    {true, NState};
-              (#state{list=[_|_]} = NState) ->
+              (#state{list=[_|_] = L} = NState) ->
+                   ct:pal("Not empty ~p", [L]),
                    {false, NState}
            end,
     manager_post(State, handle_out_r, Time, Q, infinity, Post);
@@ -383,6 +389,7 @@ handle_out_post(#state{out=out_r} = State, [Time, _],
                        out_post(Ref),
                    {Result, NState#state{list=NL}};
               (#state{list=[]} = NState) ->
+                   ct:pal("Should be empty"),
                    {false, NState}
            end,
     manager_post(State, handle_out_r, Time, Q, Timeout, Post);
@@ -600,19 +607,30 @@ manager_post(#state{manager=Manager, timeout_time=PrevTimeout} = State, Fun,
                         end, Drops),
     {Result3, NState4} = manager_after(NState3, Fun, Post, post),
     Result = Result1 andalso Result2 andalso Result3 andalso post(NState4),
-    #state{list=L, manager_state=ManState} = NState4,
+    #state{list=L, min=Min, manager_state=ManState} = NState4,
     case Manager:time_dependence(ManState) of
         _ when Timeout =:= ignore ->
             Result;
+        _ when length(L) < (Min - 1), length(Drops) > 0 ->
+            ct:pal("Drops takes list below ~p to ~p", [Min-1, L]),
+            false;
         dependent
           when is_integer(PrevTimeout), PrevTimeout > Time, Drops =/= [] ->
             ct:pal("No drops and previous timeout ~p>~p", [PrevTimeout, Time]),
             false;
         dependent when Timeout < Time ->
-            ct:pal("Timeout ~p<~p", [Timeout]),
+            ct:pal("Timeout ~p<~p", [Timeout, Time]),
             false;
-        dependent when Timeout =:= infinity andalso L =/= [] ->
-            ct:pal("Infinity timeout but non-empty queue ~p", [L]),
+        dependent when Timeout =:= infinity, L =/= [], length(L) > Min ->
+            ct:pal("Infinity timeout but not less than min ~p", [L]),
+            false;
+        dependent when is_integer(Timeout), L == [],
+                       Manager =/= sbroker_fair_statem ->
+            ct:pal("Non-infinity timeout when empty"),
+            false;
+        dependent when is_integer(Timeout) andalso (length(L) =< Min),
+                       Manager =/= sbroker_fair_statem ->
+            ct:pal("Non-infinity timeout when less than min ~p", [L]),
             false;
         dependent when not (is_integer(Timeout) orelse Timeout =:= infinity) ->
             ct:pal("Invalid timeout ~p", [Timeout]),
@@ -657,11 +675,21 @@ drops_post(Drops) ->
 drop_post({Pid, Tag} = From, Sojourn) ->
     client_msgs(Pid, [{Tag, {drop, Sojourn}}]) andalso no_monitor(From).
 
-post(#state{list=L, outs=Outs, cancels=Cancels, drops=Drops}) ->
+post(#state{list=L, outs=Outs, cancels=Cancels, drops=Drops} = State) ->
     lists:all(fun({_, From, _}) -> no_drop_post(From) end,
               L ++ Outs ++ Cancels) andalso
     lists:all(fun({_, From, _}) -> no_monitor(From) end,
-              Outs ++ Cancels ++ Drops).
+              Outs ++ Cancels ++ Drops) andalso
+    queue_post(State).
+
+queue_post(#state{list=L, mod=Mod, queue=Q}) ->
+    case Mod:len(Q) of
+        Len when length(L) == Len ->
+            true;
+        Len ->
+            ct:pal("Len~nExpected: ~p~nObserved: ~p", [length(L), Len]),
+            false
+    end.
 
 no_drop_post({Pid, _}) ->
     client_msgs(Pid, []).

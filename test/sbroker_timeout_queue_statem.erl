@@ -34,28 +34,31 @@ module() ->
     sbroker_timeout_queue.
 
 args() ->
-    {oneof([out, out_r]),
-     oneof([choose(0, 3), infinity]),
-     oneof([drop, drop_r]),
-     oneof([choose(0, 5), infinity])}.
+    ?SUCHTHAT({_, _, _, Min, Max},
+              {oneof([out, out_r]),
+               oneof([choose(0, 3), infinity]),
+               oneof([drop, drop_r]),
+               choose(0, 3),
+               oneof([choose(0, 5), infinity])}, Min =< Max).
 
-time_dependence(infinity) ->
+time_dependence({_, infinity}) ->
     independent;
-time_dependence(Timeout) when is_integer(Timeout) ->
+time_dependence({_, Timeout}) when is_integer(Timeout) ->
     dependent.
 
-init({Out, Timeout, Drop, Max}) ->
-    {Out, Drop, Max, sbroker_util:timeout(Timeout)}.
+init({Out, Timeout, Drop, Min, Max}) ->
+    {Out, Drop, Min, Max, {Min, sbroker_util:timeout(Timeout)}}.
 
-handle_timeout(_Time, L, Timeout) ->
+handle_timeout(_Time, L, {Min, Timeout} = State) ->
     Drop = fun(SojournTime) -> SojournTime >= Timeout end,
-    {length(lists:takewhile(Drop, L)), Timeout}.
+    MaxDrops = max(length(L) - Min, 0),
+    {min(MaxDrops, length(lists:takewhile(Drop, L))), State}.
 
-handle_out(Time, L, Timeout) ->
-    handle_timeout(Time, L, Timeout).
+handle_out(Time, L, State) ->
+    handle_timeout(Time, L, State).
 
-handle_out_r(Time, L, Timeout) ->
-    handle_timeout(Time, L, Timeout).
+handle_out_r(Time, L, State) ->
+    handle_out(Time, L, State).
 
-config_change(_, {Out, Timeout, Drop, Max}, _) ->
-    {Out, Drop, Max, sbroker_util:timeout(Timeout)}.
+config_change(_, {Out, Timeout, Drop, Min, Max}, _) ->
+    {Out, Drop, Min, Max, {Min, sbroker_util:timeout(Timeout)}}.

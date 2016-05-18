@@ -39,7 +39,7 @@ start_link() ->
 %% sbroker api
 
 init(undefined) ->
-    QSpec = {sbroker_timeout_queue, {out, 200, drop, infinity}},
+    QSpec = {sbroker_timeout_queue, {out, 200, drop, 0, infinity}},
     VSpec = {sregulator_relative_valve, {0, 0, infinity}},
     MSpec = {sbroker_timeout_meter, infinity},
     {ok, {QSpec, VSpec, MSpec}}.

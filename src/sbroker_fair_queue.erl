@@ -316,7 +316,7 @@ out({{value, QKey}, Robin}, Time, Module, Qs, State) ->
             out(queue:out(Robin), Time, Module, NQs, State)
     end;
 out({empty, Robin}, _, _, Qs, State) when map_size(Qs) == 0 ->
-    {empty, State#state{robin=Robin, queues=Qs}}.
+    {empty, State#state{robin=Robin, queues=Qs, next=infinity}}.
 
 map(Fun, Qs) ->
     map(maps:to_list(Qs), Fun, infinity, []).

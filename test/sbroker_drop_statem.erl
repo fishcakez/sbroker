@@ -42,7 +42,7 @@ time_dependence(undefined) ->
     independent.
 
 init({Out, Drop, Max}) ->
-    {Out, Drop, Max, undefined}.
+    {Out, Drop, infinity, Max, undefined}.
 
 handle_timeout(_, _, State) ->
     {0, State}.
@@ -54,4 +54,4 @@ handle_out_r(_, _, State) ->
     {0, State}.
 
 config_change(_, {Out, Drop, Max}, undefined) ->
-    {Out, Drop, Max, undefined}.
+    {Out, Drop, infinity, Max, undefined}.

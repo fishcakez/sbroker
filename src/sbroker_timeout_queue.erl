@@ -24,14 +24,15 @@
 %% `sbroker_timeout_queue' can be used as an `sbroker_queue' module in
 %% `sbroker'. Its argument is of the form:
 %% ```
-%% {out | out_r, Timeout :: timeout(), drop | drop_r,
-%% Max :: non_neg_integer() | infinity}.
+%% {out | out_r, Timeout :: timeout(), drop | drop_r, Min :: non_neg_integer(),
+%%  Max :: non_neg_integer() | infinity}.
 %% '''
-%% The first element is `out' for a FIFO queue and `out_r' for a LIFO queue. The
-%% second element is the timeout value in `milli_seconds', i.e. the minimum
-%% sojourn time at which items are dropped from the queue. The third element
-%% determines whether to drop from head (`drop') or drop from the tail
-%% (`drop_r') when the queue is above the maximum size (fourth element).
+%% The first element is `out' for a FIFO queue and `out_r' for a LIFO queue.
+%% `Timeout' is the timeout value in `milli_seconds', i.e. the minimum
+%% sojourn time at which items are dropped from the queue when the queue is
+%% above the minimum size `Min'. The third element determines whether to drop
+%% from head (`drop') or drop from the tail (`drop_r') when the queue is above
+%% the maximum size `Max'.
 -module(sbroker_timeout_queue).
 
 -behaviour(sbroker_queue).
@@ -53,6 +54,7 @@
 -record(state, {out :: out | out_r,
                 timeout :: timeout(),
                 drop :: drop | drop_r,
+                min :: non_neg_integer(),
                 max :: non_neg_integer() | infinity,
                 timeout_next :: integer() | infinity,
                 len :: non_neg_integer(),
@@ -61,12 +63,13 @@
 %% public api
 
 %% @private
--spec init(Q, Time, {Out, Timeout, Drop, Max}) -> {State, TimeoutNext} when
+-spec init(Q, Time, {Out, Timeout, Drop, Min, Max}) -> {State, TimeoutNext} when
       Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
       Out :: out | out_r,
       Timeout :: timeout(),
       Drop :: drop | drop_r,
+      Min :: non_neg_integer(),
       Max :: non_neg_integer() | infinity,
       State :: #state{},
       TimeoutNext :: integer() | infinity.
@@ -88,29 +91,23 @@ handle_in(SendTime, From, _, Time,
     sbroker_queue:drop(From, SendTime, Time),
     handle_timeout(Time, State);
 handle_in(SendTime, {Pid, _} = From, Value, Time,
-          #state{len=0, timeout=Timeout, queue=Q} = State) ->
-    case timeout_next(SendTime, Timeout) of
-        TimeoutNext when TimeoutNext > Time ->
-            Ref = monitor(process, Pid),
-            NQ = queue:in({SendTime, From, Value, Ref}, Q),
-            NState = State#state{len=1, queue=NQ, timeout_next=TimeoutNext},
-            {NState, TimeoutNext};
-        _ ->
-            sbroker_queue:drop(From, SendTime, Time),
-            {State, infinity}
-    end;
-handle_in(SendTime, {Pid, _} = From, Value, Time,
-          #state{max=Max, len=Max, drop=drop, queue=Q} = State) ->
-    {{value, Item}, NQ} = queue:out(Q),
+          #state{max=Max, len=Max, drop=drop, queue=Q,
+                 timeout=Timeout} = State)  ->
+    {{value, {SendTime2, _, _, _} = Item}, NQ} = queue:out(Q),
     drop_item(Time, Item),
     Ref = monitor(process, Pid),
     NQ2 = queue:in({SendTime, From, Value, Ref}, NQ),
-    in_timeout(Time, Max, NQ2, State);
+    case Timeout of
+        infinity ->
+            {State#state{queue=NQ2}, infinity};
+        _ ->
+            in(SendTime2+Timeout, Max, NQ2, Time, State)
+    end;
 handle_in(SendTime, {Pid, _} = From, Value, Time,
-          #state{len=Len, queue=Q} = State) ->
+          #state{len=Len, queue=Q, timeout_next=TimeoutNext} = State) ->
     Ref = monitor(process, Pid),
     NQ = queue:in({SendTime, From, Value, Ref}, Q),
-    in_timeout(Time, Len+1, NQ, State).
+    in(TimeoutNext, Len+1, NQ, Time, State).
 
 %% @private
 -spec handle_out(Time, State) ->
@@ -123,29 +120,26 @@ handle_in(SendTime, {Pid, _} = From, Value, Time,
       Ref :: reference(),
       NState :: #state{},
       TimeoutNext :: integer() | infinity.
-handle_out(Time, State) ->
-    case timeout(Time, State) of
-        #state{len=0} = NState ->
-            {empty, NState};
-        #state{out=out, len=Len, queue=Q, timeout_next=TimeoutNext} = NState ->
-            {{value, {SendTime, From, Value, Ref}}, NQ} = queue:out(Q),
-            NState2 = NState#state{len=Len-1, queue=NQ},
-            {SendTime, From, Value, Ref, NState2, TimeoutNext};
-        #state{out=out_r, len=Len, queue=Q,
-               timeout_next=TimeoutNext} = NState ->
-            {{value, {SendTime, From, Value, Ref}}, NQ} = queue:out_r(Q),
-            NState2 = NState#state{len=Len-1, queue=NQ},
-            {SendTime, From, Value, Ref, NState2, TimeoutNext}
-    end.
+handle_out(_, #state{len=0} = State) ->
+    {empty, State};
+handle_out(Time, #state{out=out, len=Len, queue=Q} = State) ->
+    out(queue:out(Q), Len-1, Time, State);
+handle_out(Time, #state{out=out_r, len=Len, queue=Q} = State) ->
+    out_r(queue:out_r(Q), Len-1, Time, State).
 
 %% @private
 -spec handle_timeout(Time, State) -> {State, TimeoutNext} when
       Time :: integer(),
       State :: #state{},
       TimeoutNext :: integer() | infinity.
-handle_timeout(Time, State) ->
-    #state{timeout_next=TimeoutNext} = NState = timeout(Time, State),
-    {NState, TimeoutNext}.
+handle_timeout(Time, #state{timeout_next=TimeoutNext, len=Len, min=Min} = State)
+  when TimeoutNext > Time, Len > Min ->
+    {State, TimeoutNext};
+handle_timeout(Time, #state{len=Len, min=Min, queue=Q} = State)
+  when Len > Min ->
+    timeout(Min, Len, Q, Time, State);
+handle_timeout(_, State) ->
+    {State, infinity}.
 
 %% @private
 -spec handle_cancel(Tag, Time, State) -> {Cancelled, NState, TimeoutNext} when
@@ -165,7 +159,7 @@ handle_cancel(Tag, Time, #state{len=Len, queue=Q} = State) ->
     NQ = queue:filter(Cancel, Q),
     NLen = queue:len(NQ),
     NState = State#state{len=NLen, queue=NQ},
-    #state{timeout_next=TimeoutNext} = NState2 = timeout(Time, NState),
+    {NState2, TimeoutNext} = handle_timeout(Time, NState),
     case NLen of
         Len ->
             {false, NState2, TimeoutNext};
@@ -186,11 +180,12 @@ handle_info({'DOWN', Ref, _, _, _}, Time, #state{queue=Q} = State) ->
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
 
--spec config_change({Out, Timeout, Drop, Max}, Time, State) ->
+-spec config_change({Out, Timeout, Drop, Min, Max}, Time, State) ->
     {NState, TimeoutNext} when
       Out :: out | out_r,
       Timeout :: timeout(),
       Drop :: drop | drop_r,
+      Min :: non_neg_integer(),
       Max :: non_neg_integer() | infinity,
       Time :: integer(),
       State :: #state{},
@@ -222,70 +217,136 @@ first_timeout_next(Time, Timeout)
   when is_integer(Timeout) andalso Timeout >= 0->
     Time.
 
-timeout_next(_, infinity) ->
-    infinity;
-timeout_next(Time, Timeout) ->
-    Time + Timeout.
+in(TimeoutNext, Len, Q, Time, #state{min=Min} = State)
+  when TimeoutNext > Time, Len > Min ->
+    {State#state{len=Len, queue=Q, timeout_next=TimeoutNext}, TimeoutNext};
+in(_, Len, Q, Time, #state{min=Min} = State) when Len > Min ->
+    timeout(Min, Len, Q, Time, State);
+in(TimeoutNext, Len, Q, _, State) ->
+    {State#state{len=Len, queue=Q, timeout_next=TimeoutNext}, infinity}.
 
-in_timeout(Time, Len, Q, #state{timeout_next=TimeoutNext} = State)
-  when TimeoutNext > Time ->
-    {State#state{len=Len, queue=Q}, TimeoutNext};
-in_timeout(Time, Len, Q, #state{timeout=Timeout} = State) ->
-    NState = timeout(Time-Timeout, Time, Len, Q, State),
-    #state{timeout_next=TimeoutNext} = NState,
-    {NState, TimeoutNext}.
+out({{value, {SendTime, From, Value, Ref}}, Q}, Len, _, #state{min=Min} = State)
+  when Len < Min ->
+    NState = State#state{queue=Q, len=Len},
+    {SendTime, From, Value, Ref, NState#state{len=Len, queue=Q}, infinity};
+out({{value, {SendTime, From, Value, Ref}}, Q}, Len, Time,
+    #state{timeout=Timeout} = State) when SendTime+Timeout > Time ->
+    TimeoutNext = SendTime+Timeout,
+    NState = State#state{queue=Q, len=Len, timeout_next=TimeoutNext},
+    {SendTime, From, Value, Ref, NState, timeout_next(NState)};
+out({{value, {SendTime, From, Value, Ref}}, Q}, Len, _,
+    #state{timeout=infinity} = State) ->
+    {SendTime, From, Value, Ref, State#state{len=Len, queue=Q}, infinity};
+out({{value, {SendTime, _, _, _} = Item}, Q}, 0, Time,
+    #state{timeout=Timeout} = State) ->
+    drop_item(Time, Item),
+    TimeoutNext = SendTime+Timeout,
+    {empty, State#state{len=0, queue=Q, timeout_next=TimeoutNext}};
+out({{value, Item}, Q}, Len, Time, State) ->
+    drop_item(Time, Item),
+    out(queue:out(Q), Len-1, Time, State).
 
-timeout(Time, #state{timeout_next=Next} = State) when Time < Next ->
-    State;
-timeout(_, #state{len=0} = State) ->
-    State#state{timeout_next=infinity};
-timeout(Time, #state{timeout=Timeout, len=Len, queue=Q} = State) ->
-    timeout(Time-Timeout, Time, Len, Q, State).
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, Len, _,
+    #state{min=Min} = State) when Len < Min ->
+    NState = State#state{queue=Q, len=Len},
+    {SendTime, From, Value, Ref, NState, infinity};
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, Len, Time,
+    #state{timeout_next=TimeoutNext} = State) when TimeoutNext > Time ->
+    NState = State#state{queue=Q, len=Len},
+    {SendTime, From, Value, Ref, NState, timeout_next(NState)};
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, 0, Time,
+    #state{timeout=Timeout} = State) when SendTime+Timeout > Time ->
+    {SendTime, From, Value, Ref, State#state{len=0, queue=Q}, infinity};
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, Len, Time,
+    #state{timeout=Timeout, min=Min} = State) when SendTime+Timeout > Time ->
+    % Removed an item already
+    {NState, TimeoutNext} = timeout(max(Min-1, 0), Len, Q, Time, State),
+    {SendTime, From, Value, Ref, NState, TimeoutNext};
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, Len, _,
+    #state{timeout=infinity} = State) ->
+    {SendTime, From, Value, Ref, State#state{len=Len, queue=Q}, infinity};
+out_r({{value, {SendTime, _, _, _} = Item}, Q}, _, Time,
+      #state{min=0, timeout=Timeout} = State) ->
+    drop_queue(Time, Q),
+    drop_item(Time, Item),
+    TimeoutNext=SendTime+Timeout,
+    {empty, State#state{len=0, queue=queue:new(), timeout_next=TimeoutNext}};
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, _, Time,
+      #state{min=1, timeout=Timeout} = State) ->
+    drop_queue(Time, Q),
+    TimeoutNext=SendTime+Timeout,
+    NState = State#state{len=0, queue=queue:new(), timeout_next=TimeoutNext},
+    {SendTime, From, Value, Ref, NState, infinity};
+out_r({{value, {SendTime, From, Value, Ref}}, Q}, Len, Time,
+      #state{min=Min, timeout=Timeout} = State) ->
+    NLen = Min-1,
+    {DropQ, NQ} = queue:split(Len-NLen, Q),
+    drop_queue(Time, DropQ),
+    {SendTime2, _, _, _} = queue:get(NQ),
+    NState = State#state{len=NLen, queue=NQ, timeout_next=SendTime2+Timeout},
+    {SendTime, From, Value, Ref, NState, infinity}.
 
-timeout(MinSend, Time, Len, Q, #state{timeout=Timeout} = State) ->
-    case queue:get(Q) of
-        {SendTime, _, _, _} when SendTime > MinSend ->
-            State#state{timeout_next=SendTime+Timeout, len=Len, queue=Q};
-        Item when Len =:= 1 ->
+timeout_next(#state{len=Len, min=Min, timeout_next=TimeoutNext})
+  when Len > Min ->
+    TimeoutNext;
+timeout_next(_) ->
+    infinity.
+
+timeout(Min, Len, Q, Time, #state{timeout=Timeout} = State) ->
+    {SendTime, _, _, _} = Item = queue:get(Q),
+    case SendTime+Timeout of
+        TimeoutNext when TimeoutNext > Time, Len > Min ->
+            NState = State#state{len=Len, queue=Q, timeout_next=TimeoutNext},
+            {NState, TimeoutNext};
+        TimeoutNext when TimeoutNext > Time ->
+            {State#state{len=Len, queue=Q, timeout_next=TimeoutNext}, infinity};
+        _ when Len-1 > Min ->
             drop_item(Time, Item),
-            State#state{len=0, queue=queue:drop(Q), timeout_next=infinity};
-        Item ->
+            timeout(Min, Len-1, queue:drop(Q), Time, State);
+        TimeoutNext ->
             drop_item(Time, Item),
-            timeout(MinSend, Time, Len-1, queue:drop(Q), State)
+            NState = State#state{len=Len-1, queue=queue:drop(Q),
+                                 timeout_next=TimeoutNext},
+            {NState, infinity}
     end.
 
-from_queue(Q, Len, Time, {Out, Timeout, Drop, infinity})
+from_queue(Q, Len, Time, {Out, Timeout, Drop, Min, infinity})
   when (Out =:= out orelse Out =:= out_r) andalso
        (Drop =:= drop orelse Drop =:= drop_r) ->
     NTimeout = sbroker_util:timeout(Timeout),
-    #state{out=Out, drop=Drop, max=infinity, timeout=NTimeout,
+    {Min, infinity} = sbroker_util:min_max(Min, infinity),
+    #state{out=Out, drop=Drop, min=Min, max=infinity, timeout=NTimeout,
            timeout_next=first_timeout_next(Time, NTimeout), len=Len, queue=Q};
-from_queue(Q, Len, Time, {Out, Timeout, drop, 0}) ->
-    from_queue(Q, Len, Time, {Out, Timeout, drop_r, 0});
-from_queue(Q, Len, Time, {Out, Timeout, Drop, Max})
+from_queue(Q, Len, Time, {Out, Timeout, drop, Min, 0}) ->
+    from_queue(Q, Len, Time, {Out, Timeout, drop_r, Min, 0});
+from_queue(Q, Len, Time, {Out, Timeout, Drop, Min, Max})
   when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) andalso
-       (is_integer(Max) andalso Max >= 0) ->
+       (Drop =:= drop orelse Drop =:= drop_r) ->
+    {Min, Max} = sbroker_util:min_max(Min, Max),
     NTimeout = sbroker_util:timeout(Timeout),
     Next = first_timeout_next(Time, NTimeout),
-    State = #state{out=Out, drop=Drop, max=Max, timeout=NTimeout,
+    State = #state{out=Out, drop=Drop, min=Min, max=Max, timeout=NTimeout,
                    timeout_next=Next, len=Len, queue=Q},
     case Len - Max of
         DropCount when DropCount > 0 andalso Drop =:= drop ->
             {DropQ, NQ} = queue:split(DropCount, Q),
-            drop_queue(Time, DropQ),
+            _ = drop_queue(Time, DropQ),
             State#state{len=Max, queue=NQ};
         DropCount when DropCount > 0 andalso Drop =:= drop_r ->
             {NQ, DropQ} = queue:split(Max, Q),
-            drop_queue(Time, DropQ),
+            _ = drop_queue(Time, DropQ),
             State#state{len=Max, queue=NQ};
         _ ->
             State
     end.
 
 drop_queue(Time, Q) ->
-    _ = [drop_item(Time, Item) || Item <- queue:to_list(Q)],
-    ok.
+    Drop = fun({SendTime, From, _, Ref}) ->
+                   demonitor(Ref, [flush]),
+                   sbroker_queue:drop(From, SendTime, Time),
+                   false
+           end,
+    queue:filter(Drop, Q).
 
 drop_item(Time, {SendTime, From, _, Ref}) ->
     demonitor(Ref, [flush]),

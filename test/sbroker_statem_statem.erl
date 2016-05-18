@@ -37,7 +37,7 @@ args() ->
     {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}.
 
 init({Out, Drops}) ->
-    {Out, drop, infinity, {Drops, Drops}}.
+    {Out, drop, 0, infinity, {Drops, Drops}}.
 
 time_dependence({_, _}) ->
     independent.
@@ -58,9 +58,9 @@ handle_out_r(Time, L, State) ->
     do_handle_out(Time, L, State).
 
 config_change(_, {Out, Config}, {_, Config} = State) ->
-    {Out, drop, infinity, State};
+    {Out, drop, 0, infinity, State};
 config_change(_, {Out, Drops}, _) ->
-    {Out, drop, infinity, {Drops, Drops}}.
+    {Out, drop, 0, infinity, {Drops, Drops}}.
 
 %% Internal
 

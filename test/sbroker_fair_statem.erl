@@ -50,8 +50,9 @@ time_dependence(#state{statem=SMod, state=State}) ->
 
 init({QMod, Args, Index}) ->
     SMod = queue2statem(QMod),
-    {Out, Drop, Max, State} = SMod:init(Args),
-    {Out, Drop, Max, #state{queue=QMod, statem=SMod, state=State, index=Index}}.
+    {Out, Drop, Min, Max, State} = SMod:init(Args),
+    {Out, Drop, Min, Max,
+     #state{queue=QMod, statem=SMod, state=State, index=Index}}.
 
 handle_timeout(Time, L, #state{statem=SMod, state=State} = FullState) ->
     {Drops, NState} = SMod:handle_timeout(Time, L,  State),
@@ -68,8 +69,8 @@ handle_out_r(Time, L, #state{statem=SMod, state=State} = FullState) ->
 config_change(Time, {QMod, Args, Index},
               #state{index=Index, queue=QMod, statem=SMod,
                      state=State} = FullState) ->
-    {Out, Drop, Max, NState} = SMod:config_change(Time, Args, State),
-    {Out, Drop, Max, FullState#state{state=NState}};
+    {Out, Drop, Min, Max, NState} = SMod:config_change(Time, Args, State),
+    {Out, Drop, Min, Max, FullState#state{state=NState}};
 config_change(_, FullArgs, _) ->
     init(FullArgs).
 

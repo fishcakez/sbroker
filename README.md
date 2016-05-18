@@ -66,17 +66,17 @@ start_link() ->
     sbroker:start_link(?MODULE, undefined, [{time_unit, milli_seconds}]).
 
 init(_) ->
-    QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 16}},
+    QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 0, 16}},
     {ok, {QueueSpec, QueueSpec}}.
 ```
 `sbroker_example:start_link/0` will start an `sbroker` with queues configured by 
 `QueueSpec`.
 
 This configuration uses the `sbroker_timeout_queue` callback module which drops
-requests when they have been in the queue for longer than a time limit - in this
-case `200` milliseconds. `out` sets the queue to `FIFO`. `drop` sets the queue
-to drop processes from the head of the queue (head drop) when the maximum size
-(`16`) is reached.
+requests when they have been in the queue for longer than a time limit (`200`
+milliseconds) and the queue length is above the minimum size (`0`). `out` sets
+the queue to `FIFO`. `drop` sets the queue to drop processes from the head of
+the queue (head drop) when the maximum size (`16`) is reached.
 
 To use this `sbroker`:
 ```erlang
