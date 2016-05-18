@@ -187,7 +187,7 @@ dequeue_not_dropping({drop, _Item}, L,
     {_, _, NState} = do_dequeue(L, State),
     NState2 = NState#state{dropping=true},
     NCount = if
-                 Count > 2 andalso Now - DropNext < Interval ->
+                 Count > 2 andalso Now - DropNext < 8 * Interval ->
                      Count - 2;
                  true ->
                      1

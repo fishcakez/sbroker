@@ -277,7 +277,7 @@ status(_, _, _) ->
 %% opening to closed use the previous dropping interval length as it
 %% should be appropriate.
 open_control(Time, #state{interval=Interval, count=C, open_next=Next} = State)
-  when C > 2 andalso Time - Next < Interval ->
+  when C > 2 andalso Time - Next < 8 * Interval ->
     open_control(C - 2, Time, State);
 open_control(Time, #state{interval=Interval} = State) ->
     State#state{count=1, open_next=Time+Interval, open_first=await}.

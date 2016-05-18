@@ -109,7 +109,7 @@ handle_ask(#state{opening=false, now=Now, first_above_time=FirstAbove,
   when Now >= FirstAbove ->
     NState = State#state{opening=true},
     NCount = if
-                 Count > 2 andalso Now - OpenNext < Interval ->
+                 Count > 2 andalso Now - OpenNext < 8 * Interval ->
                      Count - 2;
                  true ->
                      1

@@ -421,7 +421,7 @@ slow(Len, Q, Time, #state{interval=Interval} = State) ->
 %% should be appropriate - as done in CoDel draft implemenation.
 drop_control(Time, #state{interval=Interval, count=C,
                           drop_next=DropNext} = State)
-  when C > 2 andalso Time - DropNext < Interval ->
+  when C > 2 andalso Time - DropNext < 8 * Interval ->
     drop_control(C - 2, Time, State#state{drop_first=dropping});
 drop_control(Time, #state{interval=Interval} = State) ->
     DropNext = Time+Interval,
