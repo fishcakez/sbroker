@@ -36,12 +36,14 @@
 -module(sbroker_timeout_queue).
 
 -behaviour(sbroker_queue).
+-behaviour(sbroker_fair_queue).
 
 %% public api
 
 -export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
+-export([handle_fq_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
@@ -126,6 +128,27 @@ handle_out(Time, #state{out=out, len=Len, queue=Q} = State) ->
     out(queue:out(Q), Len-1, Time, State);
 handle_out(Time, #state{out=out_r, len=Len, queue=Q} = State) ->
     out_r(queue:out_r(Q), Len-1, Time, State).
+
+%% @private
+-spec handle_fq_out(Time, State) ->
+    {SendTime, From, Value, Ref, NState, NextTimeout} |
+    {empty, NState, RemoveTime} when
+      Time :: integer(),
+      State :: #state{},
+      SendTime :: integer(),
+      From :: {pid(), any()},
+      Value :: any(),
+      Ref :: reference(),
+      NState :: #state{},
+      NextTimeout :: integer() | infinity,
+      RemoveTime :: integer().
+handle_fq_out(Time, State) ->
+    case handle_out(Time, State) of
+        {_, _, _, _, _, _} = Out ->
+            Out;
+        {empty, NState} ->
+            {empty, NState, Time}
+    end.
 
 %% @private
 -spec handle_timeout(Time, State) -> {State, TimeoutNext} when

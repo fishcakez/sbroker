@@ -328,8 +328,8 @@ handle_out_next(#state{out=out} = State, Value, [Time, _]) ->
     Timeout = {call, ?MODULE, handle_out_timeout, [Value]},
     Next = fun(#state{list=[]} = NState) ->
                    NState;
-              (#state{list=[_|L]} = NState) ->
-                   NState#state{list=L}
+              (#state{list=[H|L], outs=Outs} = NState) ->
+                   NState#state{list=L, outs=Outs++[H]}
            end,
     manager_next(State, handle_out, Time, Q, Timeout, Next);
 handle_out_next(#state{out=out_r} = State, Value, [Time, _]) ->
@@ -337,8 +337,8 @@ handle_out_next(#state{out=out_r} = State, Value, [Time, _]) ->
     Timeout = {call, ?MODULE, handle_out_timeout, [Value]},
     Next = fun(#state{list=[]} = NState) ->
                    NState;
-              (#state{list=L} = NState) ->
-                   NState#state{list=droplast(L)}
+              (#state{list=L, outs=Outs} = NState) ->
+                   NState#state{list=droplast(L), outs=Outs++[lists:last(L)]}
            end,
     manager_next(State, handle_out_r, Time, Q, Timeout, Next).
 
@@ -573,7 +573,7 @@ len_post(#state{list=L}, _, Len) ->
     end.
 
 terminate_args(#state{queue=Q}) ->
-    [oneof([shutdown, normal, abnormal]), Q].
+    [oneof([change, stop]), Q].
 
 terminate_pre(_, _) ->
     true.
@@ -679,7 +679,7 @@ post(#state{list=L, outs=Outs, cancels=Cancels, drops=Drops} = State) ->
     lists:all(fun({_, From, _}) -> no_drop_post(From) end,
               L ++ Outs ++ Cancels) andalso
     lists:all(fun({_, From, _}) -> no_monitor(From) end,
-              Outs ++ Cancels ++ Drops) andalso
+              Cancels ++ Drops) andalso
     queue_post(State).
 
 queue_post(#state{list=L, mod=Mod, queue=Q}) ->
@@ -694,9 +694,15 @@ queue_post(#state{list=L, mod=Mod, queue=Q}) ->
 no_drop_post({Pid, _}) ->
     client_msgs(Pid, []).
 
-no_monitor({Pid, _}) ->
+no_monitor({Pid, _} = Client) ->
     {monitored_by, Pids} = erlang:process_info(Pid, monitored_by),
-    not lists:member(self(), Pids).
+    case lists:member(self(), Pids) of
+        false ->
+            true;
+        true ->
+            ct:pal("Client ~p still monitored", [Client]),
+            false
+    end.
 
 droplast(List) ->
     [_ | Rest] = lists:reverse(List),
@@ -707,7 +713,7 @@ spawn_client() ->
     spawn(fun() -> client_init(Parent) end).
 
 client_msgs(Pid, Expected) ->
-    try gen:call(Pid, call, msgs, 5000) of
+    try gen:call(Pid, call, msgs, 100) of
         {ok, Expected} ->
             true;
         {ok, Observed} ->

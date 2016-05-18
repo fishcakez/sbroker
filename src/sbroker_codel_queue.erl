@@ -69,12 +69,14 @@
 -module(sbroker_codel_queue).
 
 -behaviour(sbroker_queue).
+-behaviour(sbroker_fair_queue).
 
 %% public api
 
 -export([init/3]).
 -export([handle_in/5]).
 -export([handle_out/2]).
+-export([handle_fq_out/2]).
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
@@ -163,6 +165,27 @@ handle_out(Time, #state{out=out_r, len=Len, queue=Q} = State) ->
     out_r(queue:out_r(Q), Len-1, Time, State).
 
 %% @private
+-spec handle_fq_out(Time, State) ->
+    {SendTime, From, Value, Ref, NState, NextTimeout} |
+    {empty, NState, RemoveTime} when
+      Time :: integer(),
+      State :: #state{},
+      SendTime :: integer(),
+      From :: {pid(), any()},
+      Value :: any(),
+      Ref :: reference(),
+      NState :: #state{},
+      NextTimeout :: integer() | infinity,
+      RemoveTime :: integer().
+handle_fq_out(Time, State) ->
+    case handle_out(Time, State) of
+        {_, _, _, _, _, _} = Out ->
+            Out;
+        {empty, #state{drop_next=DropNext, interval=Interval} = NState} ->
+            {empty, NState, max(DropNext + 8 * Interval, Time)}
+    end.
+
+%% @private
 -spec handle_timeout(Time, State) -> {State, NextTimeout} when
       Time :: integer(),
       State :: #state{},
@@ -170,7 +193,8 @@ handle_out(Time, #state{out=out_r, len=Len, queue=Q} = State) ->
 handle_timeout(_, #state{len=Len, min=Min} = State)
   when Len =< Min ->
     {State, infinity};
-handle_timeout(Time, #state{timeout_next=TimeoutNext} = State) when TimeoutNext > Time ->
+handle_timeout(Time, #state{timeout_next=TimeoutNext} = State)
+  when TimeoutNext > Time ->
     {State, TimeoutNext};
 handle_timeout(Time, #state{drop_first=dropping, drop_next=DropNext} = State)
   when DropNext > Time ->

@@ -1,6 +1,6 @@
 %%-------------------------------------------------------------------
 %%
-%% Copyright (c) 2015, James Fish <james@fishcakez.com>
+%% Copyright (c) 2016, James Fish <james@fishcakez.com>
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -17,9 +17,10 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sbroker_statem2_queue).
+-module(sbroker_fq2_queue).
 
 -behaviour(sbroker_queue).
+-behaviour(sbroker_fair_queue).
 
 -export([init/3]).
 -export([handle_in/5]).
@@ -32,35 +33,35 @@
 -export([len/1]).
 -export([terminate/2]).
 
-%% This sbroker_queue module is used to an alternate to sbroker_statem_queue
+%% This sbroker_queue module is used to an alternate to sbroker_fq_queue
 %% to test config changes.
 
 init(Q, Time, Args) ->
-    sbroker_statem_queue:init(Q, Time, Args).
+    sbroker_fq_queue:init(Q, Time, Args).
 
 handle_in(SendTime, From, Value, Time, State) ->
-    sbroker_statem_queue:handle_in(SendTime, From, Value, Time, State).
+    sbroker_fq_queue:handle_in(SendTime, From, Value, Time, State).
 
 handle_out(Time, State) ->
-    sbroker_statem_queue:handle_out(Time, State).
+    sbroker_fq_queue:handle_out(Time, State).
 
 handle_fq_out(Time, State) ->
-    sbroker_statem_queue:handle_fq_out(Time, State).
+    sbroker_fq_queue:handle_fq_out(Time, State).
 
 handle_timeout(Time, State) ->
-    sbroker_statem_queue:handle_timeout(Time, State).
+    sbroker_fq_queue:handle_timeout(Time, State).
 
 handle_cancel(Tag, Time, State) ->
-    sbroker_statem_queue:handle_cancel(Tag, Time, State).
+    sbroker_fq_queue:handle_cancel(Tag, Time, State).
 
 handle_info(Msg, Time, State) ->
-    sbroker_statem_queue:handle_info(Msg, Time, State).
+    sbroker_fq_queue:handle_info(Msg, Time, State).
 
 config_change(Args, Time, State) ->
-    sbroker_statem_queue:config_change(Args, Time, State).
+    sbroker_fq_queue:config_change(Args, Time, State).
 
 len(State) ->
-    sbroker_statem_queue:len(State).
+    sbroker_fq_queue:len(State).
 
 terminate(Reason, State) ->
-    sbroker_statem_queue:terminate(Reason, State).
+    sbroker_fq_queue:terminate(Reason, State).
