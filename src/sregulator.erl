@@ -582,9 +582,10 @@ init(Starter, #time{now=Now} = Time, QArgs, VArgs, MArgs,
     Inits = [{sbroker_queue, QMod, QArgs}, {sregulator_valve, VMod, VArgs},
              {sbroker_meter, MMod, MArgs}],
     case sbroker_handlers:init(Now, Inits, report_name(Config)) of
-        {ok, [{_, _, Q, QNext}, {_, _, {State, V}, _}, {_, _, M, MNext}]} ->
-            Next = min(QNext, MNext),
-            NTime = Time#time{meter=M},
+        {ok, [{_, _, Q, QNext}, {_, _, {State, V}, VNext},
+              {_, _, M, MNext}]} ->
+            Next = min(QNext, VNext),
+            NTime = Time#time{meter=M, next=MNext},
             enter_loop(Starter, NTime, State, Q, V, Next, Config);
         {stop, Reason} ->
             init_stop(Starter, Name, Reason)
@@ -641,6 +642,7 @@ update_meter(Now, #time{now=Prev, send=Send, seq=Seq, meter=Meter} = Time, Asks,
         Class:Reason ->
             meter_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
+
 idle(State, #time{seq=0} = Time, Q, V, Next, Config) ->
     Timeout = idle_timeout(Time, Next, Config),
     idle_recv(State, Timeout, Time, Q, V, Config);
@@ -672,38 +674,38 @@ idle_recv(State, Timeout, Time, Q, V, Config) ->
     end.
 
 
-handle(open, Msg, Time, Q, V, _, Config) ->
-    open(Msg, Time, Q, V, Config);
+handle(open, Msg, Time, Q, V, Next, Config) ->
+    open(Msg, Time, Q, V, Next, Config);
 handle(closed, Msg, Time, Q, V, Next, Config) ->
     closed(Msg, Time, Q, V, Next, Config).
 
-open(Time, Q, V, Config) ->
+open(Time, Q, V, Next, Config) ->
     receive
         Msg ->
             NTime = update_time(Time, Q, V, Config),
-            open(Msg, NTime, Q, V, Config)
+            open(Msg, NTime, Q, V, Next, Config)
     end.
 
-open({Tag, Ask, Pid}, #time{now=Now, send=Send, open=Open} = Time, Q, V,
+open({Tag, Ask, Pid}, #time{now=Now, send=Send, open=Open} = Time, Q, V, _,
      #config{valve_mod=VMod} = Config) when Tag == ask; Tag == nb_ask ->
     Ref = monitor(process, Pid),
     go(Ask, Ref, Send, Open, Now),
     try VMod:handle_ask(Pid, Ref, Now, V) of
-        {open, NV} ->
-            open(Time, Q, NV, Config);
-        {closed, NV} ->
-            closed(Time, Q, NV, infinity, Config);
+        {open, NV, Next} ->
+            open(Time, Q, NV, Next, Config);
+        {closed, NV, Next} ->
+            closed(Time, Q, NV, Next, Config);
         Other ->
             valve_return(Other, Time, Q, V, Config)
     catch
         Class:Reason ->
             valve_exception(Class, Reason, Time, Q, V, Config)
     end;
-open({cancel, From, _}, Time, Q, V, Config) ->
+open({cancel, From, _}, Time, Q, V, _, Config) ->
     gen:reply(From, false),
-    open(Time, Q, V, Config);
-open(Msg, Time, Q, V, Config) ->
-    common(Msg, open, Time, Q, V, infiniy, Config).
+    timeout(open, Time, Q, V, Config);
+open(Msg, Time, Q, V, Next, Config) ->
+    common(Msg, open, Time, Q, V, Next, Config).
 
 closed(Time, Q, V, Next, Config) ->
     receive
@@ -716,7 +718,7 @@ closed({ask, Ask, Pid}, #time{now=Now, send=Send} = Time, Q, V, _,
        #config{queue_mod=QMod} = Config) ->
     try QMod:handle_in(Send, Ask, Pid, Now, Q) of
         {NQ, Next} ->
-            closed(Time, NQ, V, Next, Config);
+            valve_timeout(Time, NQ, V, Next, Config);
         Other ->
             queue_return(Other, Time, Q, V, Config)
     catch
@@ -731,7 +733,7 @@ closed({cancel, From, Tag}, #time{now=Now} = Time, Q, V, _,
     try QMod:handle_cancel(Tag, Now, Q) of
         {Reply, NQ, Next} ->
             gen:reply(From, Reply),
-            closed(Time, NQ, V, Next, Config);
+            valve_timeout(Time, NQ, V, Next, Config);
         Other ->
             queue_return(Other, Time, Q, V, Config)
     catch
@@ -741,12 +743,12 @@ closed({cancel, From, Tag}, #time{now=Now} = Time, Q, V, _,
 closed(Msg, Time, Q, V, Next, Config) ->
     common(Msg, closed, Time, Q, V, Next, Config).
 
-common({update, From, Value}, State, #time{now=Now} = Time, Q, V, Next,
+common({update, From, Value}, State, #time{now=Now} = Time, Q, V, _,
        #config{valve_mod=VMod} = Config) ->
     try VMod:handle_update(Value, Now, V) of
-        {NState, NV}  when NState == open; NState == closed ->
+        {NState, NV, Next}  when NState == open; NState == closed ->
             updated(From),
-            next(State, NState, Time, Q, NV, Next, Config);
+            timeout(State, NState, Time, Q, NV, Next, Config);
         Other ->
             valve_return(Other, Time, Q, V, Config)
     catch
@@ -754,33 +756,33 @@ common({update, From, Value}, State, #time{now=Now} = Time, Q, V, Next,
             valve_exception(Class, Reason, Time, Q, V, Config)
     end;
 common({continue, From, Ref}, State,
-       #time{now=Now, open=Open, send=Send} = Time, Q, V, Next,
+       #time{now=Now, open=Open, send=Send} = Time, Q, V, _,
        #config{valve_mod=VMod} = Config) ->
     try VMod:handle_continue(Ref, Now, V) of
-        {continue, NState, NV} when NState == open; NState == closed ->
+        {continue, NState, NV, Next} when NState == open; NState == closed ->
             go(From, Ref, Send, Open, Now),
-            next(State, NState, Time, Q, NV, Next, Config);
-        {done, NState, NV} when NState == open; NState == closed ->
+            timeout(State, NState, Time, Q, NV, Next, Config);
+        {done, NState, NV, Next} when NState == open; NState == closed ->
             stop(From, Send, Now),
-            next(State, NState, Time, Q, NV, Next, Config);
-        {error, NState, NV} when NState == open; NState == closed ->
+            timeout(State, NState, Time, Q, NV, Next, Config);
+        {error, NState, NV, Next} when NState == open; NState == closed ->
             not_found(From, Send, Now),
-            next(State, NState, Time, Q, NV, Next, Config);
+            timeout(State, NState, Time, Q, NV, Next, Config);
         Other ->
             valve_return(Other, Time, Q, V, Config)
     catch
         Class:Reason ->
             valve_exception(Class, Reason, Time, Q, V, Config)
     end;
-common({done, From, Ref}, State, #time{now=Now, send=Send} = Time, Q, V, Next,
+common({done, From, Ref}, State, #time{now=Now, send=Send} = Time, Q, V, _,
        #config{valve_mod=VMod} = Config) ->
     try VMod:handle_done(Ref, Now, V) of
-        {done, NState, NV} when NState == open; NState == closed ->
+        {done, NState, NV, Next} when NState == open; NState == closed ->
             stop(From, Send, Now),
-            next(State, NState, Time, Q, NV, Next, Config);
-        {error, NState, NV} when NState == open; NState == closed ->
+            timeout(State, NState, Time, Q, NV, Next, Config);
+        {error, NState, NV, Next} when NState == open; NState == closed ->
             not_found(From, Send, Now),
-            next(State, NState, Time, Q, NV, Next, Config);
+            timeout(State, NState, Time, Q, NV, Next, Config);
         Other ->
             valve_return(Other, Time, Q, V, Config)
     catch
@@ -902,31 +904,32 @@ change(State, {NQMod, QArgs, NVMod, VArgs, NMMod, MArgs},
              {sregulator_valve, VMod, V, NVMod, VArgs},
              {sbroker_meter, MMod, M, NMMod, MArgs}],
     case sbroker_handlers:change(Now, Inits, report_name(Config)) of
-        {ok, [{_, _, NQ, QNext}, {_, _, {NState, NV}, _},
+        {ok, [{_, _, NQ, QNext}, {_, _, {NState, NV}, VNext},
               {_, _, NM, MNext}]} ->
+            Next = min(QNext, VNext),
             NTime = Time#time{meter=NM, next=MNext},
             NConfig = Config#config{queue_mod=NQMod, valve_mod=NVMod,
                                     meter_mod=NMMod},
-            next(State, NState, NTime, NQ, NV, QNext, NConfig);
+            next(State, NState, NTime, NQ, NV, Next, NConfig);
         {stop, Reason} ->
             exit(Reason)
     end.
 
-next(open, open, Time, Q, V, _, Config) ->
-    open(Time, Q, V, Config);
-next(closed, open, #time{send=Open} = Time, Q, V, _, Config) ->
-    opening_out(Time#time{open=Open}, Q, V, Config);
+next(open, open, Time, Q, V, Next, Config) ->
+    open(Time, Q, V, Next, Config);
+next(closed, open, #time{send=Open} = Time, Q, V, Next, Config) ->
+    opening_out(Time#time{open=Open}, Q, V, Next, Config);
 next(_, closed, Time, Q, V, Next, Config) ->
     closed(Time, Q, V, Next, Config).
 
-opening_out(#time{now=Now, open=Open} = Time, Q, V,
+opening_out(#time{now=Now, open=Open} = Time, Q, V, VNext,
             #config{queue_mod=QMod} = Config) ->
     try QMod:handle_out(Now, Q) of
-        {Send, Ask, Pid, Ref, NQ, Next} ->
+        {Send, Ask, Pid, Ref, NQ, QNext} ->
             go(Ask, Ref, Send, Open, Now),
-            opening_ask(Pid, Ref, Time, NQ, V, Next, Config);
+            opening_ask(Pid, Ref, Time, NQ, V, QNext, Config);
         {empty, NQ} ->
-            open(Time, NQ, V, Config);
+            open(Time, NQ, V, VNext, Config);
         Other ->
             queue_return(Other, Time, Q, V, Config)
     catch
@@ -934,13 +937,13 @@ opening_out(#time{now=Now, open=Open} = Time, Q, V,
             queue_exception(Class, Reason, Time, Q, V, Config)
     end.
 
-opening_ask(Pid, Ref, #time{now=Now} = Time, Q, V, Next,
+opening_ask(Pid, Ref, #time{now=Now} = Time, Q, V, QNext,
             #config{valve_mod=VMod} = Config) ->
     try VMod:handle_ask(Pid, Ref, Now, V) of
-        {open, NV} ->
-            opening_out(Time, Q, NV, Config);
-        {closed, NV} ->
-            closed(Time, Q, NV, Next, Config);
+        {open, NV, VNext} ->
+            opening_out(Time, Q, NV, VNext, Config);
+        {closed, NV, VNext} ->
+            closed(Time, Q, NV, min(VNext, QNext), Config);
         Other ->
             valve_return(Other, Time, Q, V, Config)
     catch
@@ -963,8 +966,9 @@ info_queue(Msg, State, #time{now=Now} = Time, Q, V,
 info_valve(Msg, State, #time{now=Now} = Time, Q, V, QNext,
           #config{valve_mod=VMod} = Config) ->
     try VMod:handle_info(Msg, Now, V) of
-        {NState, NV} ->
-            info_meter(Msg, State, NState, Time, Q, NV, QNext, Config);
+        {NState, NV, VNext} ->
+            Next = min(VNext, QNext),
+            info_meter(Msg, State, NState, Time, Q, NV, Next, Config);
         Other ->
             valve_return(Other, Time, Q, V, Config)
     catch
@@ -972,12 +976,12 @@ info_valve(Msg, State, #time{now=Now} = Time, Q, V, QNext,
             valve_exception(Class, Reason, Time, Q, V, Config)
     end.
 
-info_meter(Msg, State, NState, #time{now=Now, meter=M} = Time, Q, V, QNext,
+info_meter(Msg, State, NState, #time{now=Now, meter=M} = Time, Q, V, Next,
            #config{meter_mod=MMod} = Config) ->
     try MMod:handle_info(Msg, Now, M) of
         {NM, MNext} ->
             NTime = Time#time{meter=NM, next=MNext},
-            next(State, NState, NTime, Q, V, QNext, Config);
+            next(State, NState, NTime, Q, V, Next, Config);
         Other ->
             meter_return(Other, Time, Q, V, Config)
     catch
@@ -985,22 +989,72 @@ info_meter(Msg, State, NState, #time{now=Now, meter=M} = Time, Q, V, QNext,
             meter_exception(Class, Reason, Time, Q, V, Config)
     end.
 
+timeout(open, open, Time, Q, V, Next, Config) ->
+    open(Time, Q, V, Next, Config);
+timeout(closed, open, #time{send=Open} = Time, Q, V, Next, Config) ->
+    opening_out(Time#time{open=Open}, Q, V, Next, Config);
+timeout(open, closed, Time, Q, V, Next, Config) ->
+    closed(Time, Q, V, Next, Config);
+timeout(closed, closed, Time, Q, V, Next, Config) ->
+    queue_timeout(Time, Q, V, Next, Config).
+
 timeout(open, Time, Q, V, Config) ->
-    open(Time, Q, V, Config);
+    open_timeout(Time, Q, V, Config);
 timeout(closed, Time, Q, V, Config) ->
     closed_timeout(Time, Q, V, Config).
 
-closed_timeout(#time{now=Now} = Time, Q, V, #config{queue_mod=QMod} = Config) ->
+open_timeout(#time{now=Now} = Time, Q, V, #config{valve_mod=VMod} = Config) ->
+    try VMod:handle_timeout(Now, V) of
+        {open, NV, Next} ->
+            open(Time, Q, NV, Next, Config);
+        {closed, NV, Next} ->
+            closed(Time, Q, NV, Next, Config);
+        Other ->
+            valve_return(Other, Time, Q, V, Config)
+    catch
+        Class:Reason ->
+            valve_exception(Class, Reason, Time, Q, V, Config)
+    end.
+
+closed_timeout(#time{now=Now, send=Open} = Time, Q, V,
+               #config{valve_mod=VMod} = Config) ->
+    try VMod:handle_timeout(Now, V) of
+        {closed, NV, VNext} ->
+            queue_timeout(Time, Q, NV, VNext, Config);
+        {open, NV, VNext} ->
+            opening_out(Time#time{open=Open}, Q, NV, VNext, Config);
+        Other ->
+            valve_return(Other, Time, Q, V, Config)
+    catch
+        Class:Reason ->
+            valve_exception(Class, Reason, Time, Q, V, Config)
+    end.
+
+valve_timeout(#time{now=Now, send=Open} = Time, Q, V, QNext,
+              #config{valve_mod=VMod} = Config) ->
+    try VMod:handle_timeout(Now, V) of
+        {closed, NV, VNext} ->
+            closed(Time, Q, NV, min(VNext, QNext), Config);
+        {open, NV, VNext} ->
+            opening_out(Time#time{open=Open}, Q, NV, VNext, Config);
+        Other ->
+            valve_return(Other, Time, Q, V, Config)
+    catch
+        Class:Reason ->
+            valve_exception(Class, Reason, Time, Q, V, Config)
+    end.
+
+queue_timeout(#time{now=Now} = Time, Q, V, VNext,
+              #config{queue_mod=QMod} = Config) ->
     try QMod:handle_timeout(Now, Q) of
         {NQ, QNext} ->
-            closed(Time, NQ, V, QNext, Config);
+            closed(Time, NQ, V, min(QNext, VNext), Config);
         Other ->
             queue_return(Other, Time, Q, V, Config)
     catch
         Class:Reason ->
             queue_exception(Class, Reason, Time, Q, V, Config)
     end.
-
 
 queue_return(Return, Time, Q, V,
              #config{queue_mod=QMod, valve_mod=VMod} = Config) ->

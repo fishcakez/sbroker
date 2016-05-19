@@ -62,6 +62,7 @@
 -export([handle_continue/3]).
 -export([handle_update/3]).
 -export([handle_info/3]).
+-export([handle_timeout/2]).
 -export([config_change/3]).
 -export([size/1]).
 -export([terminate/2]).
@@ -77,7 +78,8 @@
 %% sregulator_valve api
 
 %% @private
--spec init(Map, Time, {RelativeTarget, Min, Max}) -> {open | closed, State} when
+-spec init(Map, Time, {RelativeTarget, Min, Max}) ->
+    {open | closed, State, infinity} when
       Map :: sregulator_valve:internal_map(),
       Time :: integer(),
       RelativeTarget :: integer(),
@@ -90,7 +92,8 @@ init(Map, _, {RelativeTarget, Min, Max}) ->
     handle(#state{min=Min, max=Max, target=Target, map=Map}).
 
 %% @private
--spec handle_ask(Pid, Ref, Time, State) -> {open | closed, NState} when
+-spec handle_ask(Pid, Ref, Time, State) ->
+    {open | closed, NState, infinity} when
       Pid :: pid(),
       Ref :: reference(),
       Time :: integer(),
@@ -102,19 +105,19 @@ handle_ask(Pid, Ref, _,
     NMap = maps:put(Ref, Pid, Map),
     case map_size(NMap) of
         Size when Size < Min ->
-            {open, State#state{map=NMap}};
+            {open, State#state{map=NMap}, infinity};
         %% Opened based on size
         Size when Size =:= Min, Min < Max, Last < Target ->
-            {open, State#state{map=NMap}};
+            {open, State#state{map=NMap}, infinity};
         Size when Size =:= Min ->
-            {closed, State#state{map=NMap}};
+            {closed, State#state{map=NMap}, infinity};
         _ ->
-            {closed, State#state{map=NMap, last=ask}}
+            {closed, State#state{map=NMap, last=ask}, infinity}
     end.
 
 %% @private
 -spec handle_done(Ref, Time, State) ->
-    {done | error, open | closed, NState} when
+    {done | error, open | closed, NState, infinity} when
       Ref :: reference(),
       Time :: integer(),
       State :: #state{},
@@ -125,7 +128,7 @@ handle_done(Ref, _, #state{map=Map} = State) ->
 
 %% @private
 -spec handle_continue(Ref, Time, State) ->
-    {continue | done | error, open | closed, NState} when
+    {continue | done | error, open | closed, NState, infinity} when
       Ref :: reference(),
       Time :: integer(),
       State :: #state{},
@@ -146,7 +149,8 @@ handle_continue(Ref, _,
     end.
 
 %% @private
--spec handle_update(Value, Time, State) -> {open | closed, NState} when
+-spec handle_update(Value, Time, State) ->
+    {open | closed, NState, infinity} when
       Value :: integer(),
       Time :: integer(),
       State :: #state{},
@@ -154,15 +158,15 @@ handle_continue(Ref, _,
 handle_update(RelativeTime, _,
               #state{max=Max, target=Target, map=Map} = State)
   when RelativeTime < Target, map_size(Map) < Max ->
-    {open, State#state{last=RelativeTime}};
+    {open, State#state{last=RelativeTime}, infinity};
 handle_update(RelativeTime, _, #state{min=Min, map=Map} = State)
   when map_size(Map) < Min ->
-    {open, State#state{last=RelativeTime}};
+    {open, State#state{last=RelativeTime}, infinity};
 handle_update(RelativeTime, _, State) ->
-    {closed, State#state{last=RelativeTime}}.
+    {closed, State#state{last=RelativeTime}, infinity}.
 
 %% @private
--spec handle_info(Msg, Time, State) -> {open | closed, NState} when
+-spec handle_info(Msg, Time, State) -> {open | closed, NState, infinity} when
       Msg :: any(),
       Time :: integer(),
       State :: #state{},
@@ -174,8 +178,16 @@ handle_info(_, _, State) ->
     handle(State).
 
 %% @private
+-spec handle_timeout(Time, State) -> {open | closed, NState, infinity} when
+      Time :: integer(),
+      State :: #state{},
+      NState :: #state{}.
+handle_timeout(_, State) ->
+    handle(State).
+
+%% @private
 -spec config_change({RelativeTarget, Min, Max}, Time, State) ->
-    {open | closed, NState} when
+    {open | closed, NState, infinity} when
       RelativeTarget :: integer(),
       Min :: non_neg_integer(),
       Max :: non_neg_integer() | infinity,
@@ -208,7 +220,7 @@ handle(#state{map=Map} = State) ->
     handle(map_size(Map), State).
 
 handle(Size, State) ->
-    {status(Size, State), State}.
+    {status(Size, State), State, infinity}.
 
 status(Size, #state{min=Min}) when Size < Min ->
     open;
@@ -221,9 +233,9 @@ status(_, _) ->
 continue(Ref, Map, Size, ErrorState, OKState) ->
     case maps:find(Ref, Map) of
         {ok, _} ->
-            {continue, status(Size, OKState), OKState};
+            {continue, status(Size, OKState), OKState, infinity};
         error ->
-            {error, status(Size, ErrorState), ErrorState}
+            {error, status(Size, ErrorState), ErrorState, infinity}
     end.
 
 done(Ref, Map, Before, State) ->
@@ -231,8 +243,8 @@ done(Ref, Map, Before, State) ->
     NState = State#state{map=NMap},
     case map_size(NMap) of
         Before ->
-            {error, status(Before, NState), NState};
+            {error, status(Before, NState), NState, infinity};
         After ->
             demonitor(Ref, [flush]),
-            {done, status(After, NState), NState}
+            {done, status(After, NState), NState, infinity}
     end.

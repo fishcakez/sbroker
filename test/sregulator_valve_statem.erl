@@ -84,6 +84,7 @@ command(#state{mod=Mod} = State) ->
                {4, {call, ?MODULE, init_or_change, init_or_change_args(State)}},
                {2, {call, ?MODULE, shutdown, shutdown_args(State)}},
                {1, {call, Mod, handle_info, handle_info_args(State)}},
+               {1, {call, Mod, handle_timeout, handle_timeout_args(State)}},
                {1, {call, Mod, terminate, terminate_args(State)}}]).
 
 precondition(State, {call, _, init_or_change, Args}) ->
@@ -102,6 +103,8 @@ precondition(State, {call, _, handle_info, Args}) ->
     handle_info_pre(State, Args);
 precondition(State, {call, _, shutdown, Args}) ->
     shutdown_pre(State, Args);
+precondition(State, {call, _, handle_timeout, Args}) ->
+    handle_timeout_pre(State, Args);
 precondition(State, {call, _, terminate, Args}) ->
     terminate_pre(State, Args).
 
@@ -119,6 +122,8 @@ next_state(State, Value, {call, _, handle_info, Args}) ->
     handle_info_next(State, Value, Args);
 next_state(State, Value, {call, _, shutdown, Args}) ->
     shutdown_next(State, Value, Args);
+next_state(State, Value, {call, _, handle_timeout, Args}) ->
+    handle_timeout_next(State, Value, Args);
 next_state(State, Value, {call, _, terminate, Args}) ->
     terminate_next(State, Value, Args).
 
@@ -136,6 +141,8 @@ postcondition(State, {call, _, handle_info, Args}, Result) ->
     handle_info_post(State, Args, Result);
 postcondition(State, {call, _, shutdown, Args}, Result) ->
     shutdown_post(State, Args, Result);
+postcondition(State, {call, _, handle_timeout, Args}, Result) ->
+    handle_timeout_post(State, Args, Result);
 postcondition(State, {call, _, terminate, Args}, Result) ->
     terminate_post(State, Args, Result).
 
@@ -164,13 +171,13 @@ relative_time() ->
                {1, choose(0, Max)}]).
 
 init_or_change(undefined, undefined, _, Mod, Args, Time) ->
-    {Status, State} = Mod:init(#{}, Time, Args),
-    {ok, Status, State};
+    {Status, State, Timeout} = Mod:init(#{}, Time, Args),
+    {ok, Status, State, Timeout};
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
     Callback = {sregulator_valve, Mod1, State1, Mod2, Args2},
     case sbroker_handlers:change(Time, [Callback], {?MODULE, self()}) of
-        {ok, [{_, _, {Status, NState}, infinity}]} ->
-            {ok, Status, NState};
+        {ok, [{_, _, {Status, NState}, Timeout}]} ->
+            {ok, Status, NState, Timeout};
         {stop, _} = Stop ->
             Stop
     end.
@@ -206,11 +213,11 @@ init_or_change_next(#state{list=L}, Value, [_, _, Manager, Mod, Args, Time]) ->
 init_or_change_post(#state{manager=undefined}, _, _) ->
     true;
 init_or_change_post(#state{manager=Manager, manager_state=ManState} = State,
-                    [Mod, _, Manager, Mod, Args, Time], {ok, Status, V}) ->
+                    [Mod, _, Manager, Mod, Args, Time], {ok, Status, V, _}) ->
     {Min, Max, Status2, _} = Manager:config_change(Args, Time, ManState),
     post(State#state{min=Min, max=Max, status=Status2, valve=V}, Status);
 init_or_change_post(#state{list=L}, [_, _, Manager, Mod, Args, Time],
-                    {ok, Status, V} = Result) ->
+                    {ok, Status, V, _} = Result) ->
     NState = init_or_change_next(initial_state(), Result,
                                 [undefined, undefined, Manager, Mod, Args,
                                  Time]),
@@ -229,14 +236,14 @@ handle_update_next(#state{manager=Manager, manager_state=ManState} = State,
     State#state{valve=V, time=Time, manager_state=NManState, status=NStatus}.
 
 handle_update_post(#state{manager=Manager, manager_state=ManState} = State,
-                   [RelativeTime, Time, _], {Status, V}) ->
+                   [RelativeTime, Time, _], {Status, V, _}) ->
     {Status2, _} = Manager:handle_update(RelativeTime, Time, ManState),
     post(State#state{status=Status2, valve=V}, Status).
 
 handle_ask(Mod, Time, V) ->
     {Pid, Ref} = Client = spawn_client(),
-    {Status, NV} = Mod:handle_ask(Pid, Ref, Time, V),
-    {Client, Status, NV}.
+    {Status, NV, Timeout} = Mod:handle_ask(Pid, Ref, Time, V),
+    {Client, Status, NV, Timeout}.
 
 handle_ask_args(#state{mod=Mod, time=Time, valve=V}) ->
     [Mod, time(Time), V].
@@ -263,11 +270,11 @@ handle_ask_next(#state{list=L, manager=Manager, manager_state=ManState} = State,
 
 handle_ask_post(#state{list=L, min=Min, manager=Manager,
                        manager_state=ManState} = State, [_, Time, _],
-                {Client, Status, V}) when length(L) < Min ->
+                {Client, Status, V, _}) when length(L) < Min ->
     {Status2, _} = Manager:handle(Time, ManState),
     post(State#state{list=L++[Client], status=Status2, valve=V}, Status);
 handle_ask_post(#state{list=L, manager=Manager, manager_state=ManState} = State,
-                [_, Time, _], {Client, Status,V}) ->
+                [_, Time, _], {Client, Status, V, _}) ->
     {Status2, _} = Manager:handle_ask(Time, ManState),
     post(State#state{list=L++[Client], status=Status2, valve=V}, Status).
 
@@ -308,7 +315,7 @@ handle_done_next(#state{list=L, done=Done, manager=Manager,
 
 handle_done_post(#state{list=L, manager=Manager,
                         manager_state=ManState} = State,
-                 [_, Client, Time, _], {Result, Status, V}) ->
+                 [_, Client, Time, _], {Result, Status, V, _}) ->
    {Status2, _} = Manager:handle(Time, ManState),
     NState = State#state{list=L--[Client], status=Status2, valve=V},
     case lists:member(Client, L) of
@@ -353,7 +360,7 @@ handle_continue_next(#state{list=L, done=Done, manager=Manager,
 
 handle_continue_post(#state{list=L, manager=Manager, manager_state=ManState,
                             min=Min, max=Max, done=Done} = State,
-                     [_, Client, Time, _], {Result, Status, V}) ->
+                     [_, Client, Time, _], {Result, Status, V, _}) ->
     {Status2, NManState} = Manager:handle(Time, ManState),
     NState = State#state{status=Status2, valve=V},
     case lists:member(Client, L) of
@@ -387,7 +394,24 @@ handle_info_next(#state{manager=Manager, manager_state=ManState} = State, Value,
     State#state{manager_state=NManState, status=Status, time=Time, valve=V}.
 
 handle_info_post(#state{manager=Manager, manager_state=ManState} = State,
-                 [_, Time, _], {Status, V}) ->
+                 [_, Time, _], {Status, V, _}) ->
+    {Status2, NManState} = Manager:handle(Time, ManState),
+    post(State#state{manager_state=NManState, status=Status2, valve=V}, Status).
+
+handle_timeout_args(#state{time=Time, valve=V}) ->
+    [time(Time), V].
+
+handle_timeout_pre(#state{time=PrevTime}, [Time, _]) ->
+    Time >= PrevTime.
+
+handle_timeout_next(#state{manager=Manager, manager_state=ManState} = State,
+                    Value, [Time, _]) ->
+    V = {call, erlang, element, [2, Value]},
+    {Status, NManState} = Manager:handle(Time, ManState),
+    State#state{manager_state=NManState, status=Status, time=Time, valve=V}.
+
+handle_timeout_post(#state{manager=Manager, manager_state=ManState} = State,
+                 [Time, _], {Status, V, _}) ->
     {Status2, NManState} = Manager:handle(Time, ManState),
     post(State#state{manager_state=NManState, status=Status2, valve=V}, Status).
 
@@ -440,7 +464,7 @@ shutdown_next(#state{list=L, shutdown=Shutdown, manager=Manager,
     end.
 
 shutdown_post(#state{list=L, manager=Manager, manager_state=ManState} = State,
-              [_, Client, _, Time, _], {Status, V}) ->
+              [_, Client, _, Time, _], {Status, V, _}) ->
    {Status2, _} = Manager:handle(Time, ManState),
    post(State#state{list=L--[Client], status=Status2, valve=V}, Status).
 

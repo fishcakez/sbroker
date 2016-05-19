@@ -233,10 +233,10 @@ queue_spec() ->
 
 valve_spec() ->
     {oneof([sregulator_statem_valve, sregulator_statem2_valve]),
-     ?SUCHTHAT(Opens, list(oneof([open, closed])), Opens =/= [])}.
+     ?SUCHTHAT(Opens, resize(4, list(oneof([open, closed]))), Opens =/= [])}.
 
 meter_spec() ->
-    {sbroker_alarm_meter, {0, 10, ?MODULE}}.
+    {sbroker_alarm_meter, {0, 1000, ?MODULE}}.
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, Init),
@@ -289,10 +289,10 @@ update_args(#state{sregulator=Regulator}) ->
     [Regulator, choose(-10, 10), ?TIMEOUT].
 
 update_next(State, _, _) ->
-    valve_next(State).
+    valve_next(State, fun queue_next/1).
 
 update_post(State, _, _) ->
-    valve_post(State).
+    valve_post(State, fun queue_post/1).
 
 spawn_client_args(#state{sregulator=Regulator}) ->
     [Regulator, oneof([async_ask, nb_ask])].
@@ -305,19 +305,19 @@ spawn_client_next(#state{valve_status=open, queue=[], valve=V} = State, Client,
              [_, _]) ->
     valve_next(State#state{valve=V++[Client]});
 spawn_client_next(#state{valve_status=closed} = State, _, [_, nb_ask]) ->
-    queue_next(State);
+    valve_next(State, fun queue_next/1);
 spawn_client_next(#state{valve_status=closed, queue=Q} = State, Client,
                   [_, async_ask]) ->
-    queue_next(State#state{queue=Q++[Client]}).
+    queue_next(State#state{queue=Q++[Client]}, fun valve_next/1).
 
 spawn_client_post(#state{valve_status=open, queue=[], valve=V} = State,
                   [_, _], Client) ->
     go_post(Client) andalso valve_post(State#state{valve=V++[Client]});
 spawn_client_post(#state{valve_status=closed} = State, [_, nb_ask], _) ->
-    queue_post(State);
+    valve_post(State, fun queue_post/1);
 spawn_client_post(#state{valve_status=closed, queue=Q} = State, [_, async_ask],
                   Client) ->
-    queue_post(State#state{queue=Q++[Client]}).
+    queue_post(State#state{queue=Q++[Client]}, fun valve_post/1).
 
 continue(Regulator, undefined) ->
     Result = sregulator:continue(Regulator, make_ref()),
@@ -342,9 +342,10 @@ continue_next(#state{valve_state=[open | VState], valve=V} = State, _,
               [_, Client]) ->
     case lists:member(Client, V) of
         true ->
-            valve_next(State#state{valve_status=open, valve_state=VState});
+            valve_next(State#state{valve_status=open, valve_state=VState},
+                       fun queue_next/1);
         false ->
-            valve_next(State)
+            valve_next(State, fun queue_next/1)
     end;
 continue_next(#state{valve_state=[closed | VState], valve=V} = State, _,
               [_, Client]) ->
@@ -352,9 +353,9 @@ continue_next(#state{valve_state=[closed | VState], valve=V} = State, _,
         true ->
             NState = State#state{valve_status=closed, valve_state=VState,
                                  valve=V--[Client]},
-            valve_next(NState);
+            valve_next(NState, fun queue_next/1);
         false ->
-            valve_next(State)
+            valve_next(State, fun queue_next/1)
     end.
 
 continue_post(#state{valve_state=[], valve_opens=VState} = State, Args,
@@ -365,9 +366,11 @@ continue_post(#state{valve_state=[open | VState], valve=V} = State, [_, Client],
     case lists:member(Client, V) of
         true ->
             NState = State#state{valve_status=open, valve_state=VState},
-            call_post(Client,go, Result) andalso valve_post(NState);
+            call_post(Client, go, Result) andalso
+            valve_post(NState, fun queue_post/1);
         false ->
-            call_post(Client, not_found, Result) andalso valve_post(State)
+            call_post(Client, not_found, Result) andalso
+            valve_post(State, fun queue_post/1)
     end;
 continue_post(#state{valve_state=[closed | VState], valve=V} = State,
               [_, Client], Result) ->
@@ -375,9 +378,11 @@ continue_post(#state{valve_state=[closed | VState], valve=V} = State,
         true ->
             NState = State#state{valve_status=closed, valve_state=VState,
                                  valve=V--[Client]},
-            call_post(Client, stop, Result) andalso valve_post(NState);
+            call_post(Client, stop, Result) andalso
+            valve_post(NState, fun queue_post/1);
         false ->
-            call_post(Client, not_found, Result) andalso valve_post(State)
+            call_post(Client, not_found, Result) andalso
+            valve_post(State, fun queue_post/1)
     end.
 
 done(Regulator, undefined) ->
@@ -389,17 +394,13 @@ done(_, Client) ->
 done_args(State) ->
     continue_args(State).
 
-done_next(#state{valve_state=[], valve_opens=VState} = State, Value,
-              Args) ->
-    done_next(State#state{valve_state=VState}, Value, Args);
 done_next(#state{valve=V} = State, _, [_, Client]) ->
-    valve_next(State#state{valve=V--[Client]}).
+    NState = State#state{valve=V--[Client]},
+    valve_next(NState, fun queue_next/1).
 
-done_post(#state{valve_state=[], valve_opens=VState} = State, Args,
-              Result) ->
-    done_post(State#state{valve_state=VState}, Args, Result);
 done_post(#state{valve=V} = State, [_, Client], Result) ->
-    Post = valve_post(State#state{valve=V--[Client]}),
+    NState = State#state{valve=V--[Client]},
+    Post = valve_post(NState, fun queue_post/1),
     case lists:member(Client, V) of
         true ->
             Post andalso call_post(Client, stop, Result);
@@ -411,10 +412,10 @@ timeout_args(#state{sregulator=Regulator}) ->
     [Regulator].
 
 timeout_next(State, _, _) ->
-    queue_next(State).
+    valve_next(State, fun queue_next/1).
 
 timeout_post(State, _, _) ->
-    queue_post(State).
+    valve_post(State, fun queue_post/1).
 
 cancel_args(State) ->
     continue_args(State).
@@ -428,20 +429,21 @@ cancel_next(#state{queue=Q, cancels=Cancels} =State, _, [_, Client]) ->
     case lists:member(Client, Q) of
         true ->
             queue_next(State#state{queue=Q--[Client],
-                                   cancels=Cancels++[Client]});
+                                   cancels=Cancels++[Client]},
+                       fun valve_next/1);
         false ->
-            queue_next(State)
+            queue_next(State,fun valve_next/1)
     end.
 
 cancel_post(#state{queue=Q} = State, [_, Client], Result) ->
     case lists:member(Client, Q) of
         true when Result =:= 1 ->
-            queue_post(State#state{queue=Q--[Client]});
+            queue_post(State#state{queue=Q--[Client]}, fun valve_post/1);
         true ->
             ct:pal("Cancel: ~p", [Result]),
             false;
         false when Result =:= false ->
-            queue_post(State#state{queue=Q--[Client]});
+            queue_post(State#state{queue=Q--[Client]}, fun valve_post/1);
         false ->
             ct:pal("Cancel: ~p", [Result]),
             false
@@ -451,19 +453,19 @@ len_args(#state{sregulator=Regulator}) ->
     [Regulator, ?TIMEOUT].
 
 len_next(State, _, _) ->
-    queue_next(State).
+    valve_next(State, fun queue_next/1).
 
 len_post(#state{queue=Q} = State, _, Len) ->
-    length(Q) =:= Len andalso queue_post(State).
+    length(Q) =:= Len andalso valve_post(State, fun queue_post/1).
 
 size_args(State) ->
     len_args(State).
 
 size_next(State, _, _) ->
-    queue_next(State).
+    valve_next(State, fun queue_next/1).
 
 size_post(#state{valve=V} = State, _, Size) ->
-    length(V) =:= Size andalso queue_post(State).
+    length(V) =:= Size andalso valve_post(State, fun queue_post/1).
 
 change_config_args(#state{sregulator=Regulator}) ->
     [Regulator, init()].
@@ -473,23 +475,22 @@ change_config(Regulator, Init) ->
     sregulator:change_config(Regulator, 100).
 
 change_config_next(State, _, [_, ignore]) ->
-    queue_next(State);
+    valve_next(State, fun queue_next/1);
 change_config_next(State, _, [_, bad]) ->
-    queue_next(State);
+    valve_next(State, fun queue_next/1);
 change_config_next(State, _, [_, {ok, {QSpec, VSpec, _}}]) ->
     NState = queue_change_next(QSpec, State),
     valve_change_next(VSpec, NState).
 
 change_config_post(State, [_, ignore], ok) ->
-    queue_post(State);
+    valve_post(State, fun queue_post/1);
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
-    queue_post(State);
+    valve_post(State, fun queue_post/1);
 change_config_post(State, [_, {ok, {QSpec, VSpec, _}}], ok) ->
     queue_change_post(QSpec, State) andalso
     valve_change_post(VSpec, queue_change_next(QSpec, State));
 change_config_post(_, _, _) ->
     false.
-
 
 shutdown_client_args(State) ->
     continue_args(State).
@@ -511,7 +512,6 @@ shutdown_client(_, Client) ->
         100 ->
             exit(timeout)
     end.
-
 
 shutdown_client_next(State, _, [_, undefined]) ->
     queue_next(State, fun valve_next/1);
@@ -628,20 +628,23 @@ resume_next(#state{change={ok, {QSpec, VSpec, _}}} = State, _, _) ->
     NState2 = queue_change_next(QSpec, NState),
     valve_change_next(VSpec, NState2);
 resume_next(State, _, _) ->
-    queue_next(State#state{sys=running}).
+    valve_next(State#state{sys=running}, fun queue_next/1).
 
 resume_post(#state{change={ok, {QSpec, VSpec, _}}} = State, _,
             _) ->
     queue_change_post(QSpec, State) andalso
     valve_change_post(VSpec, queue_change_next(QSpec, State));
 resume_post(State, _, _) ->
-    queue_post(State).
+    valve_post(State, fun queue_post/1).
 
 %% helpers
 
-valve_next(#state{valve_state=[], valve_opens=[_|_] = VState} = State) ->
-    valve_next(State#state{valve_state=VState});
-valve_next(#state{valve_state=[open | VState]} = State) ->
+valve_next(State) ->
+    valve_next(State, fun(NState) -> NState end).
+
+valve_next(#state{valve_state=[], valve_opens=[_|_] = VState} = State, Close) ->
+    valve_next(State#state{valve_state=VState}, Close);
+valve_next(#state{valve_state=[open | VState]} = State, _) ->
     NState = State#state{valve_status=open, valve_state=VState},
     queue_next(NState,
                fun(#state{queue=[], queue_drops=QDrops} = NState2) ->
@@ -655,12 +658,15 @@ valve_next(#state{valve_state=[open | VState]} = State) ->
                                                valve=V++[lists:last(Q)]},
                        valve_next(NState3)
                end);
-valve_next(#state{valve_state=[closed | VState]} = State) ->
-    State#state{valve_status=closed, valve_state=VState}.
+valve_next(#state{valve_state=[closed | VState]} = State, Close) ->
+    Close(State#state{valve_status=closed, valve_state=VState}).
 
-valve_post(#state{valve_state=[], valve_opens=VState} = State) ->
-    valve_post(State#state{valve_state=VState});
-valve_post(#state{valve_state=[open | VState]} = State) ->
+valve_post(State) ->
+    valve_post(State, fun(_) -> true end).
+
+valve_post(#state{valve_state=[], valve_opens=VState} = State, Close) ->
+    valve_post(State#state{valve_state=VState}, Close);
+valve_post(#state{valve_state=[open | VState]} = State, _) ->
     NState = State#state{valve_status=open, valve_state=VState},
     queue_post(NState,
                fun(#state{queue=[]}) ->
@@ -676,8 +682,8 @@ valve_post(#state{valve_state=[open | VState]} = State) ->
                                                valve=V++[Client]},
                        go_post(Client) andalso valve_post(NState3)
                end);
-valve_post(_) ->
-    true.
+valve_post(#state{valve_state=[closed | VState]} = State, Close) ->
+    Close(State#state{valve_status=closed, valve_state=VState}).
 
 queue_next(State) ->
     queue_next(State, fun(NState) -> NState end).
@@ -765,12 +771,12 @@ sys_args(#state{sregulator=Regulator}) ->
     [Regulator, ?TIMEOUT].
 
 sys_next(#state{sys=running} = State) ->
-    queue_next(State);
+    valve_next(State, fun queue_next/1);
 sys_next(#state{sys=suspended} = State) ->
     State.
 
 sys_post(#state{sys=running} = State) ->
-    queue_post(State);
+    valve_post(State, fun queue_post/1);
 sys_post(#state{sys=suspended}) ->
     true.
 

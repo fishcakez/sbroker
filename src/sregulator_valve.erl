@@ -24,7 +24,8 @@
 %% ```
 %% -callback init(InternalMap :: internal_map(), Time :: integer(),
 %%                Args :: any()) ->
-%%      {Status :: open | closed, State :: any()}.
+%%      {Status :: open | closed, State :: any(),
+%%       TimeoutTime :: integer() | infinity}.
 %% '''
 %% `InternalMap' is the internal map of running processes, it is a `map()' with
 %% monitor `reference()' keys and `pid()' value where the monitor is that of the
@@ -43,11 +44,18 @@
 %%
 %% `State' is the state of the queue and used in the next call.
 %%
+%% `TimeoutTime' represents the next time a valve wishes to call
+%% `handle_timeout/2' to change status. If a message is not received the timeout
+%% should occur at or after `TimeoutTime'. The time must be greater than or
+%% equal to `Time'. If a valve does not require a timeout then `TimeoutTime'
+%% should be `infinity'.
+%%
 %% When allowing a request to run, `handle_ask/4':
 %% ```
 %% -callback handle_ask(Ref :: reference() Pid :: pid(), Time :: integer(),
 %%                      State :: any()) ->
-%%      {Status :: open | closed, NState :: any()}.
+%%      {Status :: open | closed, NState :: any(),
+%%       TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Ref' is a monitor reference of the sender, `Pid', as in the `InternalMap'
 %% in `init/3'.
@@ -59,7 +67,8 @@
 %% ```
 %% -callback handle_done(Ref :: reference(), Time :: integer(),
 %%                       State :: any()) ->
-%%      {Result :: done | error, Status :: open | closed, NState :: any()}.
+%%      {Result :: done | error, Status :: open | closed, NState :: any(),
+%%       TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Result' is `done' when the `Ref' is known by the valve and is removed, if
 %% `Ref' is not found in the valve it is `error'.
@@ -70,7 +79,7 @@
 %% -callback handle_continue(Ref :: reference(), Time :: integer(),
 %%                       State :: any()) ->
 %%      {Result :: continue | done | error, Status :: open | closed,
-%%       NState :: any()}.
+%%       NState :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Result' is `continue' if `Ref' is known by the valve and is allowed to
 %% continue, if `Ref' is removed from the valve it is `done' and if `Ref' is not
@@ -80,17 +89,28 @@
 %% When handling a message, `handle_info/3':
 %% ```
 %% -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
-%%     {Status :: open | closedm NState :: any()}.
+%%     {Status :: open | closed, NState :: any(),
+%%      TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Msg' is the message, and may be intended for another callback.
 %%
 %% The other variables are equivalent to those in `init/3', with `NState' being
 %% the new state.
 %%
+%% When a timeout occurs, `handle_timeout/2':
+%% ```
+%% -callback handle_timeout(Time :: integer(), State :: any()) ->
+%%     {Status :: open | closed, NState :: any(),
+%%      TimeoutTime :: integer() | infinity}.
+%% '''
+%% The variables are equivalent to those in `init/3', with `NState' being the
+%% new state.
+%%
 %% When changing the configuration of a valve, `config_change/4':
 %% ```
 %% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
-%%      {Status :: open | closed, NState :: any()}.
+%%      {Status :: open | closed, NState :: any(),
+%%       TimeoutTime :: integer() | infinity}.
 %% '''
 %% The variables are equivalent to those in `init/3', with `NState' being the
 %% new state.
@@ -139,29 +159,39 @@
 -export_type([internal_map/0]).
 
 -callback init(Map :: internal_map(), Time :: integer(), Args :: any()) ->
-    {Status :: open | closed, State :: any()}.
+    {Status :: open | closed, State :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback handle_ask(Pid :: pid(), Ref :: reference(), Time :: integer(),
                      State :: any()) ->
-    {Status :: open | closed, NState :: any()}.
+    {Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback handle_done(Ref :: reference(), Time :: integer(), State :: any()) ->
-    {Result :: done | error, Status :: open | closed, NState :: any()}.
+    {Result :: done | error, Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback handle_continue(Ref :: reference(), Time :: integer(),
                           State :: any()) ->
     {Result :: continue | done | error, Status :: open | closed,
-     NState :: any()}.
+     NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback handle_update(RelativeTime :: integer(), Time :: integer(),
                         State :: any()) ->
-    {Status :: open | closed, NState :: any()}.
+    {Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
-    {Status :: open | closed, NState :: any()}.
+    {Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
+
+-callback handle_timeout(Time :: integer(), State :: any()) ->
+    {Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
-    {Status :: open | closed, NState :: any()}.
+    {Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback size(State :: any()) -> Size :: non_neg_integer().
 
@@ -177,27 +207,31 @@ initial_state() ->
     #{}.
 
 %% @private
--spec init(Module, Map, Time, Args) -> {{Status, State}, infinity} when
+-spec init(Module, Map, Time, Args) -> {{Status, State}, TimeoutTime} when
     Module :: module(),
     Map :: internal_map(),
     Time :: integer(),
     Args :: any(),
     Status :: open | closed,
-    State :: any().
+    State :: any(),
+    TimeoutTime :: integer() | infinity.
 init(Mod, Map, Now, Args) ->
-    {Mod:init(Map, Now, Args), infinity}.
+    {Status, State, TimeoutTime} = Mod:init(Map, Now, Args),
+    {{Status, State}, TimeoutTime}.
 
 %% @private
 -spec config_change(Module, Args, Time, State) ->
-    {{Status, NState}, infinity} when
+    {{Status, NState}, TimeoutTime} when
     Module :: module(),
     Args :: any(),
     Time :: integer(),
     State :: any(),
     Status :: open | closed,
-    NState :: any().
+    NState :: any(),
+    TimeoutTime :: integer() | infinity.
 config_change(Mod, Args, Now, State) ->
-    {Mod:config_change(Args, Now, State), infinity}.
+    {Status, NState, TimeoutTime} = Mod:config_change(Args, Now, State),
+    {{Status, NState}, TimeoutTime}.
 
 %% @private
 -spec terminate(Module, Reason, State) -> Map when

@@ -24,7 +24,7 @@
 %% ```
 %% -callback init(InternalQueue :: internal_queue(), Time :: integer(),
 %%                Args :: any()) ->
-%%      {State :: any(), TimeoutTime :: integer | infinity}.
+%%      {State :: any(), TimeoutTime :: integer() | infinity}.
 %% '''
 %% `InternalQueue' is the internal queue of requests, it is a `queue:queue()'
 %% with items of the form `{SendTime, From, Value, Reference}'. `SendTime' is
