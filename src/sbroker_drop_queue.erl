@@ -39,6 +39,7 @@
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
 -export([terminate/2]).
@@ -167,6 +168,17 @@ handle_info({'DOWN', Ref, _, _, _}, _, #state{queue=Q} = State) ->
 handle_info(_, _, State) ->
     {State, infinity}.
 
+%% @private
+-spec code_change(OldVsn, Time, State, Extra) -> {NState, infinity} when
+      OldVsn :: any(),
+      Time :: integer(),
+      State :: #state{},
+      Extra :: any(),
+      NState :: #state{}.
+code_change(_, _, State, _) ->
+    {State, infinity}.
+
+%% @private
 -spec config_change({Out, Drop, Max}, Time, State) ->
     {NState, infinity} when
       Out :: out | out_r,

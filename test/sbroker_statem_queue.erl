@@ -28,6 +28,7 @@
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
 -export([terminate/2]).
@@ -103,6 +104,9 @@ handle_info({'DOWN', Ref, _, _, _}, Time, #state{queue=Q} = State) ->
     handle_timeout(Time, State#state{queue=NQ});
 handle_info(_, Time, State) ->
     handle_timeout(Time, State).
+
+code_change(_, _, #state{config=Config} = State, _) ->
+    {State#state{drops=Config}, infinity}.
 
 config_change({Out, Config}, Time, #state{config=Config} = State) ->
     handle_timeout(Time, State#state{out=Out});

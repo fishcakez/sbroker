@@ -45,12 +45,13 @@
 -export([shutdown_client/2]).
 -export([replace_state/2]).
 -export([change_code/3]).
+-export([get_modules/2]).
 
 -export([client_init/2]).
 
 -record(state, {sbroker, asks=[], ask_mod, ask_out, ask_drops, ask_state=[],
-                bids=[], bid_mod, bid_out, bid_drops, bid_state=[], cancels=[],
-                done=[], sys=running, change}).
+                bids=[], bid_mod, bid_out, bid_drops, bid_state=[], meter_mod,
+                cancels=[], done=[], sys=running, change}).
 
 -define(TIMEOUT, 5000).
 
@@ -98,7 +99,8 @@ command(#state{sys=running} = State) ->
                {1, {call, sys, get_status, get_status_args(State)}},
                {1, {call, sys, get_state, get_state_args(State)}},
                {1, {call, ?MODULE, replace_state, replace_state_args(State)}},
-               {1, {call, sys, suspend, suspend_args(State)}}]);
+               {1, {call, sys, suspend, suspend_args(State)}},
+               {1, {call, ?MODULE, get_modules, get_modules_args(State)}}]);
 command(#state{sys=suspended} = State) ->
     frequency([{5, {call, sys, resume, resume_args(State)}},
                {2, {call, ?MODULE, change_code, change_code_args(State)}},
@@ -149,6 +151,8 @@ next_state(State, Value, {call, _, replace_state, Args}) ->
     replace_state_next(State, Value, Args);
 next_state(State, Value, {call, _, suspend, Args}) ->
     suspend_next(State, Value, Args);
+next_state(State, Value, {call, _, get_modules, Args}) ->
+    get_modules_next(State, Value, Args);
 next_state(State, Value, {call, _, change_code, Args}) ->
     change_code_next(State, Value, Args);
 next_state(State, Value, {call, _, resume, Args}) ->
@@ -178,6 +182,8 @@ postcondition(State, {call, _, replace_state, Args}, Result) ->
     replace_state_post(State, Args, Result);
 postcondition(State, {call, _, suspend, Args}, Result) ->
     suspend_post(State, Args, Result);
+postcondition(State, {call, _, get_modules, Args}, Result) ->
+    get_modules_post(State, Args, Result);
 postcondition(State, {call, _, change_code, Args}, Result) ->
     change_code_post(State, Args, Result);
 postcondition(State, {call, _, resume, Args}, Result) ->
@@ -215,7 +221,8 @@ queue_spec() ->
      {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}}.
 
 meter_spec() ->
-    {sbroker_alarm_meter, {0, 1000, ?MODULE}}.
+    oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
+           {sbroker_timeout_meter, oneof([1000, infinity])}]).
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, Init),
@@ -245,11 +252,12 @@ start_link_pre(#state{sbroker=Broker}, _) ->
 start_link_next(State, Value,
                 [{ok, {{AskMod, {AskOut, AskDrops}},
                        {BidMod, {BidOut, BidDrops}},
-                       _}}]) ->
+                       {MeterMod, _}}}]) ->
     Broker = {call, erlang, element, [2, Value]},
     State#state{sbroker=Broker, bid_mod=BidMod, bid_out=BidOut,
                 bid_drops=BidDrops, bid_state=BidDrops, ask_mod=AskMod,
-                ask_out=AskOut, ask_drops=AskDrops, ask_state=AskDrops};
+                ask_out=AskOut, ask_drops=AskDrops, ask_state=AskDrops,
+                meter_mod=MeterMod};
 start_link_next(State, _, [ignore]) ->
     State;
 start_link_next(State, _, [bad]) ->
@@ -452,8 +460,9 @@ change_config_next(State, _, [_, ignore]) ->
     timeout_next(State);
 change_config_next(State, _, [_, bad]) ->
     timeout_next(State);
-change_config_next(State, _, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}]) ->
-    NState = ask_change_next(AskQueueSpec, State),
+change_config_next(State, _,
+                   [_, {ok, {AskQueueSpec, BidQueueSpec, {MeterMod, _}}}]) ->
+    NState = ask_change_next(AskQueueSpec, State#state{meter_mod=MeterMod}),
     bid_change_next(BidQueueSpec, NState).
 
 %% If module and args the same state not changed by backends.
@@ -665,26 +674,68 @@ suspend_next(State, _, _) ->
 suspend_post(_, _, _) ->
     true.
 
-change_code_args(#state{sbroker=Broker}) ->
-    [Broker, init(), ?TIMEOUT].
+get_modules_args(#state{sbroker=Broker}) ->
+    [Broker, ?TIMEOUT].
 
-change_code(Broker, Init, Timeout) ->
+get_modules(Broker, Timeout) ->
+    {ok, Mods} = gen:call(Broker, self(), get_modules, Timeout),
+    Mods.
+
+get_modules_next(State, _, _) ->
+    timeout_next(State).
+
+get_modules_post(#state{ask_mod=AskMod, bid_mod=BidMod,
+                        meter_mod=MeterMod} = State, _, Result) ->
+    case lists:usort([?MODULE, AskMod, BidMod, MeterMod]) of
+        Result ->
+            timeout_post(State);
+        Mods ->
+            ct:pal("Modules~nExpected: ~p~nObserved: ~p", [Mods, Result]),
+            false
+    end.
+
+change_code_args(#state{sbroker=Broker}) ->
+    Mod = oneof([{?MODULE, init()},
+                 sbroker_statem_queue,
+                 sbroker_statem2_queue,
+                 sbroker_alarm_meter,
+                 sbroker_timeout_meter]),
+    [Broker, Mod, ?TIMEOUT].
+
+change_code(Broker, {?MODULE, Init}, Timeout) ->
     application:set_env(sbroker, ?MODULE, Init),
-    sys:change_code(Broker, undefined, undefined, undefined, Timeout).
+    sys:change_code(Broker, ?MODULE, undefined, undefined, Timeout);
+change_code(Broker, Mod, Timeout) ->
+    sys:change_code(Broker, Mod, undefined, undefined, Timeout).
 
 change_code_pre(#state{sys=SysState}, _) ->
     SysState =:= suspended.
 
-change_code_next(State, _, [_, {ok, _} = Init, _]) ->
+change_code_next(State, _, [_, {?MODULE, {ok, _} = Init}, _]) ->
     State#state{change=Init};
-change_code_next(State, _, _) ->
+change_code_next(State, {?MODULE, _}, _) ->
+    State;
+change_code_next(State, _, [_, Mod, _]) ->
+    change_code_bid(Mod, change_code_ask(Mod, State)).
+
+change_code_ask(Mod, #state{ask_mod=Mod, ask_drops=AskDrops} = State) ->
+    State#state{ask_state=AskDrops};
+change_code_ask(_, State) ->
     State.
 
-change_code_post(_, [_, {ok, _}, _], ok) ->
+change_code_bid(Mod, #state{bid_mod=Mod, bid_drops=BidDrops} = State) ->
+    State#state{bid_state=BidDrops};
+change_code_bid(_, State) ->
+    State.
+
+change_code_post(_, [_, {?MODULE, {ok, _}}, _], ok) ->
     true;
-change_code_post(_, [_, ignore, _], ok) ->
+change_code_post(_, [_, {?MODULE, ignore}, _], ok) ->
     true;
-change_code_post(_, [_, bad, _], {error, {bad_return_value, bad}}) ->
+change_code_post(_, [_, {?MODULE, bad}, _],
+                 {error, {bad_return_value, bad}}) ->
+    true;
+change_code_post(_, [_, Mod, _], ok) when is_atom(Mod) ->
     true;
 change_code_post(_, _, _) ->
     false.
@@ -695,14 +746,16 @@ resume_args(#state{sbroker=Broker}) ->
 resume_pre(#state{sys=SysState}, _) ->
     SysState =:= suspended.
 
-resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _, _) ->
-    NState = State#state{sys=running, change=undefined},
+resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec,
+                                {MeterMod, _}}}} = State, _, _) ->
+    NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
     NState2 = ask_change_next(AskQueueSpec, NState),
     bid_change_next(BidQueueSpec, NState2);
 resume_next(State, _, _) ->
     timeout_next(State#state{sys=running}).
 
-resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _, _) ->
+resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _,
+            _) ->
     ask_change_post(AskQueueSpec, State) andalso
     bid_change_post(BidQueueSpec, State);
 resume_post(State, _, _) ->

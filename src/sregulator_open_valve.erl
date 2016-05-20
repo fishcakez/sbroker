@@ -40,6 +40,7 @@
 -export([handle_update/3]).
 -export([handle_info/3]).
 -export([handle_timeout/2]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([size/1]).
 -export([terminate/2]).
@@ -166,6 +167,17 @@ handle_info(_,  _, State) ->
       State :: #state{},
       NState :: #state{}.
 handle_timeout(_, State) ->
+    handle(State).
+
+%% @private
+-spec code_change(OldVsn, Time, State, Extra) -> {Status, NState, infinity} when
+      OldVsn :: any(),
+      Time :: integer(),
+      State :: #state{},
+      Extra :: any(),
+      Status :: open | closed,
+      NState :: #state{}.
+code_change(_, _, State, _) ->
     handle(State).
 
 %% @private

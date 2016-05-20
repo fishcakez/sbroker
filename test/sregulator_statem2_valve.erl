@@ -30,6 +30,7 @@
 -export([handle_update/3]).
 -export([handle_info/3]).
 -export([handle_timeout/2]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([size/1]).
 -export([terminate/2]).
@@ -56,6 +57,9 @@ handle_info(Msg, Time, State) ->
 
 handle_timeout(Time, State) ->
      sregulator_statem_valve:handle_timeout(Time, State).
+
+code_change(OldVsn, Time, State, Extra) ->
+    sregulator_statem_valve:code_change(OldVsn, Time, State, Extra).
 
 config_change(Opens, Time, State) ->
     sregulator_statem_valve:config_change(Opens, Time, State).

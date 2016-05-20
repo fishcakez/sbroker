@@ -39,6 +39,7 @@
 -export([init/2]).
 -export([handle_update/4]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([terminate/2]).
 
@@ -112,6 +113,17 @@ handle_update(QueueDelay, _, Time,
       State :: #state{},
       Next :: integer() | infinity.
 handle_info(_, Time, #state{toggle_next=ToggleNext} = State) ->
+    {State, max(Time, ToggleNext)}.
+
+%% @private
+-spec code_change(OldVsn, Time, State, Extra) -> {NState, Next} when
+      OldVsn :: any(),
+      Time :: integer(),
+      State :: #state{},
+      Extra :: any(),
+      NState :: #state{},
+      Next :: integer() | infinity.
+code_change(_, Time, #state{toggle_next=ToggleNext} = State, _) ->
     {State, max(Time, ToggleNext)}.
 
 %% @private

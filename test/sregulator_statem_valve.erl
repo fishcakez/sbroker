@@ -30,6 +30,7 @@
 -export([handle_update/3]).
 -export([handle_info/3]).
 -export([handle_timeout/2]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([size/1]).
 -export([terminate/2]).
@@ -84,6 +85,9 @@ handle_info(_,  _, State) ->
 
 handle_timeout(_, State) ->
     handle(State).
+
+code_change(_, _, #state{config=Opens} = State, _) ->
+    handle(State#state{config=Opens, opens=Opens}).
 
 config_change(Opens, _, #state{config=Opens} = State) ->
     handle(State);

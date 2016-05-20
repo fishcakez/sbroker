@@ -108,6 +108,21 @@
 %% The other variables are equivalent to those in `init/3', with `NState' being
 %% the new state.
 %%
+%% When changing the state due to a code change, `code_change/4':
+%% ```
+%% -callback code_change(OldVsn :: any(), Time :: integer(), State :: any(),
+%%                       Extra :: any()) ->
+%%      {NState :: any(), TimeoutTime :: integer() | infinity}.
+%% '''
+%% On an upgrade `OldVsn' is version the state was created with and on an
+%% downgrade is the same form except `{down, OldVsn}'. `OldVsn' is defined by
+%% the vsn attribute(s) of the old version of the callback module. If no such
+%% attribute is defined, the version is the checksum of the BEAM file. `Extra'
+%% is from `{advanced, Extra}' in the update instructions.
+%%
+%% The other variables are equivalent to those in `init/3', with `NState' being
+%% the new state.
+%%
 %% When changing the configuration of a queue, `config_change/4':
 %% ```
 %% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
@@ -152,6 +167,7 @@
 
 -export([initial_state/0]).
 -export([init/4]).
+-export([code_change/5]).
 -export([config_change/4]).
 -export([terminate/3]).
 
@@ -183,6 +199,10 @@
      TimeoutTime :: integer() | infinity}.
 
 -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
+    {NState :: any(), TimeoutTime :: integer() | infinity}.
+
+-callback code_change(OldVsn :: any(), Time :: integer(), State :: any(),
+                      Extra :: any()) ->
     {NState :: any(), TimeoutTime :: integer() | infinity}.
 
 -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
@@ -226,8 +246,20 @@ init(Mod, Q, Now, Args) ->
     Mod:init(Q, Now, Args).
 
 %% @private
--spec config_change(Module, Args, Time, State) ->
+-spec code_change(Module, OldVsn, Time, State, Extra) ->
     {NState, TimeoutTime} when
+      Module :: module(),
+      OldVsn :: any(),
+      Time :: integer(),
+      State :: any(),
+      Extra :: any(),
+      NState :: any(),
+      TimeoutTime :: integer() | infinity.
+code_change(Mod, OldVsn, Time, State, Extra) ->
+    Mod:code_change(OldVsn, Time, State, Extra).
+
+%% @private
+-spec config_change(Module, Args, Time, State) -> {NState, TimeoutTime} when
     Module :: module(),
     Args :: any(),
     Time :: integer(),

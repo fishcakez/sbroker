@@ -70,6 +70,7 @@
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
 -export([terminate/2]).
@@ -188,6 +189,19 @@ handle_info(Msg, Time, #state{module=Module, queues=Qs, empties=Es} = State) ->
     NState = State#state{queues=NQs, empties=NEs, next=Next,
                          remove_time=RemoveTime},
     {NState, Next}.
+
+%% @private
+-spec code_change(OldVsn, Time, State, Extra) -> {NState, NextTimeout} when
+      OldVsn :: any(),
+      Time :: integer(),
+      State :: #state{},
+      Extra :: any(),
+      NState :: #state{},
+      NextTimeout :: integer() | infinity.
+code_change(_, Time, #state{next=Next} = State, _) ->
+    % Can only handle code changes for this module, sbroker/sregulator won't
+    % pass a change for other modules.
+    {State, max(Time, Next)}.
 
 %% @private
 -spec config_change({Module, Args, Index}, Time, State) ->

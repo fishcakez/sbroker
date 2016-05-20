@@ -29,6 +29,7 @@
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
 -export([terminate/2]).
@@ -56,6 +57,9 @@ handle_cancel(Tag, Time, State) ->
 
 handle_info(Msg, Time, State) ->
     sbroker_fq_queue:handle_info(Msg, Time, State).
+
+code_change(OldVsn, Time, State, Extra) ->
+    sbroker_fq_queue:codeg_change(OldVsn, Time, State, Extra).
 
 config_change(Args, Time, State) ->
     sbroker_fq_queue:config_change(Args, Time, State).

@@ -46,7 +46,9 @@
 %% is the queue specification for the `ask' queue, `AskRQueueSpec' is the queue
 %% specification for the `ask_r' queue and `MeterSpec' is the meter
 %% specification. In the case of `ignore' the broker is not started and
-%% `start_link' returns `ignore'.
+%% `start_link' returns `ignore'. As the callback modules are defined in the
+%% `init/1' callback a broker supports the `dynamic' modules supervisor child
+%% specification.
 %%
 %% Both queue and meter specifcations take the form: `{Module, Args}'. `Module'
 %% is the callback module and `Args' are its arguments.
@@ -564,7 +566,7 @@ system_continue(Parent, Dbg,
     change(State, Change, Time, Asks, Bids, NConfig).
 
 %% @private
-system_code_change([_, _, _, _, Config] = Misc, _, _, _) ->
+system_code_change([_, _, _, _, #config{mod=Mod} = Config] = Misc, Mod, _, _) ->
     case config_change(Config) of
         {ok, Change} ->
             {ok, {change, Change, Misc}};
@@ -574,7 +576,11 @@ system_code_change([_, _, _, _, Config] = Misc, _, _, _) ->
             % sys will turn this into {error, Reason}
             Reason
     end;
-system_code_change({change, Change, [_, _, _, _, Config] = Misc}, _, _, _) ->
+system_code_change([_, _, _, _, _] = Misc, Mod, OldVsn, Extra) ->
+    {ok, code_change(Misc, Mod, OldVsn, Extra)};
+system_code_change({change, Change,
+                    [_, _, _, _, #config{mod=Mod} = Config] = Misc}, Mod,
+                   _, _) ->
     case config_change(Config) of
         {ok, NChange} ->
             {ok, {change, NChange, Misc}};
@@ -583,7 +589,9 @@ system_code_change({change, Change, [_, _, _, _, Config] = Misc}, _, _, _) ->
         {error, Reason} ->
             % sys will turn this into {error, Reason}
             Reason
-    end.
+    end;
+system_code_change({change, Change, Misc}, Mod, OldVsn, Extra) ->
+    {ok, {change, Change, code_change(Misc, Mod, OldVsn, Extra)}}.
 
 %% @private
 system_get_state([_, #time{meter=Meter}, Asks, Bids,
@@ -875,6 +883,11 @@ common({len_bid, From, _}, State, Time, Asks, Bids, _,
         Class:Reason ->
             bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
+common({_, From, get_modules}, State, Time, Asks, Bids, _,
+       #config{mod=Mod, ask_mod=AskMod, bid_mod=BidMod,
+               meter_mod=MeterMod} = Config) ->
+    gen:reply(From, lists:usort([Mod, AskMod, BidMod, MeterMod])),
+    timeout(State, Time, Asks, Bids, Config);
 common(timeout, State, Time, Asks, Bids, _, Config) ->
     timeout(State, Time, Asks, Bids, Config);
 common(Msg, State, Time, Asks, Bids, _, Config) ->
@@ -1084,13 +1097,26 @@ config_change(#config{mod=Mod, args=Args}) ->
             {error, {Class, Reason, erlang:get_stacktrace()}}
     end.
 
+code_change([State, #time{now=Now, meter=Meter, next=MNext} = Time, Asks, Bids,
+             #config{ask_mod=AskMod, bid_mod=BidMod,
+                     meter_mod=MeterMod} = Config], Mod, OldVsn, Extra) ->
+    Callbacks = [{sbroker_queue, AskMod, Asks, infinity},
+                 {sbroker_queue, BidMod, Bids, infinity},
+                 {sbroker_meter, MeterMod, Meter, MNext}],
+    NCallbacks = sbroker_handlers:code_change(Now, Callbacks, Mod, OldVsn,
+                                              Extra),
+    [{sbroker_queue, AskMod, NAsks, _},
+     {sbroker_queue, BidMod, NBids, _},
+     {sbroker_meter, MeterMod, NMeter, NMNext}] = NCallbacks,
+    [State, Time#time{meter=NMeter, next=NMNext}, NAsks, NBids, Config].
+
 change(State, {NAskMod, AskArgs, NBidMod, BidArgs, NMeterMod, MeterArgs},
        #time{now=Now, meter=Meter} = Time, Asks, Bids,
        #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod} = Config) ->
     Inits = [{sbroker_queue, AskMod, Asks, NAskMod, AskArgs},
              {sbroker_queue, BidMod, Bids, NBidMod, BidArgs},
              {sbroker_meter, MeterMod, Meter, NMeterMod, MeterArgs}],
-    case sbroker_handlers:change(Now, Inits, report_name(Config)) of
+    case sbroker_handlers:config_change(Now, Inits, report_name(Config)) of
         {ok, [{_, _, NAsks, AskNext}, {_, _, NBids, BidNext},
               {_, _, NMeter, MeterNext}]} ->
             NTime = Time#time{meter=NMeter, next=MeterNext},

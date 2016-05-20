@@ -29,6 +29,7 @@
 -export([handle_timeout/2]).
 -export([handle_cancel/3]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
 -export([terminate/2]).
@@ -113,6 +114,9 @@ handle_info({'DOWN', Ref, _, _, _}, Time, #state{queue=Q} = State) ->
     NQ = queue:filter(fun({_, _, _, Ref2}) -> Ref2 =/= Ref end, Q),
     handle_timeout(Time, State#state{queue=NQ});
 handle_info(_, Time, State) ->
+    handle_timeout(Time, State).
+
+code_change(_, Time, State, _) ->
     handle_timeout(Time, State).
 
 config_change(Config, Time, #state{config=Config} = State) ->

@@ -106,6 +106,21 @@
 %% The variables are equivalent to those in `init/3', with `NState' being the
 %% new state.
 %%
+%% When changing the state due to a code change, `code_change/4':
+%% ```
+%% -callback code_change(OldVsn :: any(), Time :: integer(), State :: any(),
+%%                       Extra :: any()) ->
+%%      {NState :: any(), TimeoutTime :: integer() | infinity}.
+%% '''
+%% On an upgrade `OldVsn' is version the state was created with and on an
+%% downgrade is the same form except `{down, OldVsn}'. `OldVsn' is defined by
+%% the vsn attribute(s) of the old version of the callback module. If no such
+%% attribute is defined, the version is the checksum of the BEAM file. `Extra'
+%% is from `{advanced, Extra}' in the update instructions.
+%%
+%% The other variables are equivalent to those in `init/3', with `NState' being
+%% the new state.
+%%
 %% When changing the configuration of a valve, `config_change/4':
 %% ```
 %% -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
@@ -149,6 +164,7 @@
 
 -export([initial_state/0]).
 -export([init/4]).
+-export([code_change/5]).
 -export([config_change/4]).
 -export([terminate/3]).
 
@@ -189,6 +205,11 @@
     {Status :: open | closed, NState :: any(),
      TimeoutTime :: integer() | infinity}.
 
+-callback code_change(OldVsn :: any(), Time :: integer(), State :: any(),
+                      Extra :: any()) ->
+    {Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
+
 -callback config_change(Args :: any(), Time :: integer(), State :: any()) ->
     {Status :: open | closed, NState :: any(),
      TimeoutTime :: integer() | infinity}.
@@ -220,26 +241,44 @@ init(Mod, Map, Now, Args) ->
     {{Status, State}, TimeoutTime}.
 
 %% @private
--spec config_change(Module, Args, Time, State) ->
-    {{Status, NState}, TimeoutTime} when
+-spec code_change(Module, OldVsn, Time, {Status, State}, Extra) ->
+    {{NStatus, NState}, TimeoutTime} when
+      Module :: module(),
+      OldVsn :: any(),
+      Time :: integer(),
+      Status :: open | closed,
+      State :: any(),
+      Extra :: any(),
+      NStatus :: open | closed,
+      NState :: any(),
+      TimeoutTime :: integer() | infinity.
+code_change(Mod, OldVsn, Time, {_, State}, Extra) ->
+    {Status, NState, TimeoutTime} = Mod:code_change(OldVsn, Time, State, Extra),
+    {{Status, NState}, TimeoutTime}.
+
+%% @private
+-spec config_change(Module, Args, Time, {Status, State}) ->
+    {{NStatus, NState}, TimeoutTime} when
     Module :: module(),
     Args :: any(),
     Time :: integer(),
-    State :: any(),
     Status :: open | closed,
+    State :: any(),
+    NStatus :: open | closed,
     NState :: any(),
     TimeoutTime :: integer() | infinity.
-config_change(Mod, Args, Now, State) ->
+config_change(Mod, Args, Now, {_, State}) ->
     {Status, NState, TimeoutTime} = Mod:config_change(Args, Now, State),
     {{Status, NState}, TimeoutTime}.
 
 %% @private
--spec terminate(Module, Reason, State) -> Map when
+-spec terminate(Module, Reason, {Status, State}) -> Map when
       Module :: module(),
       Reason :: sbroker_handlers:reason(),
+      Status :: open | closed,
       State :: any(),
       Map :: internal_map().
-terminate(Mod, Reason, State) ->
+terminate(Mod, Reason, {_, State}) ->
     case Mod:terminate(Reason, State) of
         Map when is_map(Map) ->
             Map;

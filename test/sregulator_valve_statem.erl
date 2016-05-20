@@ -34,7 +34,7 @@
 -export([next_state/3]).
 -export([postcondition/3]).
 
--export([init_or_change/6]).
+-export([init_or_change/7]).
 -export([handle_ask/3]).
 -export([handle_done/4]).
 -export([handle_continue/4]).
@@ -170,57 +170,60 @@ relative_time() ->
                {4, choose(-Max, 0)},
                {1, choose(0, Max)}]).
 
-init_or_change(undefined, undefined, _, Mod, Args, Time) ->
+init_or_change(undefined, undefined, undefined, _, Mod, Args, Time) ->
     {Status, State, Timeout} = Mod:init(#{}, Time, Args),
     {ok, Status, State, Timeout};
-init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
-    Callback = {sregulator_valve, Mod1, State1, Mod2, Args2},
-    case sbroker_handlers:change(Time, [Callback], {?MODULE, self()}) of
-        {ok, [{_, _, {Status, NState}, Timeout}]} ->
-            {ok, Status, NState, Timeout};
+init_or_change(Mod1, Status1, State1, _, Mod2, Args2, Time) ->
+    Callback = {sregulator_valve, Mod1, {Status1, State1}, Mod2, Args2},
+    case sbroker_handlers:config_change(Time, [Callback], {?MODULE, self()}) of
+        {ok, [{_, _, {NStatus, NState}, Timeout}]} ->
+            {ok, NStatus, NState, Timeout};
         {stop, _} = Stop ->
             Stop
     end.
 
-init_or_change_args(#state{mod=Mod, valve=V, time=Time}) ->
+init_or_change_args(#state{mod=Mod, status=Status, valve=V, time=Time}) ->
     ?LET(Manager, manager(),
-         [Mod, V, Manager, Manager:module(), Manager:args(), time(Time)]).
+         [Mod, Status, V, Manager, Manager:module(), Manager:args(),
+          time(Time)]).
 
 init_or_change_pre(#state{manager=undefined, mod=undefined}, _) ->
     true;
-init_or_change_pre(#state{time=PrevTime}, [_, _, _, _, _, Time]) ->
+init_or_change_pre(#state{time=PrevTime}, [_, _, _, _, _, _, Time]) ->
     PrevTime >= Time.
 
 init_or_change_next(#state{manager=undefined} = State, Value,
-                    [_, _, Manager, Mod, Args, Time]) ->
+                    [_, _, _, Manager, Mod, Args, Time]) ->
     V = {call, erlang, element, [3, Value]},
     {Min, Max, Status, ManState} = Manager:init(Args),
     State#state{manager=Manager, mod=Mod, valve=V, time=Time,
                 manager_state=ManState, status=Status, min=Min, max=Max};
 init_or_change_next(#state{manager=Manager, manager_state=ManState} = State,
-                   Value, [Mod, _, Manager, Mod, Args, Time]) ->
+                   Value, [Mod, _, _, Manager, Mod, Args, Time]) ->
     V = {call, erlang, element, [3, Value]},
     {Min, Max, NStatus, NManState} = Manager:config_change(Args, Time,
                                                            ManState),
     State#state{valve=V, manager_state=NManState, time=Time, status=NStatus,
                 min=Min, max=Max};
-init_or_change_next(#state{list=L}, Value, [_, _, Manager, Mod, Args, Time]) ->
+init_or_change_next(#state{list=L}, Value,
+                    [_, _, _, Manager, Mod, Args, Time]) ->
     State = init_or_change_next(initial_state(), Value,
-                                [undefined, undefined, Manager, Mod, Args,
-                                 Time]),
+                                [undefined, undefined, undefined, Manager, Mod,
+                                 Args, Time]),
     State#state{list=L}.
 
 init_or_change_post(#state{manager=undefined}, _, _) ->
     true;
 init_or_change_post(#state{manager=Manager, manager_state=ManState} = State,
-                    [Mod, _, Manager, Mod, Args, Time], {ok, Status, V, _}) ->
+                    [Mod, _, _, Manager, Mod, Args, Time],
+                    {ok, Status, V, _}) ->
     {Min, Max, Status2, _} = Manager:config_change(Args, Time, ManState),
     post(State#state{min=Min, max=Max, status=Status2, valve=V}, Status);
-init_or_change_post(#state{list=L}, [_, _, Manager, Mod, Args, Time],
+init_or_change_post(#state{list=L}, [_, _, _, Manager, Mod, Args, Time],
                     {ok, Status, V, _} = Result) ->
     NState = init_or_change_next(initial_state(), Result,
-                                [undefined, undefined, Manager, Mod, Args,
-                                 Time]),
+                                [undefined, undefined, undefined, Manager, Mod,
+                                 Args, Time]),
     post(NState#state{list=L, valve=V}, Status).
 
 handle_update_args(#state{time=Time, valve=V}) ->

@@ -171,7 +171,7 @@ init_or_change(undefined, undefined, _, Mod, Args, Time) ->
     {ok, State, Timeout};
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
     Callback = {sbroker_queue, Mod1, State1, Mod2, Args2},
-    case sbroker_handlers:change(Time, [Callback], {?MODULE, self()}) of
+    case sbroker_handlers:config_change(Time, [Callback], {?MODULE, self()}) of
         {ok, [{_, _, NState, Timeout}]} ->
             {ok, NState, Timeout};
         {stop, _} = Stop ->

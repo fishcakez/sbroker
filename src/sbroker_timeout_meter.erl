@@ -24,6 +24,7 @@
 -export([init/2]).
 -export([handle_update/4]).
 -export([handle_info/3]).
+-export([code_change/4]).
 -export([config_change/3]).
 -export([terminate/2]).
 
@@ -53,6 +54,16 @@ handle_update(_, _, Time, Timeout) ->
       Timeout :: timeout(),
       Next :: integer() | infinity.
 handle_info(_, Time, Timeout) ->
+    handle(Time, Timeout).
+
+%% @private
+-spec code_change(OldVsn, Time, Timeout, Extra) -> {Timeout, Next} when
+      OldVsn :: any(),
+      Time :: integer(),
+      Timeout :: timeout(),
+      Extra :: any(),
+      Next :: integer() | infinity.
+code_change(_, Time, Timeout, _) ->
     handle(Time, Timeout).
 
 %% @private
