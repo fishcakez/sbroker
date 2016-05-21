@@ -37,7 +37,7 @@
 -behaviour(sbroker_meter).
 
 -export([init/2]).
--export([handle_update/4]).
+-export([handle_update/5]).
 -export([handle_info/3]).
 -export([code_change/4]).
 -export([config_change/3]).
@@ -63,15 +63,16 @@ init(_, {Target, Interval, AlarmId}) ->
     {State, infinity}.
 
 %% @private
--spec handle_update(QueueDelay, ProcessDelay, Time, State) ->
+-spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, State) ->
     {NState, Next} when
       QueueDelay :: non_neg_integer(),
       ProcessDelay :: non_neg_integer(),
+      RelativeTime :: integer(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       Next :: integer() | infinity.
-handle_update(QueueDelay, _, Time,
+handle_update(QueueDelay, _, _, Time,
               #state{status=clear, interval=Interval, alarm_id=AlarmId,
                      toggle_next=ToggleNext} = State) ->
     case message_queue_status(QueueDelay, State) of
@@ -88,7 +89,7 @@ handle_update(QueueDelay, _, Time,
         fast ->
             {State#state{toggle_next=infinity}, infinity}
     end;
-handle_update(QueueDelay, _, Time,
+handle_update(QueueDelay, _, _, Time,
               #state{status=set, interval=Interval, alarm_id=AlarmId,
                      toggle_next=ToggleNext} = State) ->
     case message_queue_status(QueueDelay, State) of

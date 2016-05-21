@@ -35,7 +35,7 @@
 -export([postcondition/3]).
 
 -export([init_or_change/6]).
--export([handle_update/6]).
+-export([handle_update/7]).
 
 -record(state, {manager, manager_state, mod, meter, time, timeout_time}).
 
@@ -168,14 +168,15 @@ init_or_change_post(#state{manager=Manager, manager_state=ManState},
 init_or_change_post(State, [_, M, _, _, _, _], {ok, _, _}) ->
     terminate_post(State, undefined, [change, M]).
 
-handle_update(Mod, MsgQLen, QueueTime, ProcessTime, Time, M) ->
+handle_update(Mod, MsgQLen, QueueTime, ProcessTime, RelTime, Time, M) ->
     Refs = [self() ! make_ref() || _ <- lists:seq(1, MsgQLen)],
-    Result = Mod:handle_update(QueueTime, ProcessTime, Time, M),
+    Result = Mod:handle_update(QueueTime, ProcessTime, RelTime, Time, M),
     _ = [receive Ref -> ok after 0 -> exit(timeout) end || Ref <- Refs],
     Result.
 
 handle_update_args(#state{mod=Mod, time=Time, meter=M}) ->
-    ?LET({QueueTime, ProcessTime}, {choose(0, 5), choose(0, 5)},
+    ?LET({QueueTime, ProcessTime, RelTime},
+         {choose(0, 5), choose(0, 5), choose(-5, 5)},
          begin
              NQueueTime = sbroker_time:convert_time_unit(QueueTime,
                                                          milli_seconds,
@@ -183,25 +184,31 @@ handle_update_args(#state{mod=Mod, time=Time, meter=M}) ->
              NProcessTime = sbroker_time:convert_time_unit(ProcessTime,
                                                            milli_seconds,
                                                            native),
-             [Mod, choose(0,5), NQueueTime, NProcessTime, time(Time), M]
+             NRelTime = sbroker_time:convert_time_unit(RelTime,
+                                                       milli_seconds,
+                                                       native),
+             [Mod, choose(0,5), NQueueTime, NProcessTime, NRelTime, time(Time),
+              M]
          end).
 
-handle_update_pre(#state{time=PrevTime}, [_, _, _, _, Time, _]) ->
+handle_update_pre(#state{time=PrevTime}, [_, _, _, _, _, Time, _]) ->
     Time >= PrevTime.
 
 handle_update_next(#state{manager=Manager, manager_state=ManState} = State,
-                   Value, [_, MsgQLen, QueueDelay, ProcessDelay, Time, _]) ->
+                   Value,
+                   [_, MsgQLen, QueueDelay, ProcessDelay, RelTime, Time, _]) ->
     M = {call, erlang, element, [1, Value]},
     {NManState, Timeout} = Manager:update_next(ManState, Time, MsgQLen,
-                                               QueueDelay, ProcessDelay),
+                                               QueueDelay, ProcessDelay,
+                                               RelTime),
     State#state{meter=M, time=Time, timeout_time=Timeout,
                 manager_state=NManState}.
 
 handle_update_post(#state{manager=Manager, manager_state=ManState},
-                   [_, MsgQLen, QueueDelay, ProcessDelay, Time, _],
+                   [_, MsgQLen, QueueDelay, ProcessDelay, RelTime, Time, _],
                    {_, Timeout}) ->
     {Result, Timeout2} = Manager:update_post(ManState, Time, MsgQLen,
-                                             QueueDelay, ProcessDelay),
+                                             QueueDelay, ProcessDelay, RelTime),
     Result andalso timeout_post(Timeout2, Timeout).
 
 handle_info_args(#state{time=Time, meter=M}) ->

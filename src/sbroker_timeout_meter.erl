@@ -22,7 +22,7 @@
 -behaviour(sbroker_meter).
 
 -export([init/2]).
--export([handle_update/4]).
+-export([handle_update/5]).
 -export([handle_info/3]).
 -export([code_change/4]).
 -export([config_change/3]).
@@ -37,14 +37,15 @@ init(Time, Timeout) ->
     handle(Time, sbroker_util:timeout(Timeout)).
 
 %% @private
--spec handle_update(QueueDelay, ProcessDelay, Time, Timeout) ->
+-spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, Timeout) ->
     {Timeout, Next} when
       QueueDelay :: non_neg_integer(),
       ProcessDelay :: non_neg_integer(),
+      RelativeTime :: integer(),
       Time :: integer(),
       Timeout :: timeout(),
       Next :: integer() | infinity.
-handle_update(_, _, Time, Timeout) ->
+handle_update(_, _, _, Time, Timeout) ->
     handle(Time, Timeout).
 
 %% @private

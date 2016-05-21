@@ -24,8 +24,8 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/2]).
--export([update_next/5]).
--export([update_post/5]).
+-export([update_next/6]).
+-export([update_post/6]).
 -export([change/3]).
 -export([timeout/2]).
 
@@ -47,11 +47,11 @@ init(Time, {Target, Interval, Alarm}) ->
            interval=sbroker_util:interval(Interval), alarm=Alarm, status=fast,
            time=Time, queue=fast, interval_time=0}.
 
-update_next(State, Time, MsgQLen, QueueDelay, _) ->
+update_next(State, Time, MsgQLen, QueueDelay, _, _) ->
     NState = next(queue(MsgQLen, QueueDelay, State), State, Time),
     {NState, timeout(NState, Time)}.
 
-update_post(State, Time, MsgQLen, QueueDelay, _) ->
+update_post(State, Time, MsgQLen, QueueDelay, _, _) ->
     NState = next(queue(MsgQLen, QueueDelay, State), State, Time),
     {alarm_post(NState), timeout(NState, Time)}.
 

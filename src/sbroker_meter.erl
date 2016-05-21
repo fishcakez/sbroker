@@ -40,16 +40,20 @@
 %% to `Time'. If a meter does not require an update then `UpdateTime' should be
 %% `infinity'.
 %%
-%% When updating the mter, `handle_update/4':
+%% When updating the meter, `handle_update/5':
 %% ```
 %% -callback handle_update(QueueDelay :: non_neg_integer(),
-%%                         ProcessDelay :: non_neg_integer(), Time :: integer(),
+%%                         ProcessDelay :: non_neg_integer(),
+%%                         RelativeTime :: integer(), Time :: integer(),
 %%                         State :: any()) ->
 %%      {NState :: any(), UpdateTime :: integer() | infinity}.
 %% '''
 %% `QueueDelay' is the approximate time a message spends in the message queue of
 %% the process. `ProcessDelay' is the average time spent processing a message
-%% since the last update.
+%% since the last update. `RelativeTime' is an approximation of the
+%% `RelativeTime' for an `ask' request if a match was to occur immediately. If
+%% the process has not matched a request for a significant period of time this
+%% value can grow large and become inaccurate.
 %%
 %% The other variables are equivalent to those in `init/2', with `NState' being
 %% the new state.
@@ -121,7 +125,8 @@
     {State :: any(), UpdateTime :: integer() | infinity}.
 
 -callback handle_update(QueueDelay :: non_neg_integer(),
-                        ProcessDelay :: non_neg_integer(), Time :: integer(),
+                        ProcessDelay :: non_neg_integer(),
+                        RelativeTime :: integer(), Time :: integer(),
                         State :: any()) ->
     {NState :: any(), UpdateTime :: integer() | infinity}.
 

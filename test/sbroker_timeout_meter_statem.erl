@@ -24,8 +24,8 @@
 -export([module/0]).
 -export([args/0]).
 -export([init/2]).
--export([update_next/5]).
--export([update_post/5]).
+-export([update_next/6]).
+-export([update_post/6]).
 -export([change/3]).
 -export([timeout/2]).
 
@@ -38,10 +38,10 @@ args() ->
 init(_, Timeout) ->
     sbroker_util:timeout(Timeout).
 
-update_next(Timeout, Time, _, _, _) ->
+update_next(Timeout, Time, _, _, _, _) ->
     handle(Timeout, Time).
 
-update_post(Timeout, Time, _, _, _) ->
+update_post(Timeout, Time, _, _, _, _) ->
     {_, TimeoutTime} = handle(Timeout, Time),
     {true, TimeoutTime}.
 

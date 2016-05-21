@@ -222,10 +222,11 @@ queue_spec() ->
 
 meter_spec() ->
     oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
-           {sbroker_timeout_meter, oneof([1000, infinity])}]).
+           {sbroker_timeout_meter, oneof([1000, infinity])},
+           {sbroker_statem_meter, self}]).
 
 start_link(Init) ->
-    application:set_env(sbroker, ?MODULE, Init),
+    application:set_env(sbroker, ?MODULE, update_spec(Init)),
     Trap = process_flag(trap_exit, true),
     case sbroker:start_link(?MODULE, [], [{read_time_after, 2}]) of
         {error, Reason} = Error ->
@@ -241,6 +242,11 @@ start_link(Init) ->
             process_flag(trap_exit, Trap),
             Other
     end.
+
+update_spec({ok, {AskSpec, BidSpec, {sbroker_statem_meter, self}}}) ->
+    {ok, {AskSpec, BidSpec, {sbroker_statem_meter, self()}}};
+update_spec(Other) ->
+    Other.
 
 init([]) ->
     {ok, Result} = application:get_env(sbroker, ?MODULE),
@@ -320,7 +326,8 @@ spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
 
 spawn_client_post(#state{asks=[], ask_drops=AskDrops, bids=Bids} = State,
                   [_, async_bid], Bid) ->
-    bid_aqm_post(State#state{ask_state=AskDrops, bids=Bids++[Bid]});
+    bid_post(State#state{ask_state=AskDrops, bids=Bids++[Bid]},
+             fun meter_post/1);
 spawn_client_post(#state{asks=[], ask_drops=AskDrops} = State,
                   [_, nb_bid], Bid) ->
     retry_post(Bid) andalso timeout_post(State#state{ask_state=AskDrops});
@@ -330,14 +337,15 @@ spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
              fun(#state{asks=[], ask_drops=AskDrops} = NState) ->
                      NState2 = NState#state{ask_state=AskDrops},
                      spawn_client_post(NState2, Args, Bid);
-                (#state{asks=NAsks, ask_out=out}) ->
-                     settled_post(Bid, hd(NAsks));
-                (#state{asks=NAsks, ask_out=out_r}) ->
-                     settled_post(Bid, lists:last(NAsks))
+                (#state{asks=NAsks, ask_out=out} = NState) ->
+                     settled_post(NState, hd(NAsks), Bid);
+                (#state{asks=NAsks, ask_out=out_r} = NState) ->
+                     settled_post(NState, lists:last(NAsks), Bid)
              end);
 spawn_client_post(#state{bids=[], bid_drops=BidDrops, asks=Asks} = State,
                   [_, async_ask], Ask) ->
-    ask_aqm_post(State#state{bid_state=BidDrops, asks=Asks++[Ask]});
+    ask_post(State#state{bid_state=BidDrops, asks=Asks++[Ask]},
+             fun meter_post/1);
 spawn_client_post(#state{bids=[], bid_drops=BidDrops} = State,
                   [_, nb_ask], Ask) ->
     retry_post(Ask) andalso timeout_post(State#state{bid_state=BidDrops});
@@ -347,10 +355,10 @@ spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
              fun(#state{bids=[], bid_drops=BidDrops} = NState) ->
                      NState2 = NState#state{bid_state=BidDrops},
                      spawn_client_post(NState2, Args, Ask);
-                (#state{bids=NBids, bid_out=out}) ->
-                     settled_post(Ask, hd(NBids));
-                (#state{bids=NBids, bid_out=out_r}) ->
-                     settled_post(Ask, lists:last(NBids))
+                (#state{bids=NBids, bid_out=out} = NState) ->
+                     settled_post(NState, Ask, hd(NBids));
+                (#state{bids=NBids, bid_out=out_r} = NState) ->
+                     settled_post(NState, Ask, lists:last(NBids))
              end).
 
 timeout_args(#state{sbroker=Broker}) ->
@@ -368,9 +376,9 @@ timeout_post(State, _, _) ->
     timeout_post(State).
 
 timeout_post(#state{asks=[]} = State) ->
-    bid_aqm_post(State);
+    bid_post(State, fun meter_post/1);
 timeout_post(#state{bids=[]} = State) ->
-    ask_aqm_post(State).
+    ask_post(State, fun meter_post/1).
 
 cancel_args(#state{sbroker=Broker, asks=Asks, bids=Bids, cancels=Cancels,
                    done=Done}) ->
@@ -409,12 +417,12 @@ cancel_next(#state{bids=[], asks=Asks, cancels=Cancels} = State, _,
 cancel_post(#state{asks=[], bids=Bids} = State, [_, Client], Result) ->
     case lists:member(Client, Bids) of
         true when Result =:= 1 ->
-            bid_aqm_post(State#state{bids=Bids--[Client]});
+            bid_post(State#state{bids=Bids--[Client]}, fun meter_post/1);
         true ->
             ct:pal("Cancel: ~p", [Result]),
             false;
         false when Result =:= false ->
-            bid_aqm_post(State);
+            bid_post(State, fun meter_post/1);
         false ->
             ct:pal("Cancel: ~p", [Result]),
             false
@@ -422,12 +430,12 @@ cancel_post(#state{asks=[], bids=Bids} = State, [_, Client], Result) ->
 cancel_post(#state{bids=[], asks=Asks} = State, [_, Client], Result) ->
     case lists:member(Client, Asks) of
         true when Result =:= 1 ->
-            ask_aqm_post(State#state{asks=Asks--[Client]});
+            ask_post(State#state{asks=Asks--[Client]}, fun meter_post/1);
         true ->
             ct:pal("Cancel: ~p", [Result]),
             false;
         false when Result =:= false ->
-            ask_aqm_post(State);
+            ask_post(State, fun meter_post/1);
         false ->
             ct:pal("Cancel: ~p", [Result]),
             false
@@ -453,7 +461,7 @@ change_config_args(#state{sbroker=Broker}) ->
     [Broker, init()].
 
 change_config(Broker, Init) ->
-    application:set_env(sbroker, ?MODULE, Init),
+    application:set_env(sbroker, ?MODULE, update_spec(Init)),
     sbroker:change_config(Broker, 100).
 
 change_config_next(State, _, [_, ignore]) ->
@@ -485,9 +493,12 @@ change_config_post(State, [_, ignore], ok) ->
     timeout_post(State);
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     timeout_post(State);
-change_config_post(State, [_, {ok, {AskQueueSpec, BidQueueSpec, _}}], ok) ->
+change_config_post(State,
+                   [_, {ok, {AskQueueSpec, BidQueueSpec, {MeterMod, _}}}],
+                   ok) ->
     ask_change_post(AskQueueSpec, State) andalso
-    bid_change_post(BidQueueSpec, State);
+    bid_change_post(BidQueueSpec, State) andalso
+    meter_post(State#state{meter_mod=MeterMod});
 change_config_post(_, _, _) ->
     false.
 
@@ -558,20 +569,20 @@ shutdown_client_next(#state{bids=[], asks=Asks, cancels=Cancels,
     end.
 
 shutdown_client_post(#state{asks=[]} = State, [_, undefined], _) ->
-    bid_aqm_post(State);
+    bid_post(State, fun meter_post/1);
 shutdown_client_post(#state{bids=[]} = State, [_, undefined], _) ->
-    ask_aqm_post(State);
+    ask_post(State, fun meter_post/1);
 shutdown_client_post(#state{asks=[], bids=Bids} = State, [_, Client], _) ->
     case lists:member(Client, Bids) of
         true ->
-            bid_aqm_post(State#state{bids=Bids--[Client]});
+            bid_post(State#state{bids=Bids--[Client]}, fun meter_post/1);
         false ->
             true
     end;
 shutdown_client_post(#state{bids=[], asks=Asks} = State, [_, Client], _) ->
     case lists:member(Client, Asks) of
         true ->
-            ask_aqm_post(State#state{asks=Asks--[Client]});
+            ask_post(State#state{asks=Asks--[Client]}, fun meter_post/1);
         false ->
             true
     end.
@@ -699,11 +710,12 @@ change_code_args(#state{sbroker=Broker}) ->
                  sbroker_statem_queue,
                  sbroker_statem2_queue,
                  sbroker_alarm_meter,
-                 sbroker_timeout_meter]),
+                 sbroker_timeout_meter,
+                 sbroker_statem_meter]),
     [Broker, Mod, ?TIMEOUT].
 
 change_code(Broker, {?MODULE, Init}, Timeout) ->
-    application:set_env(sbroker, ?MODULE, Init),
+    application:set_env(sbroker, ?MODULE, update_spec(Init)),
     sys:change_code(Broker, ?MODULE, undefined, undefined, Timeout);
 change_code(Broker, Mod, Timeout) ->
     sys:change_code(Broker, Mod, undefined, undefined, Timeout).
@@ -754,10 +766,11 @@ resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec,
 resume_next(State, _, _) ->
     timeout_next(State#state{sys=running}).
 
-resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec, _}}} = State, _,
-            _) ->
-    ask_change_post(AskQueueSpec, State) andalso
-    bid_change_post(BidQueueSpec, State);
+resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec,
+                                {MeterMod, _}}}} = State, _, _) ->
+    NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
+    ask_change_post(AskQueueSpec, NState) andalso
+    bid_change_post(BidQueueSpec, NState) andalso meter_post(NState);
 resume_post(State, _, _) ->
     timeout_post(State).
 
@@ -769,6 +782,30 @@ sys_next(#state{sys=suspended} = State) ->
 sys_post(#state{sys=running} = State) ->
     timeout_post(State);
 sys_post(#state{sys=suspended}) ->
+    true.
+
+meter_post(#state{meter_mod=sbroker_statem_meter, asks=Asks, bids=Bids}) ->
+    receive
+        {meter, QueueDelay, ProcessDelay, RelativeTime, _}
+          when QueueDelay >= 0, ProcessDelay >= 0 ->
+            relative_post(RelativeTime, Asks, Bids)
+    after
+        100 ->
+            ct:pal("Did not receive sbroker_statem_meter message"),
+            false
+    end;
+meter_post(_) ->
+    true.
+
+relative_post(RelativeTime, [_|_] = Asks, _) when RelativeTime < 0 ->
+    ct:pal("RelativeTime is negative ~p when asks waiting ~p",
+           [RelativeTime, Asks]),
+    false;
+relative_post(RelativeTime, _, [_|_] = Bids) when RelativeTime > 0 ->
+    ct:pal("RelativeTime is positive ~p when bids waiting ~p",
+           [RelativeTime, Bids]),
+    false;
+relative_post(_, _, _) ->
     true.
 
 %% Helpers
@@ -860,18 +897,21 @@ drop_post(Client) ->
             false
     end.
 
-settled_post(Client1, Client2) ->
-    Pid1 = client_pid(Client1),
-    Pid2 = client_pid(Client2),
-    case {result(Client1), result(Client2)} of
-        {{go, Ref, Pid2, RelSojournTime1, SojournTime1},
-         {go, Ref, Pid1, RelSojournTime2, SojournTime2}} ->
-            is_integer(SojournTime1) andalso SojournTime1 >= 0 andalso
-            is_integer(SojournTime2) andalso SojournTime2 >= 0 andalso
-            is_integer(RelSojournTime1) andalso RelSojournTime1 =< 0 andalso
-            -RelSojournTime1 =:= RelSojournTime2 andalso
-            (SojournTime2 - RelSojournTime2) =:= SojournTime1 andalso
-            (SojournTime1 - RelSojournTime1) =:= SojournTime2;
+settled_post(#state{asks=Asks, bids=Bids} = State, AskClient, BidClient) ->
+    AskPid = client_pid(AskClient),
+    BidPid = client_pid(BidClient),
+    case {result(AskClient), result(BidClient)} of
+        {{go, Ref, BidPid, AskRel, AskSojourn},
+         {go, Ref, AskPid, BidRel, BidSojourn}} when
+            is_integer(AskSojourn) andalso AskSojourn >= 0 andalso
+            is_integer(BidSojourn) andalso BidSojourn >= 0 andalso
+            ((Asks == [] andalso is_integer(AskRel) andalso AskRel =< 0) orelse
+             (Bids == [] andalso is_integer(AskRel) andalso AskRel >= 0))
+            andalso
+            -BidRel =:= AskRel andalso
+            (AskSojourn - AskRel) =:= BidSojourn andalso
+            (BidSojourn - BidRel) =:= AskSojourn ->
+            meter_post(State);
         Result ->
             ct:log("Result: ~p", [Result]),
             false

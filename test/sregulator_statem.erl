@@ -88,7 +88,7 @@ initial_state() ->
 command(#state{sregulator=undefined} = State) ->
     {call, ?MODULE, start_link, start_link_args(State)};
 command(#state{sys=running} = State) ->
-    frequency([{20, {call, sregulator, update, update_args(State)}},
+    frequency([{10, {call, sregulator, update, update_args(State)}},
                {10, {call, ?MODULE, spawn_client,
                      spawn_client_args(State)}},
                {4, {call, ?MODULE, continue, continue_args(State)}},
@@ -243,10 +243,11 @@ valve_spec() ->
 
 meter_spec() ->
     oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
-           {sbroker_timeout_meter, oneof([1000, infinity])}]).
+           {sbroker_timeout_meter, oneof([1000, infinity])},
+           {sbroker_statem_meter, self}]).
 
 start_link(Init) ->
-    application:set_env(sbroker, ?MODULE, Init),
+    application:set_env(sbroker, ?MODULE, update_spec(Init)),
     Trap = process_flag(trap_exit, true),
     case sregulator:start_link(?MODULE, [], [{read_time_after, 2}]) of
         {error, Reason} = Error ->
@@ -262,6 +263,11 @@ start_link(Init) ->
             process_flag(trap_exit, Trap),
             Other
     end.
+
+update_spec({ok, {AskSpec, BidSpec, {sbroker_statem_meter, self}}}) ->
+    {ok, {AskSpec, BidSpec, {sbroker_statem_meter, self()}}};
+update_spec(Other) ->
+    Other.
 
 init([]) ->
     {ok, Result} = application:get_env(sbroker, ?MODULE),
@@ -479,7 +485,7 @@ change_config_args(#state{sregulator=Regulator}) ->
     [Regulator, init()].
 
 change_config(Regulator, Init) ->
-    application:set_env(sbroker, ?MODULE, Init),
+    application:set_env(sbroker, ?MODULE, update_spec(Init)),
     sregulator:change_config(Regulator, 100).
 
 change_config_next(State, _, [_, ignore]) ->
@@ -494,9 +500,11 @@ change_config_post(State, [_, ignore], ok) ->
     valve_post(State, fun queue_post/1);
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     valve_post(State, fun queue_post/1);
-change_config_post(State, [_, {ok, {QSpec, VSpec, _}}], ok) ->
-    queue_change_post(QSpec, State) andalso
-    valve_change_post(VSpec, queue_change_next(QSpec, State));
+change_config_post(State,
+                   [_, {ok, {QSpec, VSpec, {MeterMod, _}}}], ok) ->
+    NState = State#state{meter_mod=MeterMod},
+    queue_change_post(QSpec, NState) andalso
+    valve_change_post(VSpec, queue_change_next(QSpec, NState));
 change_config_post(_, _, _) ->
     false.
 
@@ -632,7 +640,7 @@ change_code_args(#state{sregulator=Regulator}) ->
     [Regulator, Mod, ?TIMEOUT].
 
 change_code(Regulator, {?MODULE, Init}, Timeout) ->
-    application:set_env(sbroker, ?MODULE, Init),
+    application:set_env(sbroker, ?MODULE, update_spec(Init)),
     sys:change_code(Regulator, ?MODULE, undefined, undefined, Timeout);
 change_code(Regulator, Mod, Timeout) ->
     sys:change_code(Regulator, Mod, undefined, undefined, Timeout).
@@ -683,10 +691,11 @@ resume_next(#state{change={ok, {QSpec, VSpec, {MeterMod, _}}}} = State, _, _) ->
 resume_next(State, _, _) ->
     valve_next(State#state{sys=running}, fun queue_next/1).
 
-resume_post(#state{change={ok, {QSpec, VSpec, _}}} = State, _,
+resume_post(#state{change={ok, {QSpec, VSpec, {MeterMod, _}}}} = State, _,
             _) ->
-    queue_change_post(QSpec, State) andalso
-    valve_change_post(VSpec, queue_change_next(QSpec, State));
+    NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
+    queue_change_post(QSpec, NState) andalso
+    valve_change_post(VSpec, queue_change_next(QSpec, NState));
 resume_post(State, _, _) ->
     valve_post(State, fun queue_post/1).
 
@@ -715,15 +724,15 @@ valve_next(#state{valve_state=[closed | VState]} = State, Close) ->
     Close(State#state{valve_status=closed, valve_state=VState}).
 
 valve_post(State) ->
-    valve_post(State, fun(_) -> true end).
+    valve_post(State, fun meter_post/1).
 
 valve_post(#state{valve_state=[], valve_opens=VState} = State, Close) ->
     valve_post(State#state{valve_state=VState}, Close);
 valve_post(#state{valve_state=[open | VState]} = State, _) ->
     NState = State#state{valve_status=open, valve_state=VState},
     queue_post(NState,
-               fun(#state{queue=[]}) ->
-                       true;
+               fun(#state{queue=[]} = NState2) ->
+                       meter_post(NState2);
                   (#state{queue_out=out, queue=Q, valve=V} = NState2) ->
                        Client = hd(Q),
                        NState3 = NState2#state{queue=tl(Q),
@@ -746,7 +755,7 @@ queue_next(State, Fun) ->
     Fun(NState).
 
 queue_post(State) ->
-    queue_post(State, fun(_) -> true end).
+    queue_post(State, fun meter_post/1).
 
 queue_post(State, Fun) ->
     {Drops, NState} = queue_aqm(State),
@@ -760,6 +769,38 @@ queue_aqm(#state{queue=Q, queue_state=[Drop | QState], done=Done} = State) ->
     Drop2 = min(length(Q), Drop),
     {Drops, NQ} = lists:split(Drop2, Q),
     {Drops, State#state{queue=NQ, queue_state=QState, done=Done++Drops}}.
+
+meter_post(#state{meter_mod=sbroker_statem_meter, valve_status=VStatus}) ->
+    receive
+        {meter, QueueDelay, ProcessDelay, RelativeTime, _}
+          when QueueDelay >= 0, ProcessDelay >= 0 ->
+            no_more_meter() andalso relative_post(RelativeTime, VStatus)
+    after
+        100 ->
+            ct:pal("Did not receive sbroker_statem_meter message"),
+            false
+    end;
+meter_post(_) ->
+    true.
+
+no_more_meter() ->
+    receive
+        {meter, _, _, _, _} ->
+            ct:pal("missed meter message(s)"),
+            false
+    after
+        0 ->
+            true
+    end.
+
+relative_post(RelativeTime, closed) when RelativeTime < 0 ->
+    ct:pal("RelativeTime is negative ~p when closed", [RelativeTime]),
+    false;
+relative_post(RelativeTime, open) when RelativeTime > 0 ->
+    ct:pal("RelativeTime is positive ~p when open", [RelativeTime]),
+    false;
+relative_post(_, _) ->
+    true.
 
 go_post(Client) ->
     case client_call(Client, result) of
@@ -798,11 +839,11 @@ queue_change_next({QMod, {QOut, QDrops}}, State) ->
 
 queue_change_post({QMod, {QOut, QDrops}},
            #state{queue_mod=QMod, queue_drops=QDrops} = State) ->
-    queue_post(State#state{queue_out=QOut});
+    queue_post(State#state{queue_out=QOut}, fun(_) -> true end);
 %% If module and/or args different reset the backend state.
 queue_change_post({QMod, {QOut, QDrops}}, State) ->
     queue_post(State#state{queue_mod=QMod, queue_out=QOut, queue_drops=QDrops,
-                           queue_state=QDrops}).
+                           queue_state=QDrops}, fun(_) -> true end).
 
 valve_change_next({VMod, VOpens},
            #state{valve_mod=VMod, valve_opens=VOpens} = State) ->
@@ -833,15 +874,13 @@ sys_post(#state{sys=running} = State) ->
 sys_post(#state{sys=suspended}) ->
     true.
 
-status_post(#state{valve_status=VStatus, sys=Sys} = State,
+status_post(#state{sys=Sys} = State,
             [{header, "Status for sregulator <" ++_ },
              {data, [{"Status", SysState},
                      {"Parent", Self},
-                     {"State", RegState},
                      {"Time", {TimeMod, Time}}]},
              {items, {"Installed handlers", Handlers}}]) ->
     SysState =:= Sys andalso Self =:= self() andalso
-    RegState == VStatus andalso
     ((erlang:function_exported(erlang, monotonic_time, 0) andalso
       TimeMod =:= erlang) orelse TimeMod =:= sbroker_legacy) andalso
     is_integer(Time) andalso
@@ -862,9 +901,10 @@ get_queue_post(#state{queue_mod=QMod, queue=Q}, Handlers) ->
             false
     end.
 
-get_valve_post(#state{valve_mod=VMod, valve=V}, Handlers) ->
+get_valve_post(#state{valve_mod=VMod, valve_status=VStatus, valve=V},
+               Handlers) ->
     case lists:keyfind(valve, 2, Handlers) of
-        {VMod, valve, VState} ->
+        {VMod, valve, {VStatus, VState}} ->
             VMod:size(VState) == length(V);
         VInfo ->
             ct:pal("Valve: ~p", [VInfo]),
