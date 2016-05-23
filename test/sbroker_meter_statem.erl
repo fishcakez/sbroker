@@ -107,6 +107,7 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
 manager() ->
     frequency([{4, sbroker_alarm_statem},
                {4, sbetter_meter_statem},
+               {4, sregulator_meter_statem},
                {1, sbroker_timeout_meter_statem}]).
 
 time() ->
@@ -122,16 +123,21 @@ time(Time) ->
                                                       native))]).
 
 init_or_change(undefined, undefined, _, Mod, Args, Time) ->
-    {State, Timeout} = Mod:init(Time, Args),
+    {State, Timeout} = Mod:init(Time, update_args(Mod, Args)),
     {ok, State, Timeout};
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
-    Callback = {sbroker_meter, Mod1, State1, Mod2, Args2},
+    Callback = {sbroker_meter, Mod1, State1, Mod2, update_args(Mod2, Args2)},
     case sbroker_handlers:config_change(Time, [Callback], {?MODULE, self()}) of
         {ok, [{_, _, NState, Timeout}]} ->
             {ok, NState, Timeout};
         {stop, _} = Stop ->
             Stop
     end.
+
+update_args(sregulator_meter, {Queue, Interval, BinSeed}) ->
+    {[{self(), Queue}], Interval, binary_to_term(BinSeed)};
+update_args(_, Args) ->
+    Args.
 
 init_or_change_args(#state{mod=Mod, meter=M, time=Time}) ->
     ?LET(Manager, manager(),

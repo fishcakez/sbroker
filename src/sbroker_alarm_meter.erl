@@ -149,8 +149,8 @@ config_change({Target, NInterval, AlarmId}, Time,
         infinity ->
             {NState, infinity};
         _ ->
-            NToggleNext = max(Time, ToggleNext+NInterval2-Interval),
-            {NState#state{toggle_next=NToggleNext}, NToggleNext}
+            NToggleNext = ToggleNext+NInterval2-Interval,
+            {NState#state{toggle_next=NToggleNext}, max(Time, NToggleNext)}
     end;
 config_change(Args, Time, #state{status=set, alarm_id=AlarmId}) ->
     alarm_handler:clear_alarm(AlarmId),
