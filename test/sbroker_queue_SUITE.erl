@@ -51,10 +51,12 @@ groups() ->
     [{property, [queue_statem, fq_statem]}].
 
 init_per_suite(Config) ->
+    {ok, Started} = application:ensure_all_started(sbroker),
     QcOpts = [{numtests, 1000}, long_result, {on_output, fun log/2}],
-    [{quickcheck_options, QcOpts} | Config].
+    [{quickcheck_options, QcOpts}, {started, Started} | Config].
 
-end_per_suite(_Config) ->
+end_per_suite(Config) ->
+    _ = [application:stop(App) || App <- ?config(started, Config)],
     ok.
 
 group(_Group) ->

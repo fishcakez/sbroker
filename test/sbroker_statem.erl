@@ -223,7 +223,7 @@ queue_spec() ->
 meter_spec() ->
     oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
            {sbroker_timeout_meter, oneof([1000, infinity])},
-           {sbroker_statem_meter, self}]).
+           {sbetter_statem_meter, {self, []}}]).
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, update_spec(Init)),
@@ -243,8 +243,8 @@ start_link(Init) ->
             Other
     end.
 
-update_spec({ok, {AskSpec, BidSpec, {sbroker_statem_meter, self}}}) ->
-    {ok, {AskSpec, BidSpec, {sbroker_statem_meter, self()}}};
+update_spec({ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self, Arg}}}}) ->
+    {ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self(), Arg}}}};
 update_spec(Other) ->
     Other.
 
@@ -711,7 +711,7 @@ change_code_args(#state{sbroker=Broker}) ->
                  sbroker_statem2_queue,
                  sbroker_alarm_meter,
                  sbroker_timeout_meter,
-                 sbroker_statem_meter]),
+                 sbetter_statem_meter]),
     [Broker, Mod, ?TIMEOUT].
 
 change_code(Broker, {?MODULE, Init}, Timeout) ->
@@ -784,14 +784,16 @@ sys_post(#state{sys=running} = State) ->
 sys_post(#state{sys=suspended}) ->
     true.
 
-meter_post(#state{meter_mod=sbroker_statem_meter, asks=Asks, bids=Bids}) ->
+meter_post(#state{meter_mod=sbetter_statem_meter, asks=Asks, bids=Bids,
+                  sbroker=Broker}) ->
     receive
         {meter, QueueDelay, ProcessDelay, RelativeTime, _}
           when QueueDelay >= 0, ProcessDelay >= 0 ->
-            relative_post(RelativeTime, Asks, Bids)
+            relative_post(RelativeTime, Asks, Bids) andalso
+            better_post(Broker, Asks, Bids)
     after
         100 ->
-            ct:pal("Did not receive sbroker_statem_meter message"),
+            ct:pal("Did not receive sbetter_statem_meter message"),
             false
     end;
 meter_post(_) ->
@@ -807,6 +809,18 @@ relative_post(RelativeTime, _, [_|_] = Bids) when RelativeTime > 0 ->
     false;
 relative_post(_, _, _) ->
     true.
+
+better_post(Broker, Asks, Bids) ->
+    AskSojourn = sbetter_server:lookup(Broker, ask),
+    BidSojourn = sbetter_server:lookup(Broker, ask_r),
+    if
+        length(Asks) > length(Bids) andalso AskSojourn < BidSojourn ->
+            ct:pal("sbetter has ask faster than bid with asks ~p", [Asks]);
+        length(Asks) < length(Bids) andalso AskSojourn > BidSojourn ->
+            ct:pal("sbetter has bid faster than ask with bids ~p", [Bids]);
+        true ->
+            true
+    end.
 
 %% Helpers
 

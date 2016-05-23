@@ -244,7 +244,7 @@ valve_spec() ->
 meter_spec() ->
     oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
            {sbroker_timeout_meter, oneof([1000, infinity])},
-           {sbroker_statem_meter, self}]).
+           {sbetter_statem_meter, {self, []}}]).
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, update_spec(Init)),
@@ -264,8 +264,8 @@ start_link(Init) ->
             Other
     end.
 
-update_spec({ok, {AskSpec, BidSpec, {sbroker_statem_meter, self}}}) ->
-    {ok, {AskSpec, BidSpec, {sbroker_statem_meter, self()}}};
+update_spec({ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self, Arg}}}}) ->
+    {ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self(), Arg}}}};
 update_spec(Other) ->
     Other.
 
@@ -770,14 +770,14 @@ queue_aqm(#state{queue=Q, queue_state=[Drop | QState], done=Done} = State) ->
     {Drops, NQ} = lists:split(Drop2, Q),
     {Drops, State#state{queue=NQ, queue_state=QState, done=Done++Drops}}.
 
-meter_post(#state{meter_mod=sbroker_statem_meter, valve_status=VStatus}) ->
+meter_post(#state{meter_mod=sbetter_statem_meter, valve_status=VStatus}) ->
     receive
         {meter, QueueDelay, ProcessDelay, RelativeTime, _}
           when QueueDelay >= 0, ProcessDelay >= 0 ->
             no_more_meter() andalso relative_post(RelativeTime, VStatus)
     after
         100 ->
-            ct:pal("Did not receive sbroker_statem_meter message"),
+            ct:pal("Did not receive sbetter_statem_meter message"),
             false
     end;
 meter_post(_) ->

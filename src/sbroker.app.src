@@ -1,12 +1,13 @@
 {application, sbroker,
- [{description, "Process broker for dispatching with backpressure and load shedding"}
- ,{vsn, "0.7.0"}
- ,{registered, []}
- ,{applications,
-    [kernel,stdlib,sasl]}
- ,{env,[]}
- ,{modules, []}
- ,{contributors, ["James Fish"]}
- ,{licenses, ["Apache v2.0"]}
- ,{links, [{"Github", "https://github.com/fishcakez/sbroker"}]}
+ [{description, "Low level pooling library"},
+  {vsn, "0.7.0"},
+  {mod, {sbroker_app, []}},
+  {registered, []},
+  {applications,
+    [kernel,stdlib,sasl]},
+  {env,[]},
+  {modules, []},
+  {contributors, ["James Fish"]},
+  {licenses, ["Apache v2.0"]},
+  {links, [{"Github", "https://github.com/fishcakez/sbroker"}]}
  ]}.

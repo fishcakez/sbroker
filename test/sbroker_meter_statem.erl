@@ -106,6 +106,7 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
 
 manager() ->
     frequency([{4, sbroker_alarm_statem},
+               {4, sbetter_meter_statem},
                {1, sbroker_timeout_meter_statem}]).
 
 time() ->
@@ -144,9 +145,9 @@ init_or_change_pre(#state{time=PrevTime}, [_, _, _, _, _, Time]) ->
 init_or_change_next(#state{manager=undefined} = State, Value,
                     [_, _, Manager, Mod, Args, Time]) ->
     M = {call, erlang, element, [2, Value]},
-    ManState = Manager:init(Time, Args),
-    State#state{manager=Manager, mod=Mod, meter=M, time=Time, timeout_time=Time,
-                manager_state=ManState};
+    {ManState, Timeout} = Manager:init(Time, Args),
+    State#state{manager=Manager, mod=Mod, meter=M, time=Time,
+                timeout_time=Timeout, manager_state=ManState};
 init_or_change_next(#state{manager=Manager, manager_state=ManState} = State,
                    Value, [Mod, _, Manager, Mod, Args, Time]) ->
     M = {call, erlang, element, [2, Value]},
@@ -159,8 +160,10 @@ init_or_change_next(_, Value, [_, _, Manager, Mod, Args, Time]) ->
                                  Time]),
     State#state{time=Time}.
 
-init_or_change_post(#state{manager=undefined}, _, _) ->
-    true;
+init_or_change_post(#state{manager=undefined}, [_, _, Manager, _, Args, Time],
+                    {ok, _, Timeout}) ->
+    {_, Timeout2} = Manager:init(Time, Args),
+    timeout_post(Timeout2, Timeout);
 init_or_change_post(#state{manager=Manager, manager_state=ManState},
                     [Mod, _, Manager, Mod, Args, Time], {ok, _, Timeout}) ->
     {_, Timeout2} = Manager:change(ManState, Time, Args),

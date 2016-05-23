@@ -28,41 +28,46 @@
 %%
 %% It is not possible to locally look up the pid of a process with name
 %% `{atom(), node()}' if the node is not the local node. Therefore a registered
-%% name on another node is not supported for use with `via'.
+%% name on another node is not supported for use with this module.
 -module(sscheduler).
 
 -export([whereis_name/1]).
 -export([send/2]).
 
 %% @doc Lookup the pid or process name of one element, selected based on the
-%% scheduler id, in a tuple of process names. Returns `{atom(), node()}' if the
-%% chosen element is a locally registered name on another node, or the `pid()'
-%% of the process associated with the name. If no process is associated with the
-%% name returns `undefined'.
+%% scheduler id, in a tuple of process names. If no process is associated with
+%% the name returns `undefined'.
 -spec whereis_name(Processes) -> Process | undefined when
       Processes :: tuple(),
-      Process :: pid() | {atom(), node()}.
+      Process :: pid().
 whereis_name({}) ->
     undefined;
-whereis_name(Tuple) ->
-    Size = tuple_size(Tuple),
+whereis_name(Processes) when is_tuple(Processes) ->
+    Size = tuple_size(Processes),
     Scheduler = erlang:system_info(scheduler_id),
     N = (Scheduler rem Size) + 1,
-    Name = element(N, Tuple),
-    sbroker_gen:whereis(Name).
+    Name = element(N, Processes),
+    case sbroker_gen:whereis(Name) of
+        Pid when is_pid(Pid) ->
+            Pid;
+        undefined ->
+            undefined;
+        {_, Node} ->
+            exit({badnode, Node})
+    end.
 
 %% @doc Send a message to one element, selected based on the scheduler id, in a
 %% tuple of process names. Returns `ok' if the element chosen is a `pid()'.
 %% a locally registered name on another node, or a process is associated with
 %% the name. Otherwise exits.
--spec send(Throttle, Msg) -> ok when
-      Throttle :: tuple(),
+-spec send(Processes, Msg) -> ok when
+      Processes :: tuple(),
       Msg :: any().
-send(Brokers, Msg) ->
-    case whereis_name(Brokers) of
+send(Processes, Msg) ->
+    case whereis_name(Processes) of
+        Pid when is_pid(Pid) ->
+            _ = Pid ! Msg,
+            ok;
         undefined ->
-            exit({noproc, {?MODULE, send, [Brokers, Msg]}});
-        Process ->
-            _ = Process ! Msg,
-            ok
+            exit({noproc, {?MODULE, send, [Processes, Msg]}})
     end.

@@ -104,9 +104,8 @@ whereis_local(_) ->
     Self = sscheduler:whereis_name({{?MODULE, node()}}),
     Self = sscheduler:whereis_name({{?MODULE, node()}, {?MODULE, node()}}),
 
-    {?MODULE, node} = sscheduler:whereis_name({{?MODULE, node}}),
-    {?MODULE, node} = sscheduler:whereis_name({{?MODULE, node},
-                                               {?MODULE, node}}),
+    {'EXIT', {badnode, node}} = (catch sscheduler:whereis_name({{?MODULE,
+                                                                 node}})),
 
     erlang:unregister(?MODULE),
 
@@ -181,9 +180,6 @@ send_local(_) ->
 
     Self = sscheduler:send({{?MODULE, node()}, {?MODULE, node()}}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
-
-    sscheduler:send({{?MODULE, node}}, Ref),
-    sscheduler:send({{?MODULE, node}, {?MODULE, node}}, Ref),
 
     erlang:unregister(?MODULE),
 

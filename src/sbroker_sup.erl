@@ -17,32 +17,29 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sbroker_statem_meter).
+%% @private
+-module(sbroker_sup).
 
--behaviour(sbroker_meter).
+-behaviour(supervisor).
 
--export([init/2]).
--export([handle_update/5]).
--export([handle_info/3]).
--export([code_change/4]).
--export([config_change/3]).
--export([terminate/2]).
+%% public API
 
-init(_, Pid) ->
-    {Pid, infinity}.
+-export([start_link/0]).
 
-handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, Pid) ->
-    Pid ! {meter, QueueDelay, ProcessDelay, RelativeTime, Time},
-    {Pid, infinity}.
+%% supervisor API
 
-handle_info(_, _, Pid) ->
-    {Pid, infinity}.
+-export([init/1]).
 
-code_change(_, _, Pid, _) ->
-    {Pid, infinity}.
+%% public API
 
-config_change(Pid, _, _) ->
-    {Pid, infinity}.
+-spec start_link() -> {ok, Pid} when
+      Pid :: pid().
+start_link() ->
+    supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
-terminate(_, _) ->
-    ok.
+%% supervisor API
+
+init([]) ->
+    BetterServer = {sbetter_server, {sbetter_server, start_link, []},
+                    permanent, 5000, worker, [sbetter_server]},
+    {ok, {{one_for_one, 3, 30}, [BetterServer]}}.

@@ -1,6 +1,6 @@
 %%-------------------------------------------------------------------
 %%
-%% Copyright (c) 2015, James Fish <james@fishcakez.com>
+%% Copyright (c) 2016, James Fish <james@fishcakez.com>
 %%
 %% This file is provided to you under the Apache License,
 %% Version 2.0 (the "License"); you may not use this file
@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sbroker_timeout_meter_statem).
+-module(sbetter_meter_statem).
 
 -include_lib("proper/include/proper.hrl").
 
@@ -30,32 +30,34 @@
 -export([timeout/2]).
 
 module() ->
-    sbroker_timeout_meter.
+    sbetter_meter.
 
 args() ->
-    oneof([choose(0, 3), infinity]).
+    undefined.
 
-init(Time, Timeout) ->
-    NTimeout = sbroker_util:timeout(Timeout),
-    {NTimeout, timeout(NTimeout, Time)}.
+init(Time, undefined) ->
+    {undefined, Time}.
 
-update_next(Timeout, Time, _, _, _, _) ->
-    handle(Timeout, Time).
+update_next(undefined, _, _, _, _, _) ->
+    {undefined, infinity}.
 
-update_post(Timeout, Time, _, _, _, _) ->
-    {_, TimeoutTime} = handle(Timeout, Time),
-    {true, TimeoutTime}.
+update_post(undefined, _, _, QueueDelay, ProcessDelay, RelativeTime) ->
+    {lookup_post(QueueDelay, ProcessDelay, RelativeTime, ask) andalso
+     lookup_post(QueueDelay, ProcessDelay, -RelativeTime, ask_r), infinity}.
 
-change(_, Time, Timeout) ->
-    handle(sbroker_util:timeout(Timeout), Time).
+lookup_post(QueueDelay, ProcessDelay, RelativeTime, Queue) ->
+    ObsValue = sbetter_server:lookup(self(), Queue),
+    case QueueDelay + ProcessDelay + max(RelativeTime, 0) of
+        ObsValue ->
+            true;
+        ExpValue ->
+            ct:pal("~p value~nExpected: ~p~nObserved: ~p",
+                   [Queue, ExpValue, ObsValue]),
+            false
+    end.
 
-timeout(Timeout, Time) ->
-    {_, TimeoutTime} = handle(Timeout, Time),
-    TimeoutTime.
+change(undefined, _, _) ->
+    {undefined, infinity}.
 
-%% Internal
-
-handle(infinity, _) ->
-    {infinity, infinity};
-handle(Timeout, Time) ->
-    {Timeout, Time + Timeout}.
+timeout(_, _) ->
+    infinity.
