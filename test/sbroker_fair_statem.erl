@@ -37,7 +37,7 @@ module() ->
 
 args() ->
     oneof([{sbroker_drop_queue, sbroker_drop_statem:args(), index()},
-           {sbroker_timeout_queue, sbroker_timeout_queue_statem:args(), index()},
+           {sbroker_timeout_queue, sbroker_timeout_statem:args(), index()},
            {sbroker_codel_queue, sbroker_codel_statem:args(), index()}]).
 
 index() ->
@@ -79,6 +79,6 @@ config_change(_, FullArgs, _) ->
 queue2statem(sbroker_drop_queue) ->
     sbroker_drop_statem;
 queue2statem(sbroker_timeout_queue) ->
-    sbroker_timeout_queue_statem;
+    sbroker_timeout_statem;
 queue2statem(sbroker_codel_queue) ->
     sbroker_codel_statem.

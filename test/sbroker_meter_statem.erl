@@ -107,8 +107,7 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
 manager() ->
     frequency([{4, sbroker_alarm_statem},
                {4, sbetter_meter_statem},
-               {4, sregulator_meter_statem},
-               {1, sbroker_timeout_meter_statem}]).
+               {4, sregulator_meter_statem}]).
 
 time() ->
     ?LET(Time, choose(-10, 10),

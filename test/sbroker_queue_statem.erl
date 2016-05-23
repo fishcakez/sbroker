@@ -147,7 +147,7 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
 manager() ->
     frequency([{1, sbroker_statem_statem},
                {2, sbroker_drop_statem},
-               {4, sbroker_timeout_queue_statem},
+               {4, sbroker_timeout_statem},
                {6, sbroker_fair_statem},
                {8, sbroker_codel_statem}]).
 
