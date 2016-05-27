@@ -330,7 +330,7 @@ spawn_client_post(#state{asks=[], ask_drops=AskDrops, bids=Bids} = State,
              fun meter_post/1);
 spawn_client_post(#state{asks=[], ask_drops=AskDrops} = State,
                   [_, nb_bid], Bid) ->
-    retry_post(Bid) andalso timeout_post(State#state{ask_state=AskDrops});
+    drop_post(Bid) andalso timeout_post(State#state{ask_state=AskDrops});
 spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
   when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
     ask_post(State,
@@ -348,7 +348,7 @@ spawn_client_post(#state{bids=[], bid_drops=BidDrops, asks=Asks} = State,
              fun meter_post/1);
 spawn_client_post(#state{bids=[], bid_drops=BidDrops} = State,
                   [_, nb_ask], Ask) ->
-    retry_post(Ask) andalso timeout_post(State#state{bid_state=BidDrops});
+    drop_post(Ask) andalso timeout_post(State#state{bid_state=BidDrops});
 spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
   when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
     bid_post(State,
@@ -928,15 +928,6 @@ settled_post(#state{asks=Asks, bids=Bids} = State, AskClient, BidClient) ->
             meter_post(State);
         Result ->
             ct:log("Result: ~p", [Result]),
-            false
-    end.
-
-retry_post(Client) ->
-    case result(Client) of
-        {retry, SojournTime} ->
-            is_integer(SojournTime) andalso SojournTime >= 0;
-        Result ->
-            ct:log("Result ~p", [Result]),
             false
     end.
 

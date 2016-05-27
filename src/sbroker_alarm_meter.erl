@@ -138,10 +138,8 @@ code_change(_, Time, #state{toggle_next=ToggleNext} = State, _) ->
       NState :: #state{},
       Next :: integer() | infinity.
 config_change({Target, NInterval, AlarmId}, Time,
-       #state{alarm_id=AlarmId, interval=Interval,
-              toggle_next=ToggleNext} = State)
-  when is_integer(Target) andalso Target >= 0 andalso
-       is_integer(NInterval) andalso NInterval > 0 ->
+              #state{alarm_id=AlarmId, interval=Interval,
+                     toggle_next=ToggleNext} = State) ->
     NTarget = sbroker_util:sojourn_target(Target),
     NInterval2 = sbroker_util:interval(NInterval),
     NState = State#state{target=NTarget, interval=NInterval2, alarm_id=AlarmId},

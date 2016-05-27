@@ -105,9 +105,10 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
     terminate_post(State, Args, Result).
 
 manager() ->
-    frequency([{4, sbroker_alarm_statem},
-               {4, sbetter_meter_statem},
-               {4, sregulator_meter_statem}]).
+    frequency([{2, sbetter_meter_statem},
+               {2, sregulator_meter_statem},
+               {3, sbroker_alarm_statem},
+               {4, sprotector_pie_statem}]).
 
 time() ->
     ?LET(Time, choose(-10, 10),
@@ -145,7 +146,7 @@ init_or_change_args(#state{mod=Mod, meter=M, time=Time}) ->
 init_or_change_pre(#state{manager=undefined, mod=undefined}, _) ->
     true;
 init_or_change_pre(#state{time=PrevTime}, [_, _, _, _, _, Time]) ->
-    PrevTime >= Time.
+    Time >= PrevTime.
 
 init_or_change_next(#state{manager=undefined} = State, Value,
                     [_, _, Manager, Mod, Args, Time]) ->

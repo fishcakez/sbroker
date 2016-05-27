@@ -21,6 +21,7 @@
 -module(sbroker_gen).
 
 -export([call/4]).
+-export([simple_call/4]).
 -export([async_call/3]).
 -export([async_call/4]).
 -export([whereis/1]).
@@ -52,7 +53,7 @@
       Timeout :: timeout(),
       Reply :: any().
 call(Process, Label, Msg, Timeout) ->
-    case whereis(Process) of
+    try whereis(Process) of
         undefined ->
             exit({noproc, {?MODULE, call, [Process, Label, Msg, Timeout]}});
         NProcess ->
@@ -64,49 +65,78 @@ call(Process, Label, Msg, Timeout) ->
                     Args = [Process, Label, Msg, Timeout],
                     exit({Reason, {?MODULE, call, Args}})
             end
+    catch
+        exit:drop ->
+            {drop, 0}
     end.
 
--spec async_call(Process, Label, Msg) -> {await, Tag, NProcess} when
+-spec simple_call(Process, Label, Msg, Timeout) -> Reply when
+      Process :: process(),
+      Label :: atom(),
+      Msg :: any(),
+      Timeout :: timeout(),
+      Reply :: any().
+simple_call(Process, Label, Msg, Timeout) ->
+    try gen:call(Process, Label, Msg, Timeout) of
+        {ok, Reply} ->
+            Reply
+    catch
+        exit:Reason ->
+            Args = [Process, Label, Msg, Timeout],
+            exit({Reason, {?MODULE, simple_call, Args}})
+    end.
+
+-spec async_call(Process, Label, Msg) -> {await, Tag, NProcess} | {drop, 0} when
       Process :: process(),
       Label :: atom(),
       Msg :: any(),
       Tag :: reference(),
       NProcess :: pid() | {atom(), node()}.
 async_call(Process, Label, Msg) ->
-    case whereis(Process) of
+    try whereis(Process) of
          undefined ->
             exit({noproc, {?MODULE, async_call, [Process, Label, Msg]}});
         NProcess ->
             Tag = monitor(process, NProcess),
             _ = erlang:send(NProcess, {Label, {self(), Tag}, Msg}, [noconnect]),
             {await, Tag, NProcess}
+    catch
+        exit:drop ->
+            {drop, 0}
     end.
 
--spec async_call(Process, Label, Msg, Tag) -> {await, Tag, NProcess} when
+-spec async_call(Process, Label, Msg, Tag) ->
+    {await, Tag, NProcess} | {drop, 0} when
       Process :: process(),
       Label :: atom(),
       Msg :: any(),
       Tag :: reference(),
       NProcess :: pid() | {atom(), node()}.
 async_call(Process, Label, Msg, Tag) ->
-    case whereis(Process) of
+    try whereis(Process) of
          undefined ->
             exit({noproc, {?MODULE, async_call, [Process, Label, Msg, Tag]}});
         NProcess ->
             _ = NProcess ! {Label, {self(), Tag}, Msg},
             {await, Tag, NProcess}
+    catch
+        exit:drop ->
+            {drop, 0}
     end.
 
 -spec send(Process, Msg) -> ok when
       Process :: process(),
       Msg :: any().
 send(Process, Msg) ->
-    case whereis(Process) of
+    try whereis(Process) of
         undefined ->
             exit({noproc, {?MODULE, send, [Process, Msg]}});
         NProcess ->
             _ = NProcess ! Msg,
             ok
+    catch
+        exit:drop ->
+            exit({drop, {?MODULE, send, [Process, Msg]}})
     end.
 
 -spec whereis(Process) -> Pid | {Name, Node} | undefined when

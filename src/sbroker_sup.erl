@@ -42,4 +42,6 @@ start_link() ->
 init([]) ->
     BetterServer = {sbetter_server, {sbetter_server, start_link, []},
                     permanent, 5000, worker, [sbetter_server]},
-    {ok, {{one_for_one, 3, 30}, [BetterServer]}}.
+    ProtectorServer = {sprotector_server, {sprotector_server, start_link, []},
+                     permanent, 5000, worker, [sprotector_server]},
+    {ok, {{one_for_one, 3, 30}, [BetterServer, ProtectorServer]}}.

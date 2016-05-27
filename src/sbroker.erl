@@ -207,6 +207,9 @@ ask(Broker) ->
 %%
 %% The sojourn time for matched process can be approximated by `SojournTime'
 %% minus `RelativeTime'.
+%%
+%% If the request is dropped when using `via' module `sprotector' returns
+%% `{drop, 0}' and does not send the request.
 -spec ask(Broker, ReqValue) -> Go | Drop when
       Broker :: broker(),
       ReqValue :: any(),
@@ -247,29 +250,32 @@ ask_r(Broker, ReqValue) ->
     sbroker_gen:call(Broker, bid, ReqValue, infinity).
 
 %% @equiv nb_ask(Broker, self())
--spec nb_ask(Broker) -> Go | Retry when
+-spec nb_ask(Broker) -> Go | Drop when
       Broker :: broker(),
       Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
       Value :: any(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
-      Retry :: {retry, SojournTime}.
+      Drop :: {drop, SojournTime}.
 nb_ask(Broker) ->
     sbroker_gen:call(Broker, nb_ask, self(), infinity).
 
 %% @doc Tries to match with a process calling `ask_r/2' on the same broker but
 %% does not enqueue the request if no immediate match. Returns
 %% `{go, Ref, Value, RelativeTime, SojournTime}' on a successful match or
-%% `{retry, SojournTime}'.
+%% `{drop, SojournTime}'.
 %%
 %% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
 %% value of the matched process. `RelativeTime' is the time spent waiting for a
 %% match after discounting time spent waiting for the broker to handle requests.
 %% `SojournTime' is the time spent in the broker's message queue.
 %%
+%% If the request is dropped when using `via' module `sprotector' returns
+%% `{drop, 0}' and does not send the request.
+%%
 %% @see ask/2
--spec nb_ask(Broker, ReqValue) -> Go | Retry when
+-spec nb_ask(Broker, ReqValue) -> Go | Drop when
       Broker :: broker(),
       ReqValue :: any(),
       Go :: {go, Ref, Value, RelativeTime, SojournTime},
@@ -277,19 +283,19 @@ nb_ask(Broker) ->
       Value :: any(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
-      Retry :: {retry, SojournTime}.
+      Drop :: {drop, SojournTime}.
 nb_ask(Broker, ReqValue) ->
     sbroker_gen:call(Broker, nb_ask, ReqValue, infinity).
 
 %% @equiv nb_ask_r(Broker, self())
--spec nb_ask_r(Broker) -> Go | Retry when
+-spec nb_ask_r(Broker) -> Go | Drop when
       Broker :: broker(),
       Go :: {go, Ref, Value, RelativeTime, SojournTime},
       Ref :: reference(),
       Value :: any(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
-      Retry :: {retry, SojournTime}.
+      Drop :: {drop, SojournTime}.
 nb_ask_r(Broker) ->
     sbroker_gen:call(Broker, nb_bid, self(), infinity).
 
@@ -297,7 +303,7 @@ nb_ask_r(Broker) ->
 %% does not enqueue the request if no immediate match.
 %%
 %% @see nb_ask/2
--spec nb_ask_r(Broker, ReqValue) -> Go | Retry when
+-spec nb_ask_r(Broker, ReqValue) -> Go | Drop when
       Broker :: broker(),
       ReqValue :: any(),
       Go :: {go, Ref, Value, RelativeTime, SojournTime},
@@ -305,12 +311,12 @@ nb_ask_r(Broker) ->
       Value :: any(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
-      Retry :: {retry, SojournTime}.
+      Drop :: {drop, SojournTime}.
 nb_ask_r(Broker, ReqValue) ->
     sbroker_gen:call(Broker, nb_bid, ReqValue, infinity).
 
 %% @equiv async_ask(Broker, self())
--spec async_ask(Broker) -> {await, Tag, Process} when
+-spec async_ask(Broker) -> {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       Tag :: reference(),
       Process :: pid() | {atom(), node()}.
@@ -318,7 +324,7 @@ async_ask(Broker) ->
     sbroker_gen:async_call(Broker, ask, self()).
 
 %% @doc Monitors the broker and sends an asynchronous request to match with a
-%% process calling `ask_r/2'. Returns `{await, Tag, Pid}'.
+%% process calling `ask_r/2'. Returns `{await, Tag, Pid}' or `{drop, 0}'.
 %%
 %% `Tag' is a monitor `reference()' that uniquely identifies the reply
 %% containing the result of the request. `Process', is the `pid()' of the
@@ -338,9 +344,12 @@ async_ask(Broker) ->
 %% multiple requests can reuse the monitor reference for subsequent requests to
 %% the same broker process (`Process') using `async_ask/3'.
 %%
+%% If the request is dropped when using `via' module `sprotector' returns
+%% `{drop, 0}' and does not send the request.
+%%
 %% @see cancel/2
 %% @see async_ask/3
--spec async_ask(Broker, ReqValue) -> {await, Tag, Process} when
+-spec async_ask(Broker, ReqValue) -> {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: reference(),
@@ -369,8 +378,11 @@ async_ask(Broker, ReqValue) ->
 %% exits or is on a disconnected node there is no guarantee of a reply and so
 %% the caller should take appropriate steps to handle this scenario.
 %%
+%% If the request is dropped when using `via' module `sprotector', returns
+%% `{drop, 0}' and does not send the request.
+%%
 %% @see cancel/2
--spec async_ask(Broker, ReqValue, Tag) -> {await, Tag, Process} when
+-spec async_ask(Broker, ReqValue, Tag) -> {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: any(),
@@ -379,7 +391,7 @@ async_ask(Broker, ReqValue, Tag) ->
     sbroker_gen:async_call(Broker, ask, ReqValue, Tag).
 
 %% @equiv async_ask_r(Broker, self())
--spec async_ask_r(Broker) -> {await, Tag, Process} when
+-spec async_ask_r(Broker) -> {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       Tag :: reference(),
       Process :: pid() | {atom(), node()}.
@@ -391,7 +403,7 @@ async_ask_r(Broker) ->
 %%
 %% @see async_ask/2
 %% @see cancel/2
--spec async_ask_r(Broker, ReqValue) -> {await, Tag, Process} when
+-spec async_ask_r(Broker, ReqValue) -> {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: reference(),
@@ -403,7 +415,8 @@ async_ask_r(Broker, ReqValue) ->
 %%
 %% @see async_ask/3
 %% @see cancel/2
--spec async_ask_r(Broker, ReqValue, Tag) -> {await, Tag, Process} when
+-spec async_ask_r(Broker, ReqValue, Tag) ->
+    {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       ReqValue :: any(),
       Tag :: any(),
@@ -453,7 +466,7 @@ await(Tag, Timeout) ->
       Timeout :: timeout(),
       Count :: pos_integer().
 cancel(Broker, Tag, Timeout) ->
-    sbroker_gen:call(Broker, cancel, Tag, Timeout).
+    sbroker_gen:simple_call(Broker, cancel, Tag, Timeout).
 
 %% @doc Change the configuration of the broker. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason', is the reason for failure.
@@ -465,7 +478,7 @@ cancel(Broker, Tag, Timeout) ->
       Timeout :: timeout(),
       Reason :: any().
 change_config(Broker, Timeout) ->
-    sbroker_gen:call(Broker, change_config, undefined, Timeout).
+    sbroker_gen:simple_call(Broker, change_config, undefined, Timeout).
 
 %% @doc Get the length of the `ask' queue in the broker, `Broker'.
 -spec len(Broker, Timeout) -> Length when
@@ -473,7 +486,7 @@ change_config(Broker, Timeout) ->
       Timeout :: timeout(),
       Length :: non_neg_integer().
 len(Broker, Timeout) ->
-    sbroker_gen:call(Broker, len_ask, undefined, Timeout).
+    sbroker_gen:simple_call(Broker, len_ask, undefined, Timeout).
 
 %% @doc Get the length of the `ask_r' queue in the broker, `Broker'.
 -spec len_r(Broker, Timeout) -> Length when
@@ -481,7 +494,7 @@ len(Broker, Timeout) ->
       Timeout :: timeout(),
       Length :: non_neg_integer().
 len_r(Broker, Timeout) ->
-    sbroker_gen:call(Broker, len_bid, undefined, Timeout).
+    sbroker_gen:simple_call(Broker, len_bid, undefined, Timeout).
 
 %% @doc Starts a broker with callback module `Module' and argument `Args', and
 %% broker options `Opts'.
@@ -824,7 +837,7 @@ asking({bid, Bid, BidValue} = Msg, #time{now=Now, send=Send} = Time, Asks, Bids,
             asking_exception(Class, Reason, Time, NAsks, Bids, Config)
     end;
 asking({nb_ask, Ask, _}, Time, Asks, Bids, Last, _, Config) ->
-    retry(Ask, Time),
+    drop(Ask, Time),
     asking_timeout(Time, Asks, Bids, Last, Config);
 asking({nb_bid, Bid, BidValue}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
        _, #config{ask_mod=AskMod} = Config) ->
@@ -833,7 +846,7 @@ asking({nb_bid, Bid, BidValue}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
             ask_settle(Time, Ref, AskSend, Ask, AskValue, Bid, BidValue),
             asking(Time, NAsks, Bids, AskSend, Next, Config);
         {empty, NAsks} ->
-            retry(Bid, Time),
+            drop(Bid, Time),
             bidding(Time, NAsks, Bids, Send, infinity, Config);
         {bad_return_value, Other, NAsks} ->
             asking_return(Other, Time, NAsks, Bids, Config);
@@ -1024,7 +1037,7 @@ bidding({ask, Ask, AskValue} = Msg, #time{now=Now, send=Send} = Time, Asks,
             bidding_exception(Class, Reason, Time, Asks, NBids, Config)
     end;
 bidding({nb_bid, Bid, _}, Time, Asks, Bids, Last, _, Config) ->
-    retry(Bid, Time),
+    drop(Bid, Time),
     bidding_timeout(Time, Asks, Bids, Last, Config);
 bidding({nb_ask, Ask, AskValue}, #time{now=Now, send=Send} = Time, Asks, Bids,
         _, _, #config{bid_mod=BidMod} = Config) ->
@@ -1033,7 +1046,7 @@ bidding({nb_ask, Ask, AskValue}, #time{now=Now, send=Send} = Time, Asks, Bids,
             bid_settle(Time, Ref, Ask, AskValue, BidSend, Bid, BidValue),
             bidding(Time, Asks, NBids, BidSend, Next, Config);
         {empty, NBids} ->
-            retry(Ask, Time),
+            drop(Ask, Time),
             asking(Time, Asks, NBids, Send, infinity, Config);
         {bad_return_value, Other, NBids} ->
             bidding_return(Other, Time, Asks, NBids, Config);
@@ -1079,8 +1092,8 @@ settle(Now, AskSend, Ref, Ask, AskValue, BidSend, Bid, BidValue) ->
     gen:reply(Bid, {go, Ref, AskValue, RelativeTime, Now - BidSend}),
     gen:reply(Ask, {go, Ref, BidValue, -RelativeTime, Now - AskSend}).
 
-retry(From, #time{now=Now, send=Send}) ->
-    gen:reply(From, {retry, Now - Send}).
+drop(From, #time{now=Now, send=Send}) ->
+    sbroker_queue:drop(From, Send, Now).
 
 config_change(From, State, Time, Asks, Bids, Last, Config) ->
     case config_change(Config) of
