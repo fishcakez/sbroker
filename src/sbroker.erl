@@ -98,6 +98,10 @@
 -export([async_ask_r/1]).
 -export([async_ask_r/2]).
 -export([async_ask_r/3]).
+-export([dynamic_ask/1]).
+-export([dynamic_ask/2]).
+-export([dynamic_ask_r/1]).
+-export([dynamic_ask_r/2]).
 -export([await/2]).
 -export([cancel/3]).
 -export([change_config/2]).
@@ -423,6 +427,88 @@ async_ask_r(Broker, ReqValue) ->
       Process :: pid() | {atom(), node()}.
 async_ask_r(Broker, ReqValue, Tag) ->
     sbroker_gen:async_call(Broker, bid, ReqValue, Tag).
+
+%% @equiv dynamic_ask(Broker, self())
+-spec dynamic_ask(Broker) -> Go | Await | Drop when
+      Broker :: broker(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Await :: {await, Tag, Pid},
+      Tag :: reference(),
+      Pid :: pid(),
+      Drop :: {drop, SojournTime}.
+dynamic_ask(Broker) ->
+    sbroker_gen:dynamic_call(Broker, dynamic_ask, self(), infinity).
+
+%% @doc Tries to match with a process calling `ask_r/2' on the same broker. If
+%% no immediate match available the request is converted to an `async_ask/2'.
+%%
+%% Returns `{go, Ref, Value, RelativeTime, SojournTime}' on a successful match
+%% or `{await, Tag, BrokerPid}'.
+%%
+%% `Ref' is the transaction reference, which is a `reference()'. `Value' is the
+%% value of the matched process. `RelativeTime' is the time spent waiting for a
+%% match after discounting time spent waiting for the broker to handle requests.
+%% `SojournTime' is the time spent in the broker's message queue. `Tag' is a
+%% monitor reference and `BrokerPid' the `pid()' of the broker, as returned by
+%% `async_ask/2'.
+%%
+%% If the request is dropped when using `via' module `sprotector' returns
+%% `{drop, 0}' and does not send the request.
+%%
+%% @see nb_ask/2
+%% @see async_ask/2
+-spec dynamic_ask(Broker, ReqValue) -> Go | Await | Drop when
+      Broker :: broker(),
+      ReqValue :: any(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Await :: {await, Tag, Pid},
+      Tag :: reference(),
+      Pid :: pid(),
+      Drop :: {drop, SojournTime}.
+dynamic_ask(Broker, ReqValue) ->
+    sbroker_gen:dynamic_call(Broker, dynamic_ask, ReqValue, infinity).
+
+%% @equiv dynamic_ask_r(Broker, self())
+-spec dynamic_ask_r(Broker) -> Go | Await | Drop when
+      Broker :: broker(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Await :: {await, Tag, Pid},
+      Tag :: reference(),
+      Pid :: pid(),
+      Drop :: {drop, SojournTime}.
+dynamic_ask_r(Broker) ->
+    sbroker_gen:dynamic_call(Broker, dynamic_bid, self(), infinity).
+
+%% @doc Tries to match with a process calling `ask/2' on the same broker. If
+%% no immediate match available the request is converted to an `async_ask_r/2'.
+%%
+%% @see dynamic_ask/2
+-spec dynamic_ask_r(Broker, ReqValue) -> Go | Await | Drop when
+      Broker :: broker(),
+      ReqValue :: any(),
+      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Value :: any(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Await :: {await, Tag, Pid},
+      Tag :: reference(),
+      Pid :: pid(),
+      Drop :: {drop, SojournTime}.
+dynamic_ask_r(Broker, ReqValue) ->
+    sbroker_gen:dynamic_call(Broker, dynamic_bid, ReqValue, infinity).
 
 %% @doc Await the response to an asynchronous request identified by `Tag'.
 %%
@@ -853,6 +939,24 @@ asking({nb_bid, Bid, BidValue}, #time{now=Now, send=Send} = Time, Asks, Bids, _,
         {exception, Class, Reason, NAsks} ->
             asking_exception(Class, Reason, Time, NAsks, Bids, Config)
     end;
+asking({dynamic_ask, Ask, Value}, Time, Asks, Bids, Last, Next, Config) ->
+    async(Ask),
+    asking({ask, Ask, Value}, Time, Asks, Bids, Last, Next, Config);
+asking({dynamic_bid, Bid, BidValue}, #time{now=Now, send=Send} = Time, Asks,
+       Bids, _, _, #config{ask_mod=AskMod} = Config) ->
+    case handle_out(AskMod, Now, Asks) of
+        {AskSend, Ask, AskValue, Ref, NAsks, Next} ->
+            ask_settle(Time, Ref, AskSend, Ask, AskValue, Bid, BidValue),
+            asking(Time, NAsks, Bids, AskSend, Next, Config);
+        {empty, NAsks} ->
+            async(Bid),
+            Msg = {bid, Bid, BidValue},
+            bidding(Msg, Time, NAsks, Bids, Send, infinity, Config);
+        {bad_return_value, Other, NAsks} ->
+            asking_return(Other, Time, NAsks, Bids, Config);
+        {exception, Class, Reason, NAsks} ->
+            asking_exception(Class, Reason, Time, NAsks, Bids, Config)
+    end;
 asking({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, Last, _,
        #config{ask_mod=AskMod} = Config) ->
     try AskMod:handle_cancel(Tag, Now, Asks) of
@@ -1053,6 +1157,24 @@ bidding({nb_ask, Ask, AskValue}, #time{now=Now, send=Send} = Time, Asks, Bids,
         {exception, Class, Reason, NBids} ->
             bidding_exception(Class, Reason, Time, Asks, NBids, Config)
     end;
+bidding({dynamic_bid, Bid, Value}, Time, Asks, Bids, Last, Next, Config) ->
+    async(Bid),
+    bidding({bid, Bid, Value}, Time, Asks, Bids, Last, Next, Config);
+bidding({dynamic_ask, Ask, AskValue}, #time{now=Now, send=Send} = Time, Asks,
+       Bids, _, _, #config{bid_mod=BidMod} = Config) ->
+    case handle_out(BidMod, Now, Bids) of
+        {BidSend, Bid, BidValue, Ref, NBids, Next} ->
+            bid_settle(Time, Ref, Ask, AskValue, BidSend, Bid, BidValue),
+            bidding(Time, Asks, NBids, BidSend, Next, Config);
+        {empty, NBids} ->
+            async(Ask),
+            Msg = {ask, Ask, AskValue},
+            asking(Msg, Time, Asks, NBids, Send, infinity, Config);
+        {bad_return_value, Other, NBids} ->
+            bidding_return(Other, Time, Asks, NBids, Config);
+        {exception, Class, Reason, NBids} ->
+            bidding_exception(Class, Reason, Time, Asks, NBids, Config)
+    end;
 bidding({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, Last, _,
         #config{bid_mod=BidMod} = Config) ->
     try BidMod:handle_cancel(Tag, Now, Bids) of
@@ -1094,6 +1216,9 @@ settle(Now, AskSend, Ref, Ask, AskValue, BidSend, Bid, BidValue) ->
 
 drop(From, #time{now=Now, send=Send}) ->
     sbroker_queue:drop(From, Send, Now).
+
+async({_, Tag} = From) ->
+    gen:reply(From, {await, Tag, self()}).
 
 config_change(From, State, Time, Asks, Bids, Last, Config) ->
     case config_change(Config) of

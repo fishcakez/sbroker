@@ -309,7 +309,7 @@ update_post(State, _, _) ->
     valve_post(State, fun queue_post/1).
 
 spawn_client_args(#state{sregulator=Regulator}) ->
-    [Regulator, oneof([async_ask, nb_ask])].
+    [Regulator, oneof([async_ask, nb_ask, dynamic_ask])].
 
 spawn_client(Broker, Fun) ->
     {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Broker, Fun]),
@@ -321,7 +321,8 @@ spawn_client_next(#state{valve_status=open, queue=[], valve=V} = State, Client,
 spawn_client_next(#state{valve_status=closed} = State, _, [_, nb_ask]) ->
     valve_next(State, fun queue_next/1);
 spawn_client_next(#state{valve_status=closed, queue=Q} = State, Client,
-                  [_, async_ask]) ->
+                  [_, AskFun])
+  when AskFun == async_ask; AskFun == dynamic_ask ->
     queue_next(State#state{queue=Q++[Client]}, fun valve_next/1).
 
 spawn_client_post(#state{valve_status=open, queue=[], valve=V} = State,
@@ -329,8 +330,9 @@ spawn_client_post(#state{valve_status=open, queue=[], valve=V} = State,
     go_post(Client) andalso valve_post(State#state{valve=V++[Client]});
 spawn_client_post(#state{valve_status=closed} = State, [_, nb_ask], _) ->
     valve_post(State, fun queue_post/1);
-spawn_client_post(#state{valve_status=closed, queue=Q} = State, [_, async_ask],
-                  Client) ->
+spawn_client_post(#state{valve_status=closed, queue=Q} = State, [_, AskFun],
+                  Client)
+  when AskFun == async_ask; AskFun == dynamic_ask ->
     queue_post(State#state{queue=Q++[Client]}, fun valve_post/1).
 
 continue(Regulator, undefined) ->
@@ -940,6 +942,14 @@ client_init(Regulator, nb_ask) ->
             client_init(MRef, Regulator, undefined, VRef, State);
         State ->
             client_init(MRef, Regulator, undefined, undefined, State)
+    end;
+client_init(Regulator, dynamic_ask) ->
+    case sregulator:dynamic_ask(Regulator) of
+        {go, VRef, _, _, _} = State ->
+            MRef = monitor(process, Regulator),
+            client_init(MRef, Regulator, undefined, VRef, State);
+        {await, ARef, _} ->
+            client_init(ARef, Regulator, ARef, undefined, queued)
     end.
 
 client_init(MRef, Regulator, ARef, VRef, State) ->

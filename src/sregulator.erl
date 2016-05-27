@@ -89,6 +89,7 @@
 -export([nb_ask/1]).
 -export([async_ask/1]).
 -export([async_ask/2]).
+-export([dynamic_ask/1]).
 -export([await/2]).
 -export([cancel/3]).
 -export([continue/2]).
@@ -189,16 +190,16 @@
 %% the message that open the regulator's valve.
 -spec ask(Regulator) -> Go | Drop when
       Regulator :: regulator(),
-      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
-      Value :: any(),
+      Pid :: pid(),
       RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
 ask(Regulator) ->
     sbroker_gen:call(Regulator, ask, self(), infinity).
 
-%% @doc Send a run request to the regulator, `Regulator`, but do not enqueue the
+%% @doc Send a run request to the regulator, `Regulator', but do not enqueue the
 %% request if not immediately allowed to run.
 %%
 %% Returns `{go, Ref, RegulatorPid, RelativeTime, SojournTime}' on successfully
@@ -216,9 +217,9 @@ ask(Regulator) ->
 %% @see ask/1
 -spec nb_ask(Regulator) -> Go | Drop when
       Regulator :: regulator(),
-      Go :: {go, Ref, Value, RelativeTime, SojournTime},
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
       Ref :: reference(),
-      Value :: any(),
+      Pid :: pid(),
       RelativeTime :: 0 | neg_integer(),
       SojournTime :: non_neg_integer(),
       Drop :: {drop, SojournTime}.
@@ -253,10 +254,10 @@ nb_ask(Regulator) ->
 %%
 %% @see cancel/2
 %% @see async_ask/2
--spec async_ask(Regulator) -> {await, Tag, Pid} | {drop, 0} when
+-spec async_ask(Regulator) -> {await, Tag, Process} | {drop, 0} when
       Regulator :: regulator(),
       Tag :: reference(),
-      Pid :: pid().
+      Process :: pid() | {atom(), node()}.
 async_ask(Regulator) ->
     sbroker_gen:async_call(Regulator, ask, self()).
 
@@ -278,6 +279,37 @@ async_ask(Regulator) ->
       Process :: pid() | {atom(), node()}.
 async_ask(Regulator, Tag) ->
     sbroker_gen:async_call(Regulator, ask, self(), Tag).
+
+%% @doc Send a run request to the regulator, `Regulator'. If not immediately
+%% allowed to run the request is converted to an `async_ask/1'.
+%%
+%% Returns `{go, Ref, RegulatorPid, RelativeTime, SojournTime}' on successfully
+%% being allowed to run or `{await, Tag, RegulatorPid}'.
+%%
+%% `Ref' is the lock reference, which is a `reference()'. `RegulatorPid' is the
+%% `pid()' of the regulator process. `RelativeTime' is the time difference
+%% between when the request was sent and the message that opened the regulator's
+%% valve was sent. `SojournTime' is the approximate time spent in the
+%% regulator's message queue. `Tag' is a monitor reference, as returned by
+%% `async_ask/1'.
+%%
+%% If the request is dropped when using `via' module `sprotector' returns
+%% `{drop, 0}' and does not send the request.
+%%
+%% @see nb_ask/1
+%% @see async_ask/1
+-spec dynamic_ask(Regulator) -> Go | Await | Drop when
+      Regulator :: regulator(),
+      Go :: {go, Ref, Pid, RelativeTime, SojournTime},
+      Ref :: reference(),
+      Pid :: pid(),
+      RelativeTime :: 0 | neg_integer(),
+      SojournTime :: non_neg_integer(),
+      Await :: {await, Tag, Pid},
+      Tag :: reference(),
+      Drop :: {drop, 0}.
+dynamic_ask(Regulator) ->
+    sbroker_gen:dynamic_call(Regulator, dynamic_ask, self(), infinity).
 
 %% @doc Await the response to an asynchronous request idenitifed by `Tag'.
 %%
@@ -339,8 +371,12 @@ cancel(Regulator, Tag, Timeout) ->
 %% valve was sent. `SojournTime' is the approximate time spent in the
 %% regulator's message queue.
 %%
+%% If the request is dropped when using `via' module `sprotector' returns
+%% `{drop, 0}' and does not send the request. In this situation the `Ref' is
+%% still a valid lock on the regulator.
+%%
 %% @see ask/1
--spec continue(Regulator, Ref) -> Go | Stop | NotFound when
+-spec continue(Regulator, Ref) -> Go | Stop | NotFound | Drop when
       Regulator :: regulator(),
       Ref :: reference(),
       Go :: {go, Ref, Pid, RelativeTime, SojournTime},
@@ -349,9 +385,10 @@ cancel(Regulator, Tag, Timeout) ->
       RelativeTime :: integer(),
       SojournTime :: non_neg_integer(),
       Stop :: {stop, SojournTime},
-      NotFound :: {not_found, SojournTime}.
+      NotFound :: {not_found, SojournTime},
+      Drop :: {drop, 0}.
 continue(Regulator, Ref) ->
-    sbroker_gen:simple_call(Regulator, continue, Ref, infinity).
+    sbroker_gen:call(Regulator, continue, Ref, infinity).
 
 %% @doc Inform the regulator the process has finished running and release the
 %% lock, `Ref'.
@@ -712,8 +749,9 @@ open(Time, Q, V, Open, Next, Config) ->
             open(Msg, NTime, Q, V, Open, Next, Config)
     end.
 
-open({Tag, Ask, Pid}, #time{now=Now, send=Send} = Time, Q, V, Open, _,
-     #config{valve_mod=VMod} = Config) when Tag == ask; Tag == nb_ask ->
+open({Label, Ask, Pid}, #time{now=Now, send=Send} = Time, Q, V, Open, _,
+     #config{valve_mod=VMod} = Config)
+  when Label == ask; Label == nb_ask; Label == dynamic_ask ->
     Ref = monitor(process, Pid),
     go(Ask, Ref, Send, Open, Now),
     try VMod:handle_ask(Pid, Ref, Now, V) of
@@ -778,6 +816,9 @@ closed({nb_ask, Ask, _}, #time{now=Now, send=Send} = Time, Q, V, Last, _,
        Config) ->
     sbroker_queue:drop(Ask, Send, Now),
     closed_timeout(Time, Q, V, Last, Config);
+closed({dynamic_ask, {_, Tag} = Ask, Pid}, Time, Q, V, Last, Next, Config) ->
+    gen:reply(Ask, {await, Tag, self()}),
+    closed({ask, Ask, Pid}, Time, Q, V, Last, Next, Config);
 closed({continue, From, Ref}, #time{now=Now, send=Send} = Time, Q, V, Last, _,
        #config{valve_mod=VMod} = Config) ->
     try VMod:handle_continue(Ref, Now, V) of

@@ -24,6 +24,7 @@
 -export([simple_call/4]).
 -export([async_call/3]).
 -export([async_call/4]).
+-export([dynamic_call/4]).
 -export([whereis/1]).
 -export([send/2]).
 -export([start_link/4]).
@@ -119,6 +120,40 @@ async_call(Process, Label, Msg, Tag) ->
         NProcess ->
             _ = NProcess ! {Label, {self(), Tag}, Msg},
             {await, Tag, NProcess}
+    catch
+        exit:drop ->
+            {drop, 0}
+    end.
+
+-spec dynamic_call(Process, Label, Msg, Timeout) -> Reply when
+      Process :: process(),
+      Label :: atom(),
+      Msg :: any(),
+      Timeout :: timeout(),
+      Reply :: any().
+dynamic_call(Process, Label, Msg, Timeout) ->
+    try whereis(Process) of
+        undefined ->
+            exit({noproc,
+                  {?MODULE, dynamic_call, [Process, Label, Msg, Timeout]}});
+        NProcess ->
+            Tag = monitor(process, NProcess),
+            _ = erlang:send(NProcess, {Label, {self(), Tag}, Msg}, [noconnect]),
+            receive
+                {Tag, {await, Tag, _} = Await} ->
+                    Await;
+                {Tag, Reply} ->
+                    demonitor(Tag, [flush]),
+                    Reply;
+                {'DOWN', Tag, _, _, Reason} ->
+                    Args = [Process, Label, Msg, Timeout],
+                    exit({Reason, {?MODULE, dynamic_call, Args}})
+            after
+                Timeout ->
+                    demonitor(Tag, [flush]),
+                    Args = [Process, Label, Msg, Timeout],
+                    exit({timeout, {?MODULE, dynamic_call, Args}})
+            end
     catch
         exit:drop ->
             {drop, 0}

@@ -279,20 +279,22 @@ start_link_post(_, _, _) ->
     false.
 
 spawn_client_args(#state{sbroker=Broker}) ->
-    [Broker, oneof([async_bid, async_ask, nb_bid, nb_ask])].
+    [Broker,
+     oneof([async_bid, async_ask, nb_bid, nb_ask, dynamic_bid, dynamic_ask])].
 
 spawn_client(Broker, Fun) ->
     {ok, Pid, MRef} = proc_lib:start(?MODULE, client_init, [Broker, Fun]),
     {Pid, MRef}.
 
 spawn_client_next(#state{asks=[], ask_drops=AskDrops, bids=Bids} = State, Bid,
-                  [_, async_bid]) ->
+                  [_, BidFun])
+  when BidFun == async_bid; BidFun == dynamic_bid ->
     bid_next(State#state{ask_state=AskDrops, bids=Bids++[Bid]});
 spawn_client_next(#state{asks=[], ask_drops=AskDrops} = State, _,
                   [_, nb_bid]) ->
     timeout_next(State#state{ask_state=AskDrops});
 spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
-  when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
+  when BidFun == async_bid; BidFun == dynamic_bid; BidFun == nb_bid ->
     ask_next(State,
              fun(#state{asks=[], ask_drops=AskDrops} = NState) ->
                      NState2 = NState#state{ask_state=AskDrops},
@@ -305,13 +307,14 @@ spawn_client_next(#state{asks=[_ | _]} = State, Bid, [_, BidFun] = Args)
                                   done=Done++[Bid, lists:last(NAsks)]}
              end);
 spawn_client_next(#state{bids=[], bid_drops=BidDrops, asks=Asks} = State, Ask,
-                  [_, async_ask]) ->
+                  [_, AskFun])
+  when AskFun == async_ask; AskFun == dynamic_ask ->
     ask_next(State#state{bid_state=BidDrops, asks=Asks++[Ask]});
 spawn_client_next(#state{bids=[], bid_drops=BidDrops} = State, _,
                   [_, nb_ask]) ->
     timeout_next(State#state{bid_state=BidDrops});
 spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
-  when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
+  when AskFun == async_ask; AskFun == dynamic_ask; AskFun == nb_ask ->
     bid_next(State,
              fun(#state{bids=[], bid_drops=BidDrops} = NState) ->
                      NState2 = NState#state{bid_state=BidDrops},
@@ -325,14 +328,15 @@ spawn_client_next(#state{bids=[_ | _]} = State, Ask, [_, AskFun] = Args)
              end).
 
 spawn_client_post(#state{asks=[], ask_drops=AskDrops, bids=Bids} = State,
-                  [_, async_bid], Bid) ->
+                  [_, BidFun], Bid)
+  when BidFun == async_bid; BidFun == dynamic_bid ->
     bid_post(State#state{ask_state=AskDrops, bids=Bids++[Bid]},
              fun meter_post/1);
 spawn_client_post(#state{asks=[], ask_drops=AskDrops} = State,
                   [_, nb_bid], Bid) ->
     drop_post(Bid) andalso timeout_post(State#state{ask_state=AskDrops});
 spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
-  when BidFun =:= async_bid orelse BidFun =:= nb_bid ->
+  when BidFun == async_bid; BidFun == dynamic_bid; BidFun =:= nb_bid ->
     ask_post(State,
              fun(#state{asks=[], ask_drops=AskDrops} = NState) ->
                      NState2 = NState#state{ask_state=AskDrops},
@@ -343,14 +347,15 @@ spawn_client_post(#state{asks=[_ | _]} = State, [_, BidFun] = Args, Bid)
                      settled_post(NState, lists:last(NAsks), Bid)
              end);
 spawn_client_post(#state{bids=[], bid_drops=BidDrops, asks=Asks} = State,
-                  [_, async_ask], Ask) ->
+                  [_, AskFun], Ask)
+  when AskFun == async_ask; AskFun == dynamic_ask ->
     ask_post(State#state{bid_state=BidDrops, asks=Asks++[Ask]},
              fun meter_post/1);
 spawn_client_post(#state{bids=[], bid_drops=BidDrops} = State,
                   [_, nb_ask], Ask) ->
     drop_post(Ask) andalso timeout_post(State#state{bid_state=BidDrops});
 spawn_client_post(#state{bids=[_ | _]} = State, [_, AskFun] = Args, Ask)
-  when AskFun =:= async_ask orelse AskFun =:= nb_ask ->
+  when AskFun == async_ask; AskFun == dynamic_ask; AskFun == nb_ask ->
     bid_post(State,
              fun(#state{bids=[], bid_drops=BidDrops} = NState) ->
                      NState2 = NState#state{bid_state=BidDrops},
@@ -953,6 +958,14 @@ client_init(Broker, async_bid) ->
     ARef = make_ref(),
     {await, ARef, Broker} = sbroker:async_ask_r(Broker, self(), ARef),
     client_init(MRef, Broker, ARef, queued);
+client_init(Broker, dynamic_bid) ->
+    case sbroker:dynamic_ask_r(Broker) of
+        {go, _, _, _, _} = State ->
+            MRef = monitor(process, Broker),
+            client_init(MRef, Broker, undefined, State);
+        {await, ARef, _} ->
+            client_init(ARef, Broker, ARef, queued)
+    end;
 client_init(Broker, nb_bid) ->
     MRef = monitor(process, Broker),
     State = sbroker:nb_ask_r(Broker),
@@ -962,6 +975,14 @@ client_init(Broker, async_ask) ->
     ARef = make_ref(),
     {await, ARef, Broker} = sbroker:async_ask(Broker, self(), ARef),
     client_init(MRef, Broker, ARef, queued);
+client_init(Broker, dynamic_ask) ->
+    case sbroker:dynamic_ask(Broker) of
+        {go, _, _, _, _} = State ->
+            MRef = monitor(process, Broker),
+            client_init(MRef, Broker, undefined, State);
+        {await, ARef, _} ->
+            client_init(ARef, Broker, ARef, queued)
+    end;
 client_init(Broker, nb_ask) ->
     MRef = monitor(process, Broker),
     State = sbroker:nb_ask(Broker),
