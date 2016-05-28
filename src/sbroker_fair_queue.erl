@@ -299,9 +299,14 @@ to_lists(Index, InternalQ) ->
 
 split_list([{_, {Pid, _}, Value, _} = Item | Rest], Index, InternalQs) ->
     QKey = index(Index, Pid, Value),
-    QList = maps:get(QKey, InternalQs, []),
-    NInternalQs = maps:put(QKey, [Item | QList], InternalQs),
-    split_list(Rest, Index, NInternalQs);
+    case maps:find(QKey, InternalQs) of
+        {ok, QList} ->
+            NInternalQs = maps:put(QKey, [Item | QList], InternalQs),
+            split_list(Rest, Index, NInternalQs);
+        error ->
+            NInternalQs = maps:put(QKey, [Item], InternalQs),
+            split_list(Rest, Index, NInternalQs)
+    end;
 split_list([], _, InternalQs) ->
     maps:to_list(InternalQs).
 
