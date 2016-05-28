@@ -23,14 +23,14 @@ Processes calling `sbroker:ask/1` are only matched with a process calling
 Usage
 -----
 
-`sbroker` provides configurable queues defined by `sbroker:queue_spec()`s. A
-`queue_spec()` takes the form:
+`sbroker` provides configurable queues defined by `sbroker:handler_spec()`s. A
+`handler_spec()` takes the form:
 ```erlang
 {Module, Args}
 ```
 `Module` is an `sbroker_queue` callback module to queue. The following callback
-modules are provided: `sbroker_drop_queue`, `sbroker_timeout_queue` and
-`sbroker_codel_queue`.
+modules are provided: `sbroker_drop_queue`, `sbroker_timeout_queue`,
+`sbroker_codel_queue` and `sbroker_fair_queue`.
 
 `Args` is the argument passed to the callback module. Information about
 the different backends and their arguments are avaliable in the
@@ -46,12 +46,16 @@ The sbroker will call `Module:init(Args)`, which should return the specification
 for the sbroker:
 ```erlang
 init(_) ->
-    {ok, {AskQueueSpec, AskRQueueSpec}}.
+    {ok, {AskQueueSpec, AskRQueueSpec, [MeterSpec]}}.
 ```
-`AskQueueSpec` is the `queue_spec` for the queue containing processes calling
+`AskQueueSpec` is the `handler_spec` for the queue containing processes calling
 `ask/1`. The queue is referred to as the `ask` queue. Similarly
-`AskRQueueSpec` is the `queue_spec` for the queue contaning processes calling
-`ask_r/1`, and the queue is referred to as the `ask_r` queue.
+`AskRQueueSpec` is the `handler_spec` for the queue contaning processes calling
+`ask_r/1`, and the queue is referred to as the `ask_r` queue. `MeterSpec` is a
+`handler_spec` for a meter running on the broker. Meters are given metric
+information and are called when the time is updated, see `sbroker_meter`. The
+following `sbroker_meter` modules are provided: `sbroker_alarm_meter`,
+`sbetter_meter`, `sprotector_pie_meter` and `sregulator_meter`.
 
 For example:
 ```erlang
@@ -63,13 +67,13 @@ For example:
 -export([init/1]).
 
 start_link() ->
-    sbroker:start_link(?MODULE, undefined, [{time_unit, milli_seconds}]).
+    sbroker:start_link(?MODULE, undefined, []).
 
 init(_) ->
     QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 0, 16}},
-    {ok, {QueueSpec, QueueSpec}}.
+    {ok, {QueueSpec, QueueSpec, []}}.
 ```
-`sbroker_example:start_link/0` will start an `sbroker` with queues configured by 
+`sbroker_example:start_link/0` will start an `sbroker` with queues configured by
 `QueueSpec`.
 
 This configuration uses the `sbroker_timeout_queue` callback module which drops

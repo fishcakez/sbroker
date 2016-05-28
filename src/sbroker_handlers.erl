@@ -37,10 +37,12 @@
 -callback terminate(Mod :: module(), Reason :: reason(), State :: any()) ->
     BehaviourState :: any().
 
--export([init/3]).
--export([code_change/5]).
--export([config_change/3]).
--export([terminate/3]).
+-export([init/4]).
+-export([meters_info/4]).
+-export([meters_update/6]).
+-export([code_change/6]).
+-export([config_change/5]).
+-export([terminate/4]).
 -export([report/6]).
 -export([exit_reason/1]).
 
@@ -59,39 +61,88 @@
     [{module(), atom(), arity() | [term()], [{atom(),term()}]} |
      {function(), [term()], [{atom(),term()}]}].
 
--spec init(Time, Inits, Name) ->
-    {ok, Callbacks} | {stop, ExitReason} when
+-spec init(Time, Inits, MeterArgs, Name) ->
+    {ok, Callbacks, {Meters, TimeoutTime}} | {stop, ExitReason} when
       Time :: integer(),
       Inits :: [{Behaviour, Mod, Args}, ...],
       Behaviour :: module(),
       Mod :: module(),
       Args :: any(),
+      MeterArgs :: [{MeterMod, MeterArg}],
+      MeterMod :: module(),
+      MeterArg :: any(),
       Name :: name(),
       Callbacks :: [{Behaviour, Mod, State, TimeoutTime}, ...],
       State :: any(),
       TimeoutTime :: integer() | infinity,
-      ExitReason :: any().
-init(Time, Inits, Name) ->
-    init(Time, Inits, Name, []).
+      ExitReason :: any(),
+      Meters :: [{MeterMod, MeterState}],
+      MeterState :: any().
+init(Time, Inits, Meters, Name) ->
+    init(Time, Inits, Meters, Name, []).
 
--spec code_change(Time, Callbacks, ChangeMod, OldVsn, Extra) -> NCallbacks when
+-spec meters_info(Msg, Time, Meters, Name) ->
+    {ok, NMeters, TimeoutTime} | {stop, ExitReason} when
+      Msg :: any(),
+      Time :: integer(),
+      Meters :: [{Mod, State}],
+      Mod :: module(),
+      State :: any(),
+      Name :: name(),
+      NMeters :: [{Mod, State}],
+      TimeoutTime :: integer() | infinity,
+      ExitReason :: any().
+meters_info(Msg, Time, Meters, Name) ->
+    meters_info(Msg, Time, Meters, Name, [], infinity).
+
+-spec meters_update(QueueDelay, ProcessDelay, RelativeTime, Time, Meters,
+                    Name) ->
+    {ok, NMeters, TimeoutTime} | {stop, ExitReason} when
+      QueueDelay :: non_neg_integer(),
+      ProcessDelay :: non_neg_integer(),
+      RelativeTime :: integer(),
+      Time :: integer(),
+      Meters :: [{Mod, State}],
+      Mod :: module(),
+      State :: any(),
+      Name :: name(),
+      NMeters :: [{Mod, NState}],
+      NState :: any(),
+      TimeoutTime :: integer() | infinity,
+      ExitReason :: any().
+meters_update(QDelay, PDelay, RTime, Time, Meters, Name) ->
+    meters_update(QDelay, PDelay, RTime, Time, Meters, Name, [], infinity).
+
+-spec code_change(Time, Callbacks, Meters, ChangeMod, OldVsn, Extra) ->
+    {NCallbacks, {NMeters, NTimeoutTime}} when
       Time :: integer(),
       Callbacks :: [{Behaviour, Mod, State, TimeoutTime}, ...],
       Behaviour :: module(),
       Mod :: module(),
       State :: any(),
       TimeoutTime :: integer() | infinity,
+      Meters :: [{MeterMod, MeterState}],
+      MeterMod :: module(),
+      MeterState :: any(),
       ChangeMod :: module(),
       OldVsn :: any(),
       Extra :: any(),
       NCallbacks :: [{Behaviour, Mod, NState, NTimeoutTime}, ...],
       NState :: any(),
-      NTimeoutTime :: integer() | infinity.
-code_change(Now, Callbacks, ChangeMod, OldVsn, Extra) ->
-    code_change(Now, Callbacks, ChangeMod, OldVsn, Extra, []).
+      NTimeoutTime :: integer() | infinity,
+      NMeters :: [{MeterMod, NMeterState}],
+      NMeterState :: any().
+code_change(Now, Callbacks, Meters, ChangeMod, OldVsn, Extra) ->
+    NCallbacks = do_code_change(Now, Callbacks, ChangeMod, OldVsn, Extra, []),
+    Meters2 = [{sbroker_meter, Mod, State, infinity} || {Mod, State} <- Meters],
+    Meters3 = do_code_change(Now, Meters2, ChangeMod, OldVsn, Extra, []),
+    Split = fun({sbroker_meter, Mod, State, ModNext}, AccNext) ->
+                    {{Mod, State}, min(ModNext, AccNext)}
+            end,
+    {NCallbacks, lists:mapfoldl(Split, infinity, Meters3)}.
 
--spec config_change(Time, Changes, Name) ->
-    {ok, Callbacks} | {stop, ExitReason} when
+-spec config_change(Time, Changes, Meters, MeterArgs, Name) ->
+    {ok, Callbacks, {NMeters, TimeoutTime}} | {stop, ExitReason} when
       Time :: integer(),
       Changes :: [{Behaviour, Mod1, State1, Mod2, Args2}, ...],
       Behaviour :: module(),
@@ -99,15 +150,28 @@ code_change(Now, Callbacks, ChangeMod, OldVsn, Extra) ->
       State1 :: any(),
       Mod2 :: module(),
       Args2 :: any(),
+      Meters :: [{MeterMod, MeterState}],
+      MeterMod :: module(),
+      MeterState :: any(),
+      MeterArgs :: [{MeterMod, MeterArg}],
+      MeterArg :: any(),
       Name :: name(),
-      TimeoutTime2 :: integer() | infinity,
-      Callbacks :: [{Behaviour, Mod2, State2, TimeoutTime2}, ...],
+      Callbacks :: [{Behaviour, Mod2, State2, TimeoutTime}, ...],
       State2 :: any(),
+      TimeoutTime :: integer() | infinity,
+      NMeters :: [{MeterMod, NMeterState}],
+      NMeterState :: any(),
       ExitReason :: any().
-config_change(Now, Changes, Name) ->
-    change(Now, Changes, Name, []).
+config_change(Now, Changes, Meters, MeterArgs, Name) ->
+    case change(Now, Changes, Name, []) of
+        {ok, Callbacks} ->
+            meters_change(Now, Meters, MeterArgs, Callbacks, Name);
+        {stop, _} = Stop ->
+            terminate(Stop, meters_callbacks(Meters), Name)
+    end.
 
--spec terminate(Reason, [{Behaviour, Module, ModReason, State}, ...], Name) ->
+-spec terminate(Reason, [{Behaviour, Module, ModReason, State}, ...],
+                [{Module, State}], Name) ->
     {stop, NewExitReason} when
       Reason :: reason() | {stop, ExitReason :: any()},
       Behaviour :: module(),
@@ -116,21 +180,9 @@ config_change(Now, Changes, Name) ->
       State :: any(),
       Name :: name(),
       NewExitReason :: any().
-terminate({stop, _} = Stop, [], _) ->
-    Stop;
-terminate(Reason, [], _) ->
-    {stop, exit_reason(Reason)};
-terminate(Reason, [{Behaviour, Mod, ModReason, State} | Rest], Name) ->
-    try Behaviour:terminate(Mod, ModReason, State) of
-        _ ->
-            maybe_report(Behaviour, Mod, ModReason, State, Name),
-            terminate(Reason, Rest, Name)
-    catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(Behaviour, handler_crashed, Mod, Reason2, State, Name),
-            terminate(Reason2, Rest, Name)
-    end.
+terminate(Reason, Callbacks, Meters, Name) ->
+    Meters2 = [{sbroker_meter, Mod, stop, State} || {Mod, State} <- Meters],
+    terminate(Reason, Callbacks ++ Meters2, Name).
 
 -spec report(Behaviour, Type, Mod, Reason, State, Name) -> ok when
       Behaviour :: module(),
@@ -160,13 +212,13 @@ exit_reason({bad_return_value, _} = Bad) ->
 
 %% Internal
 
-init(_, [], _, Callbacks) ->
-    {ok, lists:reverse(Callbacks)};
-init(Time, [{Behaviour, Mod, Args} | Inits], Name, Callbacks) ->
+init(Time, [], Meters, Name, Callbacks) ->
+    meters_init(Time, Meters, lists:reverse(Callbacks), Name);
+init(Time, [{Behaviour, Mod, Args} | Inits], Meters, Name, Callbacks) ->
     try Behaviour:init(Mod, Behaviour:initial_state(), Time, Args) of
         {State, Next} ->
             NCallbacks = [{Behaviour, Mod, State, Next} | Callbacks],
-            init(Time, Inits, Name, NCallbacks);
+            init(Time, Inits, Meters, Name, NCallbacks);
         Other ->
             Reason = {bad_return_value, Other},
             NCallbacks = [{Behaviour2, Mod2, stop, State2} ||
@@ -182,22 +234,96 @@ init(Time, [{Behaviour, Mod, Args} | Inits], Name, Callbacks) ->
 
     end.
 
-code_change(_, [], _, _, _, Callbacks) ->
+meters_init(Time, MeterArgs, Callbacks, Name) ->
+    case meters_init(Time, MeterArgs, Name, [], infinity) of
+        {ok, Meters, Next} ->
+            {ok, Callbacks, {Meters, Next}};
+        {stop, Reason, Callbacks2} ->
+            terminate(Reason, Callbacks2 ++ Callbacks, Name)
+    end.
+
+meters_init(Time, [{Mod, Args} | Inits], Name, Meters, Next) ->
+    try Mod:init(Time, Args) of
+        {State, ModNext} ->
+            NMeters = [{Mod, State} | Meters],
+            NNext = min(ModNext, Next),
+            meters_init(Time, Inits, Name, NMeters, NNext);
+        Other ->
+            Reason = {bad_return_value, Other},
+            report(sbroker_meter, start_error, Mod, Reason, Args, Name),
+            {stop, Reason, meters_callbacks(Meters)}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(sbroker_meter, start_error, Mod, Reason2, Args, Name),
+            {stop, Reason2, meters_callbacks(Meters)}
+    end;
+meters_init(_, [], _, Meters, Next) ->
+    {ok, Meters, Next}.
+
+meters_info(_, _, [], _, NMeters, Next) ->
+    {ok, NMeters, Next};
+meters_info(Msg, Time, [{Mod, State} | Meters], Name, NMeters, Next) ->
+    try Mod:handle_info(Msg, Time, State) of
+        {NState, ModNext} ->
+            NMeters2 = [{Mod, NState} | NMeters],
+            NNext = min(Next, ModNext),
+            meters_info(Msg, Time, Meters, Name, NMeters2, NNext);
+        Other ->
+            Reason = {bad_return_value, Other},
+            meters_terminate(Reason, Mod, State, Meters, NMeters, Name)
+    catch
+        Class:Reason ->
+            Stack = erlang:get_stacktrace(),
+            Reason2 = {Class, Reason, Stack},
+            meters_terminate(Reason2, Mod, State, Meters, NMeters, Name)
+    end.
+
+meters_update(_, _, _, _, [], _, NMeters, Next) ->
+    {ok, NMeters, Next};
+meters_update(QDelay, PDelay, RTime, Time, [{Mod, State} | Meters], Name,
+              NMeters, Next) ->
+    try Mod:handle_update(QDelay, PDelay, RTime, Time, State) of
+        {NState, ModNext} ->
+            NMeters2 = [{Mod, NState} | NMeters],
+            NNext = min(Next, ModNext),
+            meters_update(QDelay, PDelay, RTime, Time, Meters, Name, NMeters2,
+                          NNext);
+        Other ->
+            Reason = {bad_return_value, Other},
+            meters_terminate(Reason, Mod, State, Meters, NMeters, Name)
+    catch
+        Class:Reason ->
+            Stack = erlang:get_stacktrace(),
+            Reason2 = {Class, Reason, Stack},
+            meters_terminate(Reason2, Mod, State, Meters, NMeters, Name)
+    end.
+
+meters_terminate(Reason, Mod, State, Meters, NMeters, Name) ->
+    Meters2 = [{sbroker_meter, Mod2, stop, State2} ||
+               {Mod2, State2} <- Meters],
+    Meters3 = [{sbroker_meter, Mod2, stop, State2} ||
+               {Mod2, State2} <- NMeters],
+    Meters4 = [{sbroker_meter, Mod, Reason, State} | Meters3 ++ Meters2],
+    terminate(Reason, Meters4, Name).
+
+do_code_change(_, [], _, _, _, Callbacks) ->
     lists:reverse(Callbacks);
-code_change(Time, [{Behaviour, ChangeMod, State, _} | Callbacks], ChangeMod,
-            OldVsn, Extra, NCallbacks) ->
+do_code_change(Time, [{Behaviour, ChangeMod, State, _} | Callbacks], ChangeMod,
+               OldVsn, Extra, NCallbacks) ->
     try Behaviour:code_change(ChangeMod, OldVsn, Time, State, Extra) of
         {NState, NNext} ->
             NCallbacks2 = [{Behaviour, ChangeMod, NState, NNext} | NCallbacks],
-            code_change(Time, Callbacks, ChangeMod, OldVsn, Extra, NCallbacks2)
+            do_code_change(Time, Callbacks, ChangeMod, OldVsn, Extra,
+                           NCallbacks2)
     catch
         throw:Value ->
             erlang:raise(error, {nocatch, Value}, erlang:get_stacktrace())
     end;
-code_change(Time, [Callback | Callbacks], ChangeMod, OldVsn, Extra,
-            NCallbacks) ->
-    code_change(Time, Callbacks, ChangeMod, OldVsn, Extra,
-                [Callback | NCallbacks]).
+do_code_change(Time, [Callback | Callbacks], ChangeMod, OldVsn, Extra,
+               NCallbacks) ->
+    NCallbacks2 = [Callback | NCallbacks],
+    do_code_change(Time, Callbacks, ChangeMod, OldVsn, Extra, NCallbacks2).
 
 change(_, [], _, Callbacks) ->
     {ok, lists:reverse(Callbacks)};
@@ -245,13 +371,113 @@ change_init(Behaviour, Result, Mod, Args, Now, Name) ->
             {ok, NState, Next};
         Other ->
             Reason = {bad_return_value, Other},
-            report(?MODULE, start_error, Mod, Reason, Args, Name),
+            report(Behaviour, start_error, Mod, Reason, Args, Name),
             {stop, Reason, []}
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(?MODULE, start_error, Mod, Reason2, Args, Name),
+            report(Behaviour, start_error, Mod, Reason2, Args, Name),
             {stop, Reason2, []}
+    end.
+
+meters_change(Time, Meters, MeterArgs, Callbacks, Name) ->
+    case meters_change(Time, Meters, MeterArgs, Name) of
+        {ok, NMeters, Next} ->
+            {ok, Callbacks, {NMeters, Next}};
+        {stop, Reason, Callbacks2} ->
+            terminate(Reason, Callbacks2 ++ Callbacks, Name)
+    end.
+
+meters_change(Time, Meters, MeterArgs, Name) ->
+    {Inits, Changes, Terminates} = split_meters(Meters, MeterArgs),
+    case meters_change_term(Terminates, Name) of
+        ok ->
+            meters_change_init(Time, Inits, Changes, Name);
+        {stop, Reason, Callbacks} ->
+            {stop, Reason, Callbacks ++ meters_change_callbacks(Changes)}
+    end.
+
+split_meters(Meters, MeterArgs) ->
+    split_meters(Meters, MeterArgs, [], []).
+
+split_meters([{Mod, State} | Meters], MeterArgs, Changes, Terminates) ->
+    case lists:keytake(Mod, 1, MeterArgs) of
+        {value, {_, Args}, NMeterArgs} ->
+            NChanges = [{Mod, Args, State} | Changes],
+            split_meters(Meters, NMeterArgs, NChanges, Terminates);
+        false ->
+            NTerminates = [{Mod, State} | Terminates],
+            split_meters(Meters, MeterArgs, Changes, NTerminates)
+    end;
+split_meters([], Inits, Changes, Terminates) ->
+    {Inits, Changes, Terminates}.
+
+meters_change_term([{Mod, State} | Meters], Name) ->
+    try Mod:terminate(stop, State) of
+        _ ->
+            meters_change_term(Meters, Name)
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(sbroker_meter, handler_crashed, Mod, Reason2, State, Name),
+            {stop, Reason2, meters_callbacks(Meters)}
+    end;
+meters_change_term([], _) ->
+    ok.
+
+meters_change_init(Time, Inits, Changes, Name) ->
+    case meters_init(Time, Inits, Name, [], infinity) of
+        {ok, Meters, Next} ->
+            meters_change_config(Time, Changes, Meters, Next);
+        {stop, Reason, Callbacks} ->
+            NChanges = [{sbroker_meter, Mod2, stop, State2} ||
+                        {Mod2, _, State2} <- Changes],
+            {stop, Reason, Callbacks ++ NChanges}
+    end.
+
+meters_change_config(Time, [{Mod, Args, State} | Changes], Meters, Next) ->
+    try Mod:config_change(Args, Time, State) of
+        {NState, ModNext} ->
+            NMeters = [{Mod, NState} | Meters],
+            NNext = min(ModNext, Next),
+            meters_change_config(Time, Changes, NMeters, NNext);
+        Other ->
+            Reason = {bad_return_Value, Other},
+            Callbacks = meters_callbacks(Meters),
+            NChanges = meters_change_callbacks(Changes),
+            NChanges2 = [{sbroker_meter, Mod, Reason, State} | NChanges],
+            {stop, Reason, State, NChanges2 ++ Callbacks}
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            Callbacks = meters_callbacks(Meters),
+            NChanges = meters_change_callbacks(Changes),
+            NChanges2 = [{sbroker_meter, Mod, Reason2, State} | NChanges],
+            {stop, Reason2, State, NChanges2 ++ Callbacks}
+    end;
+meters_change_config(_, [], Meters, Next) ->
+    {ok, Meters, Next}.
+
+meters_callbacks(Meters) ->
+    [{sbroker_meter, Mod, stop, State} || {Mod, State} <- Meters].
+
+meters_change_callbacks(Changes) ->
+    [{sbroker_meter, Mod, stop, State} || {Mod, _, State} <- Changes].
+
+terminate({stop, _} = Stop, [], _) ->
+    Stop;
+terminate(Reason, [], _) ->
+    {stop, exit_reason(Reason)};
+terminate(Reason, [{Behaviour, Mod, ModReason, State} | Rest], Name) ->
+    try Behaviour:terminate(Mod, ModReason, State) of
+        _ ->
+            maybe_report(Behaviour, Mod, ModReason, State, Name),
+            terminate(Reason, Rest, Name)
+    catch
+        Class:Reason ->
+            Reason2 = {Class, Reason, erlang:get_stacktrace()},
+            report(Behaviour, handler_crashed, Mod, Reason2, State, Name),
+            terminate(Reason2, Rest, Name)
     end.
 
 report_name({local, Name}) when is_atom(Name) ->

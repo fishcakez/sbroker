@@ -126,9 +126,11 @@ init_or_change(undefined, undefined, _, Mod, Args, Time) ->
     {State, Timeout} = Mod:init(Time, update_args(Mod, Args)),
     {ok, State, Timeout};
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
-    Callback = {sbroker_meter, Mod1, State1, Mod2, update_args(Mod2, Args2)},
-    case sbroker_handlers:config_change(Time, [Callback], {?MODULE, self()}) of
-        {ok, [{_, _, NState, Timeout}]} ->
+    Meters = [{Mod1, State1}],
+    MeterArgs = [{Mod2, update_args(Mod2, Args2)}],
+    Name = {?MODULE, self()},
+    case sbroker_handlers:config_change(Time, [], Meters, MeterArgs, Name) of
+        {ok, [], {[{Mod2, NState}], Timeout}} ->
             {ok, NState, Timeout};
         {stop, _} = Stop ->
             Stop

@@ -212,7 +212,7 @@ start_link_args(_) ->
     [init()].
 
 init() ->
-    frequency([{30, {ok, {queue_spec(), queue_spec(), meter_spec()}}},
+    frequency([{30, {ok, {queue_spec(), queue_spec(), [meter_spec()]}}},
                {1, ignore},
                {1, bad}]).
 
@@ -243,8 +243,8 @@ start_link(Init) ->
             Other
     end.
 
-update_spec({ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self, Arg}}}}) ->
-    {ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self(), Arg}}}};
+update_spec({ok, {AskSpec, BidSpec, [{sbetter_statem_meter, {self, Arg}}]}}) ->
+    {ok, {AskSpec, BidSpec, [{sbetter_statem_meter, {self(), Arg}}]}};
 update_spec(Other) ->
     Other.
 
@@ -258,7 +258,7 @@ start_link_pre(#state{sbroker=Broker}, _) ->
 start_link_next(State, Value,
                 [{ok, {{AskMod, {AskOut, AskDrops}},
                        {BidMod, {BidOut, BidDrops}},
-                       {MeterMod, _}}}]) ->
+                       [{MeterMod, _}]}}]) ->
     Broker = {call, erlang, element, [2, Value]},
     State#state{sbroker=Broker, bid_mod=BidMod, bid_out=BidOut,
                 bid_drops=BidDrops, bid_state=BidDrops, ask_mod=AskMod,
@@ -474,7 +474,7 @@ change_config_next(State, _, [_, ignore]) ->
 change_config_next(State, _, [_, bad]) ->
     timeout_next(State);
 change_config_next(State, _,
-                   [_, {ok, {AskQueueSpec, BidQueueSpec, {MeterMod, _}}}]) ->
+                   [_, {ok, {AskQueueSpec, BidQueueSpec, [{MeterMod, _}]}}]) ->
     NState = ask_change_next(AskQueueSpec, State#state{meter_mod=MeterMod}),
     bid_change_next(BidQueueSpec, NState).
 
@@ -499,7 +499,7 @@ change_config_post(State, [_, ignore], ok) ->
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     timeout_post(State);
 change_config_post(State,
-                   [_, {ok, {AskQueueSpec, BidQueueSpec, {MeterMod, _}}}],
+                   [_, {ok, {AskQueueSpec, BidQueueSpec, [{MeterMod, _}]}}],
                    ok) ->
     ask_change_post(AskQueueSpec, State) andalso
     bid_change_post(BidQueueSpec, State) andalso
@@ -764,7 +764,7 @@ resume_pre(#state{sys=SysState}, _) ->
     SysState =:= suspended.
 
 resume_next(#state{change={ok, {AskQueueSpec, BidQueueSpec,
-                                {MeterMod, _}}}} = State, _, _) ->
+                                [{MeterMod, _}]}}} = State, _, _) ->
     NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
     NState2 = ask_change_next(AskQueueSpec, NState),
     bid_change_next(BidQueueSpec, NState2);
@@ -772,7 +772,7 @@ resume_next(State, _, _) ->
     timeout_next(State#state{sys=running}).
 
 resume_post(#state{change={ok, {AskQueueSpec, BidQueueSpec,
-                                {MeterMod, _}}}} = State, _, _) ->
+                                [{MeterMod, _}]}}} = State, _, _) ->
     NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
     ask_change_post(AskQueueSpec, NState) andalso
     bid_change_post(BidQueueSpec, NState) andalso meter_post(NState);

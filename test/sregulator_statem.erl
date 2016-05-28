@@ -227,7 +227,7 @@ start_link_args(_) ->
     [init()].
 
 init() ->
-    frequency([{30, {ok, {queue_spec(), valve_spec(), meter_spec()}}},
+    frequency([{30, {ok, {queue_spec(), valve_spec(), [meter_spec()]}}},
                {1, ignore},
                {1, bad}]).
 
@@ -264,8 +264,8 @@ start_link(Init) ->
             Other
     end.
 
-update_spec({ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self, Arg}}}}) ->
-    {ok, {AskSpec, BidSpec, {sbetter_statem_meter, {self(), Arg}}}};
+update_spec({ok, {AskSpec, BidSpec, [{sbetter_statem_meter, {self, Arg}}]}}) ->
+    {ok, {AskSpec, BidSpec, [{sbetter_statem_meter, {self(), Arg}}]}};
 update_spec(Other) ->
     Other.
 
@@ -279,7 +279,7 @@ start_link_pre(#state{sregulator=Regulator}, _) ->
 start_link_next(State, Value,
                 [{ok, {{QMod, {QOut, QDrops}},
                        {VMod, [Open | VState] = VOpens},
-                       {MeterMod, _}}}]) ->
+                       [{MeterMod, _}]}}]) ->
     Regulator = {call, erlang, element, [2, Value]},
     State#state{sregulator=Regulator, queue_mod=QMod, queue_out=QOut,
                 queue_drops=QDrops, queue_state=QDrops, valve_mod=VMod,
@@ -494,7 +494,7 @@ change_config_next(State, _, [_, ignore]) ->
     valve_next(State, fun queue_next/1);
 change_config_next(State, _, [_, bad]) ->
     valve_next(State, fun queue_next/1);
-change_config_next(State, _, [_, {ok, {QSpec, VSpec, {MeterMod, _}}}]) ->
+change_config_next(State, _, [_, {ok, {QSpec, VSpec, [{MeterMod, _}]}}]) ->
     NState = queue_change_next(QSpec, State#state{meter_mod=MeterMod}),
     valve_change_next(VSpec, NState).
 
@@ -503,7 +503,7 @@ change_config_post(State, [_, ignore], ok) ->
 change_config_post(State, [_, bad], {error, {bad_return_value, bad}}) ->
     valve_post(State, fun queue_post/1);
 change_config_post(State,
-                   [_, {ok, {QSpec, VSpec, {MeterMod, _}}}], ok) ->
+                   [_, {ok, {QSpec, VSpec, [{MeterMod, _}]}}], ok) ->
     NState = State#state{meter_mod=MeterMod},
     queue_change_post(QSpec, NState) andalso
     valve_change_post(VSpec, queue_change_next(QSpec, NState));
@@ -686,14 +686,15 @@ resume_args(State) ->
 resume_pre(#state{sys=SysState}, _) ->
     SysState =:= suspended.
 
-resume_next(#state{change={ok, {QSpec, VSpec, {MeterMod, _}}}} = State, _, _) ->
+resume_next(#state{change={ok, {QSpec, VSpec, [{MeterMod, _}]}}} = State, _,
+            _) ->
     NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
     NState2 = queue_change_next(QSpec, NState),
     valve_change_next(VSpec, NState2);
 resume_next(State, _, _) ->
     valve_next(State#state{sys=running}, fun queue_next/1).
 
-resume_post(#state{change={ok, {QSpec, VSpec, {MeterMod, _}}}} = State, _,
+resume_post(#state{change={ok, {QSpec, VSpec, [{MeterMod, _}]}}} = State, _,
             _) ->
     NState = State#state{sys=running, change=undefined, meter_mod=MeterMod},
     queue_change_post(QSpec, NState) andalso

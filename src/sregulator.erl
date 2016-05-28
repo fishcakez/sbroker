@@ -34,14 +34,15 @@
 %% A regulator requires a callback module to be configured, in a similar way to
 %% a supervisor's children are specified. The callback modules implements one
 %% callback, `init/1', with single argument `Args'. `init/1' should return
-%% `{ok, {QueueSpec, ValveSpec, MeterSpec}}' or `ignore'. `QueueSpec' is the
+%% `{ok, {QueueSpec, ValveSpec, [MeterSpec]}}' or `ignore'. `QueueSpec' is the
 %% `sbroker_queue' specification, `ValveSpec' is the `sregulator_valve'
-%% specification and `MeterSpec' is the `sbroker_meter' specification. All three
-%% take the same format: `{Module, Args}', where `Module' is the callback module
-%% and `Args' the arguments term for the module. In the case of `ignore' the
-%% regulator is not started and `start_link' returns `ignore'. As the callback
-%% modules are defined in the `init/1' callback a regulator supports the
-%% `dynamic' modules supervisor child specification.
+%% specification and `MeterSpec' is a `sbroker_meter' specification. There can
+%% be any number of meters but a meter module can only be included once. All
+%% three take the same format: `{Module, Args}', where `Module' is the callback
+%% module and `Args' the arguments term for the module. In the case of `ignore'
+%% the regulator is not started and `start_link' returns `ignore'. As the
+%% callback modules are defined in the `init/1' callback a regulator supports
+%% the `dynamic' modules supervisor child specification.
 %%
 %%
 %% For example:
@@ -79,7 +80,7 @@
 %%   QueueSpec = {sbroker_codel_queue, {out, 50, 500, drop_r, 64}},
 %%   ValveSpec = {sregulator_open_valve, 30},
 %%   MeterSpec = {sbroker_alarm_meter, {50, 500, {?MODULE, overload}}},
-%%   {ok, {QueueSpec, ValveSpec, MeterSpec}}.
+%%   {ok, {QueueSpec, ValveSpec, [MeterSpec]}}.
 %% '''
 -module(sregulator).
 
@@ -139,7 +140,7 @@
 
 -callback init(Args :: any()) ->
     {ok, {QueueSpec :: handler_spec(), ValveSpec :: handler_spec(),
-          MeterSpec :: handler_spec()}} | ignore.
+          [MeterSpec :: handler_spec()]}} | ignore.
 
 -record(config, {mod :: module(),
                  args :: any(),
@@ -148,15 +149,14 @@
                  name :: name() | pid(),
                  time_mod :: module(),
                  queue_mod :: module(),
-                 valve_mod :: module(),
-                 meter_mod :: module()}).
+                 valve_mod :: module()}).
 
 -record(time, {now :: integer(),
                send :: integer(),
                next = infinity :: integer() | infinity,
                seq :: non_neg_integer(),
                read_after :: non_neg_integer() | infinity,
-               meter :: any()}).
+               meters :: [{module(), any()}]}).
 
 -dialyzer(no_return).
 
@@ -518,13 +518,14 @@ init_it(Starter, Parent, Name, Mod, Args, Opts) ->
     Dbg = sys:debug_options(DbgOpts),
     {TimeMod, ReadAfter} = time_options(Opts),
     try Mod:init(Args) of
-        {ok, {{QMod, QArgs}, {VMod, VArgs}, {MMod, MArgs}}} ->
+        {ok, {{QMod, QArgs}, {VMod, VArgs}, MeterArgs}} ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
                              name=Name, time_mod=TimeMod, queue_mod=QMod,
-                             valve_mod=VMod, meter_mod=MMod},
+                             valve_mod=VMod},
             Now = monotonic_time(Config),
-            Time = #time{now=Now, send=Now, read_after=ReadAfter},
-            init(Starter, Time, QArgs, VArgs, MArgs, Config);
+            Time = #time{now=Now, send=Now, read_after=ReadAfter, seq=0,
+                         meters=[]},
+            init(Starter, Time, QArgs, VArgs, MeterArgs, Config);
         ignore ->
             init_stop(Starter, Name, ignore, normal);
         Other ->
@@ -578,25 +579,26 @@ system_code_change({change, Change, Misc}, Mod, OldVsn, Extra) ->
     {ok, {change, Change, code_change(Misc, Mod, OldVsn, Extra)}}.
 
 %% @private
-system_get_state([_, NState, #time{meter=M}, Q, V, _,
-                  #config{queue_mod=QMod, valve_mod=VMod, meter_mod=MMod}]) ->
-    Callbacks = [{QMod, queue, Q},
-                 {VMod, valve, {NState, V}},
-                 {MMod, meter, M}],
+system_get_state([_, NState, #time{meters=Meters}, Q, V, _,
+                  #config{queue_mod=QMod, valve_mod=VMod}]) ->
+    Meters2 = [{MeterMod, meter, Meter} || {MeterMod, Meter} <- Meters],
+    Callbacks = [{QMod, queue, Q}, {VMod, valve, {NState, V}} | Meters2],
     {ok, Callbacks};
 system_get_state({change, _, Misc}) ->
     system_get_state(Misc).
 
 %% @private
 system_replace_state(Replace,
-                     [State, NState, #time{meter=M} = Time, Q, V, Last,
-                      #config{queue_mod=QMod, valve_mod=VMod,
-                              meter_mod=MMod} = Config]) ->
+                     [State, NState, #time{meters=Meters} = Time, Q, V, Last,
+                      #config{queue_mod=QMod, valve_mod=VMod} = Config]) ->
     {QMod, queue, NQ} = QRes = Replace({QMod, queue, Q}),
     {VMod, valve, {NState2, NV}} = VRes = Replace({VMod, valve, {NState, V}}),
-    {MMod, meter, NM} = MRes = Replace({MMod, meter, M}),
-    Result = [QRes, VRes, MRes],
-    {ok, Result, [State, NState2, Time#time{meter=NM}, NQ, NV, Last, Config]};
+    MetersRes = [{MeterMod, meter, _} = Replace({MeterMod, meter, Meter}) ||
+                 {MeterMod, Meter} <- Meters],
+    Result = [QRes, VRes, MetersRes],
+    NMeters = [{MeterMod, NMeter} || {MeterMod, meter, NMeter} <- MetersRes],
+    Misc = [State, NState2, Time#time{meters=NMeters}, NQ, NV, Last, Config],
+    {ok, Result, Misc};
 system_replace_state(Replace, {change, Change, Misc}) ->
     {ok, States, NMisc} = system_replace_state(Replace, Misc),
     {ok, States, {change, Change, NMisc}}.
@@ -609,11 +611,12 @@ system_terminate(Reason, Parent, Dbg, [NState, _, Time, Q, V, _, Config]) ->
 %% @private
 format_status(Opt,
               [PDict, SysState, Parent, _,
-               [_, NState, #time{now=Now, meter=M}, Q, V, _,
+               [_, NState, #time{now=Now, meters=Meters}, Q, V, _,
                 #config{name=Name, queue_mod=QMod, valve_mod=VMod,
-                        meter_mod=MMod, time_mod=TimeMod}]]) ->
+                        time_mod=TimeMod}]]) ->
     Header = gen:format_status_header("Status for sregulator", Name),
-    Handlers = [{QMod, queue, Q}, {VMod, valve, {NState, V}}, {MMod, meter, M}],
+    Meters2 = [{MeterMod, meter, Meter} || {MeterMod, Meter} <- Meters],
+    Handlers = [{QMod, queue, Q}, {VMod, valve, {NState, V}} | Meters2],
     Handlers2 = [{Mod, Id, format_status(Mod, Opt, PDict, Handler)} ||
                 {Mod, Id, Handler} <- Handlers],
     [{header, Header},
@@ -631,16 +634,23 @@ time_options(Opts) ->
     ReadAfter = proplists:get_value(read_time_after, Opts),
     {TimeMod, ReadAfter}.
 
-init(Starter, #time{now=Now} = Time, QArgs, VArgs, MArgs,
-     #config{queue_mod=QMod, valve_mod=VMod, meter_mod=MMod,
-             name=Name} = Config) ->
-    Inits = [{sbroker_queue, QMod, QArgs}, {sregulator_valve, VMod, VArgs},
-             {sbroker_meter, MMod, MArgs}],
-    case sbroker_handlers:init(Now, Inits, report_name(Config)) of
-        {ok, [{_, _, Q, QNext}, {_, _, {State, V}, VNext},
-              {_, _, M, MNext}]} ->
-            Next = min(QNext, VNext),
-            NTime = Time#time{meter=M, next=MNext},
+init(Starter, Time, QArgs, VArgs, MeterArgs,
+     #config{queue_mod=QMod, valve_mod=VMod, name=Name} = Config) ->
+    case check_meters(MeterArgs) of
+        ok ->
+            do_init(Starter, Time, QArgs, VArgs, MeterArgs, Config);
+        {error, Reason} ->
+            Return = {ok, {{QMod, QArgs}, {VMod, VArgs}, MeterArgs}},
+            init_stop(Starter, Name, {Reason, Return})
+    end.
+
+do_init(Starter, #time{now=Now} = Time, QArgs, VArgs, MeterArgs,
+     #config{queue_mod=QMod, valve_mod=VMod, name=Name} = Config) ->
+    Inits = [{sbroker_queue, QMod, QArgs}, {sregulator_valve, VMod, VArgs}],
+    case sbroker_handlers:init(Now, Inits, MeterArgs, report_name(Config)) of
+        {ok, [{_, _, Q, QNext}, {_, _, {State, V}, VNext}], {Meters, MNext}} ->
+            Next = min(min(QNext, VNext), MNext),
+            NTime = Time#time{meters=Meters},
             enter_loop(Starter, NTime, State, Q, V, Now, Next, Config);
         {stop, Reason} ->
             init_stop(Starter, Name, Reason)
@@ -683,22 +693,19 @@ update_time(_, #time{seq=Seq} = Time, _, _, _, __) ->
     Time#time{seq=Seq+1}.
 
 update_meter(Now, State,
-             #time{now=Prev, send=Send, seq=Seq, meter=Meter} = Time, Q, V,
-             Last, #config{meter_mod=MeterMod} = Config) ->
+             #time{now=Prev, send=Send, seq=Seq, meters=Meters} = Time, Q, V,
+             Last, Config) ->
     ProcessDelay = (Now - Prev) div Seq,
     %% Remove one ProcessDelay to estimate time last message was received.
     %% NB: This gives correct QueueDelay of 0 when single message was received.
     QueueDelay = (Now - ProcessDelay) - Send,
     RelativeTime = approx_relative(State, Send, Last),
-    try MeterMod:handle_update(QueueDelay, ProcessDelay, RelativeTime, Now,
-                               Meter) of
-        {NMeter, Next} ->
-            Time#time{now=Now, seq=0, meter=NMeter, next=Next};
-        Other ->
-            meter_return(Other, State, Time, Q, V, Config)
-    catch
-        Class:Reason ->
-            meter_exception(Class, Reason, State, Time, Q, V, Config)
+    case sbroker_handlers:meters_update(QueueDelay, ProcessDelay, RelativeTime,
+                                        Now, Meters, report_name(Config)) of
+        {ok, NMeters, Next} ->
+            Time#time{now=Now, seq=0, meters=NMeters, next=Next};
+        {stop, ExitReason} ->
+            meter_stop(ExitReason, State, Q, V, Config)
     end.
 
 approx_relative(open, AskSend, Open) ->
@@ -922,10 +929,10 @@ common({size, From, _}, State, Time, Q, V, Last, _,
         Class:Reason ->
             queue_exception(Class, Reason, State, Time, Q, V, Config)
     end;
-common({_, From, get_modules}, State, Time, Q, V, Last, _,
-       #config{mod=Mod, queue_mod=QMod, valve_mod=VMod,
-               meter_mod=MeterMod} = Config) ->
-    gen:reply(From, lists:usort([Mod, QMod, VMod, MeterMod])),
+common({_, From, get_modules}, State, #time{meters=Meters} = Time, Q, V, Last,
+       _, #config{mod=Mod, queue_mod=QMod, valve_mod=VMod} = Config) ->
+    MeterMods = [MeterMod || {MeterMod, _} <- Meters],
+    gen:reply(From, lists:usort([Mod, QMod, VMod | MeterMods])),
     timeout(State, Time, Q, V, Last, Config);
 common(timeout, State, Time, Q, V, Last, _, Config) ->
     timeout(State, Time, Q, V, Last, Config);
@@ -969,18 +976,17 @@ format_status(Mod, Opt, PDict, State) ->
     end.
 
 code_change([State, NState,
-             #time{now=Now, meter=Meter, next=MNext} = Time, Q, V, Last,
-             #config{queue_mod=QMod, valve_mod=VMod,
-                     meter_mod=MeterMod} = Config], Mod, OldVsn, Extra) ->
+             #time{now=Now, meters=Meters} = Time, Q, V, Last,
+             #config{queue_mod=QMod, valve_mod=VMod} = Config], Mod, OldVsn,
+            Extra) ->
     Callbacks = [{sbroker_queue, QMod, Q, infinity},
-                 {sregulator_valve, VMod, {NState, V}, infinity},
-                 {sbroker_meter, MeterMod, Meter, MNext}],
-    NCallbacks = sbroker_handlers:code_change(Now, Callbacks, Mod, OldVsn,
-                                              Extra),
-    [{sbroker_queue, QMod, NQ, _},
-     {sregulator_valve, VMod, {NState2, NV}, _},
-     {sbroker_meter, MeterMod, NMeter, NMNext}] = NCallbacks,
-    NTime = Time#time{meter=NMeter, next=NMNext},
+                 {sregulator_valve, VMod, {NState, V}, infinity}],
+    NCallbacks = sbroker_handlers:code_change(Now, Callbacks, Meters, Mod,
+                                              OldVsn, Extra),
+    {[{sbroker_queue, QMod, NQ, _},
+      {sregulator_valve, VMod, {NState2, NV}, _}],
+     {NMeters, MNext}} = NCallbacks,
+    NTime = Time#time{meters=NMeters, next=MNext},
     [State, NState2, NTime, NQ, NV, Last, Config].
 
 config_change(From, State, Time, Q, V, Last, Config) ->
@@ -998,8 +1004,9 @@ config_change(From, State, Time, Q, V, Last, Config) ->
 
 config_change(#config{mod=Mod, args=Args}) ->
     try Mod:init(Args) of
-        {ok, {{QMod, QArgs}, {VMod, VArgs}, {MMod, MArgs}}} ->
-            {ok, {QMod, QArgs, VMod, VArgs, MMod, MArgs}};
+        {ok, {{QMod, QArgs}, {VMod, VArgs}, MeterArgs}}
+          when is_list(MeterArgs) ->
+            config_meters(QMod, QArgs, VMod, VArgs, MeterArgs);
         ignore ->
             ignore;
         Other ->
@@ -1009,19 +1016,41 @@ config_change(#config{mod=Mod, args=Args}) ->
             {error, {Class, Reason, erlang:get_stacktrace()}}
     end.
 
-change(State, {NQMod, QArgs, NVMod, VArgs, NMMod, MArgs},
-       #time{now=Now, meter=M} = Time, Q, V, Last,
-       #config{queue_mod=QMod, valve_mod=VMod, meter_mod=MMod} = Config) ->
+config_meters(QMod, QArgs, VMod, VArgs, MeterArgs) ->
+    case check_meters(MeterArgs) of
+        ok ->
+            {ok, {QMod, QArgs, VMod, VArgs, MeterArgs}};
+        {error, Reason} ->
+            {error, {Reason, MeterArgs}}
+    end.
+
+check_meters(Meters) ->
+    check_meters(Meters, #{}).
+
+check_meters([{Meter, _} | Rest], Acc) ->
+    case maps:is_key(Meter, Acc) of
+        true ->
+            {error, {duplicate_meter, Meter}};
+        false ->
+            check_meters(Rest, maps:put(Meter, meter, Acc))
+    end;
+check_meters([], _) ->
+    ok;
+check_meters(_, _) ->
+    {error, bad_return_value}.
+
+change(State, {NQMod, QArgs, NVMod, VArgs, MeterArgs},
+       #time{now=Now, meters=Meters} = Time, Q, V, Last,
+       #config{queue_mod=QMod, valve_mod=VMod} = Config) ->
     Inits = [{sbroker_queue, QMod, Q, NQMod, QArgs},
-             {sregulator_valve, VMod, {State, V}, NVMod, VArgs},
-             {sbroker_meter, MMod, M, NMMod, MArgs}],
-    case sbroker_handlers:config_change(Now, Inits, report_name(Config)) of
-        {ok, [{_, _, NQ, QNext}, {_, _, {NState, NV}, VNext},
-              {_, _, NM, MNext}]} ->
+             {sregulator_valve, VMod, {State, V}, NVMod, VArgs}],
+    Name = report_name(Config),
+    case sbroker_handlers:config_change(Now, Inits, Meters, MeterArgs, Name) of
+        {ok, [{_, _, NQ, QNext}, {_, _, {NState, NV}, VNext}],
+         {NMeters, MNext}} ->
             Next = min(QNext, VNext),
-            NTime = Time#time{meter=NM, next=MNext},
-            NConfig = Config#config{queue_mod=NQMod, valve_mod=NVMod,
-                                    meter_mod=NMMod},
+            NTime = Time#time{meters=NMeters, next=MNext},
+            NConfig = Config#config{queue_mod=NQMod, valve_mod=NVMod},
             next(State, NState, NTime, NQ, NV, Last, Next, NConfig);
         {stop, Reason} ->
             exit(Reason)
@@ -1090,17 +1119,14 @@ info_valve(Msg, State, #time{now=Now} = Time, Q, V, Last, QNext,
             valve_exception(Class, Reason, State, Time, Q, V, Config)
     end.
 
-info_meter(Msg, State, NState, #time{now=Now, meter=M} = Time, Q, V, Last, Next,
-           #config{meter_mod=MMod} = Config) ->
-    try MMod:handle_info(Msg, Now, M) of
-        {NM, MNext} ->
-            NTime = Time#time{meter=NM, next=MNext},
+info_meter(Msg, State, NState, #time{now=Now, meters=Meters} = Time, Q, V, Last,
+           Next, Config) ->
+    case sbroker_handlers:meters_info(Msg, Now, Meters, report_name(Config)) of
+        {ok, NMeters, MNext} ->
+            NTime = Time#time{meters=NMeters, next=MNext},
             next(State, NState, NTime, Q, V, Last, Next, Config);
-        Other ->
-            meter_return(Other, NState, Time, Q, V, Config)
-    catch
-        Class:Reason ->
-            meter_exception(Class, NState, Reason, Time, Q, V, Config)
+        {stop, Reason} ->
+            meter_stop(Reason, NState, Q, V, Config)
     end.
 
 timeout(open, open, Time, Q, V, Open, Next, Config) ->
@@ -1222,33 +1248,22 @@ valve_exception(Class, Reason, State, Time, Q, V,
                  {sregulator_valve, VMod, Reason2, {State, V}}],
     terminate(Reason2, Time, Callbacks, Config).
 
-meter_return(Return, State, #time{meter=M}, Q, V,
-             #config{queue_mod=QMod, valve_mod=VMod,
-                     meter_mod=MMod} = Config) ->
-    Reason = {bad_return_value, Return},
+meter_stop(Reason, State, Q, V,
+           #config{queue_mod=QMod, valve_mod=VMod} = Config) ->
     Callbacks = [{sbroker_queue, QMod, stop, Q},
-                 {sregulator_valve, VMod, stop, {V, State}},
-                 {sbroker_meter, MMod, Reason, M}],
+                 {sregulator_valve, VMod, stop, {State, V}}],
     terminate(Reason, Callbacks, Config).
-
-meter_exception(Class, Reason, State, #time{meter=M}, Q, V,
-                #config{queue_mod=QMod, valve_mod=VMod,
-                        meter_mod=MMod} = Config) ->
-    Reason2 = {Class, Reason, erlang:get_stacktrace()},
-    Callbacks = [{sbroker_queue, QMod, stop, Q},
-                 {sregulator_valve, VMod, stop, {State, V}},
-                 {sbroker_meter, MMod, Reason2, M}],
-    terminate(Reason2, Callbacks, Config).
 
 terminate(Reason, Callbacks, Config) ->
     Name = report_name(Config),
-    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, Name),
+    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, [], Name),
     exit(NReason).
 
-terminate(Reason, #time{meter=Meter}, Callbacks,
-          #config{meter_mod=MeterMod} = Config) ->
-    NCallbacks = Callbacks ++ [{sbroker_meter, MeterMod, stop, Meter}],
-    terminate(Reason, NCallbacks, Config).
+terminate(Reason, #time{meters=Meters}, Callbacks, Config) ->
+    Name = report_name(Config),
+    {stop, Reason} = sbroker_handlers:terminate(Reason, Callbacks, Meters,
+                                                Name),
+    exit(Reason).
 
 terminate(Reason, State, Time, Q, V,
           #config{queue_mod=QMod, valve_mod=VMod} = Config) ->

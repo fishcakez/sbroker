@@ -42,13 +42,14 @@
 %%
 %% A broker requires a callback module. The callback modules implements one
 %% callback, `init/1', with single argument `Args'. `init/1' should return
-%% `{ok, {AskQueueSpec, AskRQueueSpec, MeterSpec})' or `ignore'. `AskQueueSpec'
-%% is the queue specification for the `ask' queue, `AskRQueueSpec' is the queue
-%% specification for the `ask_r' queue and `MeterSpec' is the meter
-%% specification. In the case of `ignore' the broker is not started and
-%% `start_link' returns `ignore'. As the callback modules are defined in the
-%% `init/1' callback a broker supports the `dynamic' modules supervisor child
-%% specification.
+%% `{ok, {AskQueueSpec, AskRQueueSpec, [MeterSpec]})' or `ignore'.
+%% `AskQueueSpec' is the queue specification for the `ask' queue,
+%% `AskRQueueSpec' is the queue specification for the `ask_r' queue and
+%% `MeterSpec' is a meter specification. There can any number of meters but a
+%% meter module can only be included once. In the case of `ignore' the broker is
+%% not started and `start_link' returns `ignore'. As the callback modules are
+%% defined in the `init/1' callback a broker supports the `dynamic' modules
+%% supervisor child specification.
 %%
 %% Both queue and meter specifcations take the form: `{Module, Args}'. `Module'
 %% is the callback module and `Args' are its arguments.
@@ -78,7 +79,7 @@
 %%     AskQueueSpec = {sbroker_codel_queue, {out, 5, 100, drop_r, 0, 64}},
 %%     AskRQueueSpec = {sbroker_timeout_queue, {out_r, 5000, drop, 0, infinity}},
 %%     MeterSpec = {sbroker_alarm_meter, {50, 500, {?MODULE, overload}}},
-%%     {ok, {AskQueueSpec, AskRQueueSpec, MeterSpec}}.
+%%     {ok, {AskQueueSpec, AskRQueueSpec, [MeterSpec]}}.
 %% '''
 -module(sbroker).
 
@@ -147,7 +148,7 @@
 
 -callback init(Args :: any()) ->
     {ok, {AskQueueSpec :: handler_spec(), AskRQueueSpec :: handler_spec(),
-          MeterSpec :: handler_spec()}} | ignore.
+          [MeterSpec :: handler_spec()]}} | ignore.
 
 -record(config, {mod :: module(),
                  args :: any(),
@@ -156,15 +157,14 @@
                  name :: name() | pid(),
                  time_mod :: module(),
                  ask_mod :: module(),
-                 bid_mod :: module(),
-                 meter_mod :: module()}).
+                 bid_mod :: module()}).
 
 -record(time, {now :: integer(),
                send :: integer(),
                next = infinity :: integer() | infinity,
                seq :: non_neg_integer(),
                read_after :: non_neg_integer() | infinity,
-               meter :: any()}).
+               meters :: [{module(), any()}]}).
 
 -dialyzer(no_return).
 
@@ -634,12 +634,14 @@ init_it(Starter, Parent, Name, Mod, Args, Opts) ->
     Dbg = sys:debug_options(DbgOpts),
     {TimeMod, ReadAfter} = time_options(Opts),
     try Mod:init(Args) of
-        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, {MeterMod, MeterArgs}}} ->
+        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, MeterArgs}}
+          when is_list(MeterArgs) ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
                              name=Name, time_mod=TimeMod, ask_mod=AskMod,
-                             bid_mod=BidMod, meter_mod=MeterMod},
+                             bid_mod=BidMod},
             Now = monotonic_time(Config),
-            Time = #time{now=Now, send=Now, read_after=ReadAfter},
+            Time = #time{now=Now, send=Now, read_after=ReadAfter, seq=0,
+                         meters=[]},
             init(Starter, Time, AskArgs, BidArgs, MeterArgs, Config);
         ignore ->
             init_stop(Starter, Name, ignore, normal);
@@ -694,26 +696,25 @@ system_code_change({change, Change, Misc}, Mod, OldVsn, Extra) ->
     {ok, {change, Change, code_change(Misc, Mod, OldVsn, Extra)}}.
 
 %% @private
-system_get_state([_, #time{meter=Meter}, Asks, Bids, _,
-                  #config{ask_mod=AskMod, bid_mod=BidMod,
-                          meter_mod=MeterMod}]) ->
-    Callbacks = [{AskMod, ask, Asks},
-                 {BidMod, ask_r, Bids},
-                 {MeterMod, meter, Meter}],
+system_get_state([_, #time{meters=Meters}, Asks, Bids, _,
+                  #config{ask_mod=AskMod, bid_mod=BidMod}]) ->
+    Meters2 = [{MeterMod, meter, Meter} || {MeterMod, Meter} <- Meters],
+    Callbacks = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids} | Meters2],
     {ok, Callbacks};
 system_get_state({change, _, Misc}) ->
     system_get_state(Misc).
 
 %% @private
 system_replace_state(Replace,
-                     [State, #time{meter=Meter} = Time, Asks, Bids, Last,
-                      #config{ask_mod=AskMod, bid_mod=BidMod,
-                              meter_mod=MeterMod} = Config]) ->
+                     [State, #time{meters=Meters} = Time, Asks, Bids, Last,
+                      #config{ask_mod=AskMod, bid_mod=BidMod} = Config]) ->
     {AskMod, ask, NAsks} = AskRes = Replace({AskMod, ask, Asks}),
     {BidMod, ask_r, NBids} = BidRes = Replace({BidMod, ask_r, Bids}),
-    {MeterMod, meter, NMeter} = MeterRes = Replace({MeterMod, meter, Meter}),
-    Result = [AskRes, BidRes, MeterRes],
-    Misc = [State, Time#time{meter=NMeter}, NAsks, NBids, Last, Config],
+    MetersRes = [{MeterMod, meter, _} = Replace({MeterMod, meter, Meter}) ||
+                 {MeterMod, Meter} <- Meters],
+    Result = [AskRes, BidRes, MetersRes],
+    NMeters = [{MeterMod, NMeter} || {MeterMod, meter, NMeter} <- MetersRes],
+    Misc = [State, Time#time{meters=NMeters}, NAsks, NBids, Last, Config],
     {ok, Result, Misc};
 system_replace_state(Replace, {change, Change, Misc}) ->
     {ok, States, NMisc} = system_replace_state(Replace, Misc),
@@ -727,12 +728,12 @@ system_terminate(Reason, Parent, Dbg, [_, Time, Asks, Bids, _, Config]) ->
 %% @private
 format_status(Opt,
               [PDict, SysState, Parent, _,
-               [State, #time{now=Now, meter=Meter}, Asks, Bids, _,
+               [State, #time{now=Now, meters=Meters}, Asks, Bids, _,
                 #config{name=Name, ask_mod=AskMod, bid_mod=BidMod,
-                        meter_mod=MeterMod, time_mod=TimeMod}]]) ->
+                        time_mod=TimeMod}]]) ->
     Header = gen:format_status_header("Status for sbroker", Name),
-    Handlers = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids},
-                {MeterMod, meter, Meter}],
+    Meters2 = [{MeterMod, meter, Meter} || {MeterMod, Meter} <- Meters],
+    Handlers = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids} | Meters2],
     Handlers2 = [{Mod, Id, format_status(Mod, Opt, PDict, Handler)} ||
                 {Mod, Id, Handler} <- Handlers],
     [{header, Header},
@@ -751,15 +752,24 @@ time_options(Opts) ->
     ReadAfter = proplists:get_value(read_time_after, Opts),
     {TimeMod, ReadAfter}.
 
-init(Starter, #time{now=Now} = Time, AskArgs, BidArgs, MeterArgs,
-     #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod,
-             name=Name} = Config) ->
-    Inits = [{sbroker_queue, AskMod, AskArgs}, {sbroker_queue, BidMod, BidArgs},
-             {sbroker_meter, MeterMod, MeterArgs}],
-    case sbroker_handlers:init(Now, Inits, report_name(Config)) of
-        {ok, [{_, _, Asks, AskNext}, {_, _, Bids, _}, {_, _, Meter, MNext}]} ->
-            Next = min(AskNext, MNext),
-            NTime = Time#time{meter=Meter},
+init(Starter, Time, AskArgs, BidArgs, MeterArgs,
+     #config{ask_mod=AskMod, bid_mod=BidMod, name=Name} = Config) ->
+    case check_meters(MeterArgs) of
+        ok ->
+            do_init(Starter, Time, AskArgs, BidArgs, MeterArgs, Config);
+        {error, Reason} ->
+            Return = {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, MeterArgs}},
+            init_stop(Starter, Name, {Reason, Return})
+    end.
+
+do_init(Starter, #time{now=Now} = Time, AskArgs, BidArgs, MeterArgs,
+     #config{ask_mod=AskMod, bid_mod=BidMod, name=Name} = Config) ->
+    Inits = [{sbroker_queue, AskMod, AskArgs},
+             {sbroker_queue, BidMod, BidArgs}],
+    case sbroker_handlers:init(Now, Inits, MeterArgs, report_name(Config)) of
+        {ok, [{_, _, Asks, _}, {_, _, Bids, BidNext}], {Meters, MNext}} ->
+            Next = min(BidNext, MNext),
+            NTime = Time#time{meters=Meters},
             enter_loop(Starter, NTime, Asks, Bids, Now, Next, Config);
         {stop, Reason} ->
             init_stop(Starter, Name, Reason)
@@ -803,22 +813,19 @@ update_time(_, #time{seq=Seq} = Time, _, _, _, _) ->
     Time#time{seq=Seq+1}.
 
 update_meter(Now, State,
-             #time{now=Prev, send=Send, seq=Seq, meter=Meter} = Time, Asks,
-             Bids, Last, #config{meter_mod=MeterMod} = Config) ->
+             #time{now=Prev, send=Send, seq=Seq, meters=Meters} = Time, Asks,
+             Bids, Last, Config) ->
     ProcessDelay = (Now - Prev) div Seq,
     %% Remove one ProcessDelay to estimate time last message was received.
     %% NB: This gives correct QueueDelay of 0 when single message was received.
     QueueDelay = (Now - ProcessDelay) - Send,
     RelativeTime = approx_relative(State, Send, Last),
-    try MeterMod:handle_update(QueueDelay, ProcessDelay, RelativeTime, Now,
-                               Meter) of
-        {NMeter, Next} ->
-            Time#time{now=Now, seq=0, meter=NMeter, next=Next};
-        Other ->
-            meter_return(Other, Time, Asks, Bids, Config)
-    catch
-        Class:Reason ->
-            meter_exception(Class, Reason, Time, Asks, Bids, Config)
+    case sbroker_handlers:meters_update(QueueDelay, ProcessDelay, RelativeTime,
+                                        Now, Meters, report_name(Config)) of
+        {ok, NMeters, Next} ->
+            Time#time{now=Now, seq=0, meters=NMeters, next=Next};
+        {stop, ExitReason} ->
+            meter_stop(ExitReason, Asks, Bids, Config)
     end.
 
 approx_relative(asking, BidSend, AskSend) ->
@@ -826,23 +833,11 @@ approx_relative(asking, BidSend, AskSend) ->
 approx_relative(bidding, AskSend, BidSend) ->
     BidSend - AskSend.
 
-meter_return(Return, #time{meter=Meter}, Asks, Bids,
-             #config{ask_mod=AskMod, bid_mod=BidMod,
-                     meter_mod=MeterMod} = Config) ->
-    Reason = {bad_return_value, Return},
+meter_stop(Reason, Asks, Bids,
+           #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
     Callbacks = [{sbroker_queue, AskMod, stop, Asks},
-                 {sbroker_queue, BidMod, stop, Bids},
-                 {sbroker_meter, MeterMod, Reason, Meter}],
+                 {sbroker_queue, BidMod, stop, Bids}],
     terminate(Reason, Callbacks, Config).
-
-meter_exception(Class, Reason, #time{meter=Meter}, Asks, Bids,
-                #config{ask_mod=AskMod, bid_mod=BidMod,
-                        meter_mod=MeterMod} = Config) ->
-    Reason2 = {Class, Reason, erlang:get_stacktrace()},
-    Callbacks = [{sbroker_queue, AskMod, stop, Asks},
-                 {sbroker_queue, BidMod, stop, Bids},
-                 {sbroker_meter, MeterMod, Reason2, Meter}],
-    terminate(Reason2, Callbacks, Config).
 
 idle(State, #time{seq=0} = Time, Asks, Bids, Last, Next, Config) ->
     Timeout = idle_timeout(Time, Next, Config),
@@ -1010,10 +1005,10 @@ common({len_bid, From, _}, State, Time, Asks, Bids, Last, _,
         Class:Reason ->
             bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end;
-common({_, From, get_modules}, State, Time, Asks, Bids, Last, _,
-       #config{mod=Mod, ask_mod=AskMod, bid_mod=BidMod,
-               meter_mod=MeterMod} = Config) ->
-    gen:reply(From, lists:usort([Mod, AskMod, BidMod, MeterMod])),
+common({_, From, get_modules}, State, #time{meters=Meters} = Time, Asks, Bids,
+       Last, _, #config{mod=Mod, ask_mod=AskMod, bid_mod=BidMod} = Config) ->
+    MeterMods = [MeterMod || {MeterMod, _} <- Meters],
+    gen:reply(From, lists:usort([Mod, AskMod, BidMod | MeterMods])),
     timeout(State, Time, Asks, Bids, Last, Config);
 common(timeout, State, Time, Asks, Bids, Last, _, Config) ->
     timeout(State, Time, Asks, Bids, Last, Config);
@@ -1070,17 +1065,14 @@ info_bids(Msg, State, #time{now=Now} = Time, Asks, AskNext, Bids, Last,
             bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
-info_meter(Msg, State, #time{now=Now, meter=Meter} = Time, Asks, AskNext, Bids,
-           BidNext, Last, #config{meter_mod=MeterMod} = Config) ->
-    try MeterMod:handle_info(Msg, Now, Meter) of
-        {Meter, MeterNext} ->
-            NTime = Time#time{meter=Meter, next=MeterNext},
+info_meter(Msg, State, #time{now=Now, meters=Meters} = Time, Asks, AskNext,
+           Bids, BidNext, Last, Config) ->
+    case sbroker_handlers:meters_info(Msg, Now, Meters, report_name(Config)) of
+        {ok, Meters, MeterNext} ->
+            NTime = Time#time{meters=Meters, next=MeterNext},
             next(State, NTime, Asks, AskNext, Bids, BidNext, Last, Config);
-        Other ->
-            meter_return(Other, Time, Asks, Bids, Config)
-    catch
-        Class:Reason ->
-            meter_exception(Class, Reason, Time, Asks, Bids, Config)
+        {stop, Reason} ->
+            meter_stop(Reason, Asks, Bids, Config)
     end.
 
 asking_return(Return, Time, Asks, Bids,
@@ -1235,8 +1227,9 @@ config_change(From, State, Time, Asks, Bids, Last, Config) ->
 
 config_change(#config{mod=Mod, args=Args}) ->
     try Mod:init(Args) of
-        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, {Meter, MeterArgs}}} ->
-            {ok, {AskMod, AskArgs, BidMod, BidArgs, Meter, MeterArgs}};
+        {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, MeterArgs}}
+          when is_list(MeterArgs) ->
+            config_meters(AskMod, AskArgs, BidMod, BidArgs, MeterArgs);
         ignore ->
             ignore;
         Other ->
@@ -1246,31 +1239,51 @@ config_change(#config{mod=Mod, args=Args}) ->
             {error, {Class, Reason, erlang:get_stacktrace()}}
     end.
 
-code_change([State, #time{now=Now, meter=Meter, next=MNext} = Time, Asks, Bids,
-             Last, #config{ask_mod=AskMod, bid_mod=BidMod,
-                     meter_mod=MeterMod} = Config], Mod, OldVsn, Extra) ->
-    Callbacks = [{sbroker_queue, AskMod, Asks, infinity},
-                 {sbroker_queue, BidMod, Bids, infinity},
-                 {sbroker_meter, MeterMod, Meter, MNext}],
-    NCallbacks = sbroker_handlers:code_change(Now, Callbacks, Mod, OldVsn,
-                                              Extra),
-    [{sbroker_queue, AskMod, NAsks, _},
-     {sbroker_queue, BidMod, NBids, _},
-     {sbroker_meter, MeterMod, NMeter, NMNext}] = NCallbacks,
-    [State, Time#time{meter=NMeter, next=NMNext}, NAsks, NBids, Last, Config].
+config_meters(AskMod, AskArgs, BidMod, BidArgs, MeterArgs) ->
+    case check_meters(MeterArgs) of
+        ok ->
+            {ok, {AskMod, AskArgs, BidMod, BidArgs, MeterArgs}};
+        {error, Reason} ->
+            {error, {Reason, MeterArgs}}
+    end.
 
-change(State, {NAskMod, AskArgs, NBidMod, BidArgs, NMeterMod, MeterArgs},
-       #time{now=Now, meter=Meter} = Time, Asks, Bids, Last,
-       #config{ask_mod=AskMod, bid_mod=BidMod, meter_mod=MeterMod} = Config) ->
+check_meters(Meters) ->
+    check_meters(Meters, #{}).
+
+check_meters([{Meter, _} | Rest], Acc) ->
+    case maps:is_key(Meter, Acc) of
+        true ->
+            {error, {duplicate_meter, Meter}};
+        false ->
+            check_meters(Rest, maps:put(Meter, meter, Acc))
+    end;
+check_meters([], _) ->
+    ok;
+check_meters(_, _) ->
+    {error, bad_return_value}.
+
+code_change([State, #time{now=Now, meters=Meters} = Time, Asks, Bids,
+             Last, #config{ask_mod=AskMod, bid_mod=BidMod} = Config], Mod,
+            OldVsn, Extra) ->
+    Callbacks = [{sbroker_queue, AskMod, Asks, infinity},
+                 {sbroker_queue, BidMod, Bids, infinity}],
+    NCallbacks = sbroker_handlers:code_change(Now, Callbacks, Meters, Mod,
+                                              OldVsn, Extra),
+    {[{sbroker_queue, AskMod, NAsks, _},
+     {sbroker_queue, BidMod, NBids, _}], {NMeters, MNext}} = NCallbacks,
+    [State, Time#time{meters=NMeters, next=MNext}, NAsks, NBids, Last, Config].
+
+change(State, {NAskMod, AskArgs, NBidMod, BidArgs, MeterArgs},
+       #time{now=Now, meters=Meters} = Time, Asks, Bids, Last,
+       #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
     Inits = [{sbroker_queue, AskMod, Asks, NAskMod, AskArgs},
-             {sbroker_queue, BidMod, Bids, NBidMod, BidArgs},
-             {sbroker_meter, MeterMod, Meter, NMeterMod, MeterArgs}],
-    case sbroker_handlers:config_change(Now, Inits, report_name(Config)) of
-        {ok, [{_, _, NAsks, AskNext}, {_, _, NBids, BidNext},
-              {_, _, NMeter, MeterNext}]} ->
-            NTime = Time#time{meter=NMeter, next=MeterNext},
-            NConfig = Config#config{ask_mod=NAskMod, bid_mod=NBidMod,
-                                    meter_mod=NMeterMod},
+             {sbroker_queue, BidMod, Bids, NBidMod, BidArgs}],
+    Name = report_name(Config),
+    case sbroker_handlers:config_change(Now, Inits, Meters, MeterArgs, Name) of
+        {ok, [{_, _, NAsks, AskNext}, {_, _, NBids, BidNext}],
+         {NMeters, MeterNext}} ->
+            NTime = Time#time{meters=NMeters, next=MeterNext},
+            NConfig = Config#config{ask_mod=NAskMod, bid_mod=NBidMod},
             next(State, NTime, NAsks, AskNext, NBids, BidNext, Last, NConfig);
         {stop, Reason} ->
             exit(Reason)
@@ -1313,13 +1326,14 @@ format_state(bidding) ->
 
 terminate(Reason, Callbacks, Config) ->
     Name = report_name(Config),
-    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, Name),
+    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, [], Name),
     exit(NReason).
 
-terminate(Reason, #time{meter=Meter}, Callbacks,
-          #config{meter_mod=MeterMod} = Config) ->
-    NCallbacks = Callbacks ++ [{sbroker_meter, MeterMod, stop, Meter}],
-    terminate(Reason, NCallbacks, Config).
+terminate(Reason, #time{meters=Meters}, Callbacks, Config) ->
+    Name = report_name(Config),
+    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, Meters,
+                                                 Name),
+    exit(NReason).
 
 terminate(Reason, Time, Asks, Bids,
           #config{ask_mod=AskMod, bid_mod=BidMod} = Config) ->
