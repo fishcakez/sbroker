@@ -692,6 +692,8 @@ update_time(State, #time{seq=Seq, read_after=Seq} = Time, Q, V, Last, Config) ->
 update_time(_, #time{seq=Seq} = Time, _, _, _, __) ->
     Time#time{seq=Seq+1}.
 
+update_meter(Now, _, #time{meters=[]} = Time, _, _, _, _) ->
+    Time#time{now=Now, seq=0};
 update_meter(Now, State,
              #time{now=Prev, send=Send, seq=Seq, meters=Meters} = Time, Q, V,
              Last, Config) ->
@@ -1119,6 +1121,9 @@ info_valve(Msg, State, #time{now=Now} = Time, Q, V, Last, QNext,
             valve_exception(Class, Reason, State, Time, Q, V, Config)
     end.
 
+info_meter(_, State, NState, #time{meters=[]} = Time, Q, V, Last, Next,
+            Config) ->
+    next(State, NState, Time, Q, V, Last, Next, Config);
 info_meter(Msg, State, NState, #time{now=Now, meters=Meters} = Time, Q, V, Last,
            Next, Config) ->
     case sbroker_handlers:meters_info(Msg, Now, Meters, report_name(Config)) of

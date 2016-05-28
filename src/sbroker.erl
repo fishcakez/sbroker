@@ -812,6 +812,8 @@ update_time(State, #time{seq=Seq, read_after=Seq} = Time, Asks, Bids, Last,
 update_time(_, #time{seq=Seq} = Time, _, _, _, _) ->
     Time#time{seq=Seq+1}.
 
+update_meter(Now, _, #time{meters=[]} = Time, _, _, _, _) ->
+    Time#time{now=Now, seq=0};
 update_meter(Now, State,
              #time{now=Prev, send=Send, seq=Seq, meters=Meters} = Time, Asks,
              Bids, Last, Config) ->
@@ -1065,6 +1067,10 @@ info_bids(Msg, State, #time{now=Now} = Time, Asks, AskNext, Bids, Last,
             bidding_exception(Class, Reason, Time, Asks, Bids, Config)
     end.
 
+
+info_meter(_, State, #time{meters=[]} = Time, Asks, AskNext, Bids, BidNext,
+           Last, Config) ->
+    next(State, Time, Asks, AskNext, Bids, BidNext, Last, Config);
 info_meter(Msg, State, #time{now=Now, meters=Meters} = Time, Asks, AskNext,
            Bids, BidNext, Last, Config) ->
     case sbroker_handlers:meters_info(Msg, Now, Meters, report_name(Config)) of
