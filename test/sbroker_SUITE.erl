@@ -184,7 +184,7 @@ statem(Config) ->
         {error, Reason} ->
             error(Reason);
         CounterExample ->
-            ct:log("Counter Example:~n~p", [CounterExample]),
+            ct:pal("Counter Example:~n~p", [CounterExample]),
             error(counterexample)
     end.
 

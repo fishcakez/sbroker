@@ -912,7 +912,7 @@ drop_post(Client) ->
         {drop, _} ->
             true;
         Other ->
-            ct:log("~p Drop: ~p", [Client, Other]),
+            ct:pal("~p Drop: ~p", [Client, Other]),
             false
     end.
 
@@ -932,7 +932,7 @@ settled_post(#state{asks=Asks, bids=Bids} = State, AskClient, BidClient) ->
             (BidSojourn - BidRel) =:= AskSojourn ->
             meter_post(State);
         Result ->
-            ct:log("Result: ~p", [Result]),
+            ct:pal("Result: ~p", [Result]),
             false
     end.
 
