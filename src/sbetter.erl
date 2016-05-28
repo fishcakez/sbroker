@@ -129,13 +129,6 @@ send(Name, Msg) ->
 
 %% Internal
 
-scheduler_whereis({ProcA, ProcB} = Processes, Key) ->
-    case erlang:phash2({self(), make_ref()}, 5) of
-        0 ->
-            compare(info(ProcA, Key), info(ProcB, Key));
-        _ ->
-            sscheduler:whereis_name(Processes)
-    end;
 scheduler_whereis(Processes, Key) ->
     Size = tuple_size(Processes),
     case scheduler_pick(Size) of
@@ -147,8 +140,6 @@ scheduler_whereis(Processes, Key) ->
             compare(info(ProcA, Key), info(ProcB, Key))
     end.
 
-better_whereis({ProcA, ProcB}, Key) ->
-    compare(info(ProcA, Key), info(ProcB, Key));
 better_whereis(Processes, Key) ->
     Size = tuple_size(Processes),
     {A, B} = pick(Size),
