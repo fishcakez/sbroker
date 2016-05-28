@@ -249,7 +249,7 @@ meter_spec() ->
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, update_spec(Init)),
     Trap = process_flag(trap_exit, true),
-    case sregulator:start_link(?MODULE, [], [{read_time_after, 2}]) of
+    case sregulator:start_link(?MODULE, [], []) of
         {error, Reason} = Error ->
             receive
                 {'EXIT', _, Reason} ->
