@@ -42,6 +42,15 @@
       Process :: pid().
 whereis_name({}) ->
     undefined;
+whereis_name({Name}) ->
+    case sbroker_gen:whereis(Name) of
+        Pid when is_pid(Pid) ->
+            Pid;
+        undefined ->
+            undefined;
+        {_, Node} ->
+            exit({badnode, Node})
+    end;
 whereis_name(Processes) when is_tuple(Processes) ->
     Size = tuple_size(Processes),
     Scheduler = erlang:system_info(scheduler_id),
