@@ -1074,8 +1074,8 @@ info_meter(_, State, #time{meters=[]} = Time, Asks, AskNext, Bids, BidNext,
 info_meter(Msg, State, #time{now=Now, meters=Meters} = Time, Asks, AskNext,
            Bids, BidNext, Last, Config) ->
     case sbroker_handlers:meters_info(Msg, Now, Meters, report_name(Config)) of
-        {ok, Meters, MeterNext} ->
-            NTime = Time#time{meters=Meters, next=MeterNext},
+        {ok, NMeters, MeterNext} ->
+            NTime = Time#time{meters=NMeters, next=MeterNext},
             next(State, NTime, Asks, AskNext, Bids, BidNext, Last, Config);
         {stop, Reason} ->
             meter_stop(Reason, Asks, Bids, Config)
