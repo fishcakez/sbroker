@@ -20,6 +20,8 @@
 %% @private
 -module(sbroker_rand).
 
+-compile(nowarn_deprecated_function).
+
 %% public API
 
 -export([seed_s/0]).

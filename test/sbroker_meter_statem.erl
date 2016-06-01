@@ -136,8 +136,9 @@ init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
             Stop
     end.
 
-update_args(sregulator_meter, {Queue, Interval, BinSeed}) ->
-    {[{self(), Queue}], Interval, binary_to_term(BinSeed)};
+update_args(sregulator_meter, {Queues, BinSeed}) ->
+    Regs = [{self(), Queue, Interval} || {Queue, Interval} <- Queues],
+    {Regs, binary_to_term(BinSeed)};
 update_args(_, Args) ->
     Args.
 

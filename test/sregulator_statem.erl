@@ -244,7 +244,7 @@ valve_spec() ->
 meter_spec() ->
     oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
            {sbetter_statem_meter, {self, []}},
-           {sregulator_meter, {[{undefined, ask}], 1000}}]).
+           {sregulator_meter, [{undefined, ask, 1000}]}]).
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, update_spec(Init)),
