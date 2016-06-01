@@ -35,10 +35,12 @@
 %% Comparing values/sojourn times requires `ets' lookups. However it is not
 %% required to carry out the lookups for every request to get well balanced
 %% queues. To only compare two random choices 20% of the time and use
-%% `sscheduler' the remaining 80% use `scheduler_ask' and `scheduler_ask_r'.
-%% This ratio is chosen as the majority of the gain in choosing two random
-%% choices can be captured by giving 20% of requests a choice. See section 4.5
-%% of the reference for more information.
+%% `sscheduler' the remaining 80% use `scheduler_ask' and `scheduler_ask_r', or
+%% to only compare two random choices 20% of the time and choose a random
+%% process the reamining 80% use `rand_ask' and `rand_ask_r'. This ratio is
+%% chosen as the majority of the gain in choosing two random choices can be
+%% captured by giving 20% of requests a choice. See section 4.5 of the reference
+%% for more information.
 %%
 %% It is not possible to locally look up the pid of a process with name
 %% `{atom(), node()}' if the node is not the local node. Therefore a registered
@@ -64,13 +66,20 @@
 -export([whereis_name/1]).
 -export([send/2]).
 
+%% types
+
+-type method() ::
+    ask | ask_r | scheduler_ask | scheduler_ask_r | rand_ask | rand_ask_r.
+
+-export_type([method/0]).
+
 %% @doc Lookup a pid from a tuple of pids using the best of two random choices
 %% for the queue (or possibly using the current scheduler id). If no process is
 %% associated with the chosen process returns `undefined'.
--spec whereis_name({Processes,
-                    ask | ask_r | scheduler_ask | scheduler_ask_r}) ->
+-spec whereis_name({Processes, Method}) ->
     Process | undefined when
       Processes :: tuple(),
+      Method :: method(),
       Process :: pid().
 whereis_name({{}, _}) ->
     undefined;
@@ -101,6 +110,24 @@ whereis_name({Processes, scheduler_ask_r}) when is_tuple(Processes) ->
         Error ->
             exit(Error)
     end;
+whereis_name({Processes, rand_ask}) when is_tuple(Processes) ->
+    case rand_whereis(Processes, ask) of
+        Pid when is_pid(Pid) ->
+            Pid;
+        undefined ->
+            undefined;
+        Error ->
+            exit(Error)
+    end;
+whereis_name({Processes, rand_ask_r}) when is_tuple(Processes) ->
+    case rand_whereis(Processes, ask_r) of
+        Pid when is_pid(Pid) ->
+            Pid;
+        undefined ->
+            undefined;
+        Error ->
+            exit(Error)
+    end;
 whereis_name({Processes, Key}) when is_tuple(Processes) ->
     case better_whereis(Processes, Key) of
         Pid when is_pid(Pid) ->
@@ -114,9 +141,10 @@ whereis_name({Processes, Key}) when is_tuple(Processes) ->
 %% @doc Sends a message to a process from a tuple of processes using the best of
 %% two random choices for the queue (or possibly using the current scheduler
 %% id). Returns `ok' if a process could be chosen otherwise exits.
--spec send({Processes, ask | ask_r | scheduler_ask | scheduler_ask_r}, Msg) ->
+-spec send({Processes, Method}, Msg) ->
     ok when
       Processes :: tuple(),
+      Method :: method(),
       Msg :: any().
 send(Name, Msg) ->
     case whereis_name(Name) of
@@ -140,6 +168,26 @@ scheduler_whereis(Processes, Key) ->
             compare(info(ProcA, Key), info(ProcB, Key))
     end.
 
+rand_whereis(Processes, Key) ->
+    Size = tuple_size(Processes),
+    case rand_pick(Size) of
+        {A, B} ->
+            ProcA = element(A, Processes),
+            ProcB = element(B, Processes),
+            compare(info(ProcA, Key), info(ProcB, Key));
+        N ->
+            Proc = element(N, Processes),
+            rand_whereis(Proc)
+    end.
+
+rand_whereis(Name) ->
+    case sbroker_gen:whereis(Name) of
+        {_, Node} ->
+            {badnode, Node};
+        Other ->
+            Other
+    end.
+
 better_whereis(Processes, Key) ->
     Size = tuple_size(Processes),
     {A, B} = pick(Size),
@@ -154,6 +202,15 @@ scheduler_pick(Size) ->
             pick(Hash, Size);
         _ ->
             scheduler
+    end.
+
+rand_pick(Size) ->
+    Pairs = Size * (Size-1),
+    case erlang:phash2({self(), make_ref()}, 5 * Pairs) of
+        Hash when Hash < Pairs ->
+            pick(Hash, Size);
+        Hash ->
+            (Hash rem Size) + 1
     end.
 
 pick(Hash, Size) ->
