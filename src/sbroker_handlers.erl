@@ -239,7 +239,9 @@ meters_init(Time, MeterArgs, Callbacks, Name) ->
         {ok, Meters, Next} ->
             {ok, Callbacks, {Meters, Next}};
         {stop, Reason, Callbacks2} ->
-            terminate(Reason, Callbacks2 ++ Callbacks, Name)
+            NCallbacks = [{Behaviour, Mod, stop, State} ||
+                          {Behaviour, Mod, State, _} <- Callbacks],
+            terminate(Reason, Callbacks2 ++ NCallbacks, Name)
     end.
 
 meters_init(Time, [{Mod, Args} | Inits], Name, Meters, Next) ->
@@ -385,7 +387,9 @@ meters_change(Time, Meters, MeterArgs, Callbacks, Name) ->
         {ok, NMeters, Next} ->
             {ok, Callbacks, {NMeters, Next}};
         {stop, Reason, Callbacks2} ->
-            terminate(Reason, Callbacks2 ++ Callbacks, Name)
+            NCallbacks = [{Behaviour, Mod, stop, State} ||
+                          {Behaviour, Mod, State, _} <- Callbacks],
+            terminate(Reason, Callbacks2 ++ NCallbacks, Name)
     end.
 
 meters_change(Time, Meters, MeterArgs, Name) ->
@@ -516,8 +520,8 @@ send_report(Behaviour, start_error, Mod, Reason, Args, Name) ->
              "** Was installing in ~p~n"
              "** When arguments == ~p~n"
              "** Reason == ~p~n",
-    Args = [Tag, Behaviour, Mod, Name, Args, Reason],
-    error_logger:format(Format, Args);
+    FormatArgs = [Tag, Behaviour, Mod, Name, Args, Reason],
+    error_logger:format(Format, FormatArgs);
 send_report(Behaviour, handler_crashed, Mod, Reason, State, Name) ->
     Tag = {Behaviour, handler_crashed},
     Format = "~i** ~p ~p crashed.~n"
