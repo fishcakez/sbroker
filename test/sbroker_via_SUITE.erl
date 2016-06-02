@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sscheduler_SUITE).
+-module(sbroker_via_SUITE).
 
 -include_lib("common_test/include/ct.hrl").
 
@@ -51,8 +51,8 @@
 %% common_test api
 
 all() ->
-    [{group, whereis},
-     {group, send}].
+    [{group, srand},
+     {group, sscheduler}].
 
 suite() ->
     [{timetrap, {seconds, 120}}].
@@ -61,7 +61,9 @@ groups() ->
     [{whereis, [parallel], [whereis_pid, whereis_local, whereis_global,
                             whereis_via, whereis_empty]},
      {send, [parallel], [send_pid, send_local, send_global, send_via,
-                         send_empty]}].
+                         send_empty]},
+     {srand, [{group, whereis}, {group, send}]},
+     {sscheduler, [{group, whereis}, {group, send}]}].
 
 init_per_suite(Config) ->
     Config.
@@ -72,6 +74,8 @@ end_per_suite(_Config) ->
 group(_Group) ->
     [].
 
+init_per_group(Mod, Config) when Mod == srand; Mod == sscheduler ->
+    [{via, Mod} | Config];
 init_per_group(_Group, Config) ->
     Config.
 
@@ -86,134 +90,141 @@ end_per_testcase(_TestCase, _Config) ->
 
 %% test cases
 
-whereis_pid(_) ->
+whereis_pid(Config) ->
+    Via = ?config(via, Config),
     Self = self(),
 
-    Self = sscheduler:whereis_name({Self}),
-    Self = sscheduler:whereis_name({Self, Self}),
+    Self = Via:whereis_name({Self}),
+    Self = Via:whereis_name({Self, Self}),
 
     ok.
 
-whereis_local(_) ->
+whereis_local(Config) ->
+    Via = ?config(via, Config),
     Self = self(),
     erlang:register(?MODULE, Self),
 
-    Self = sscheduler:whereis_name({?MODULE}),
-    Self = sscheduler:whereis_name({?MODULE, ?MODULE}),
+    Self = Via:whereis_name({?MODULE}),
+    Self = Via:whereis_name({?MODULE, ?MODULE}),
 
-    Self = sscheduler:whereis_name({{?MODULE, node()}}),
-    Self = sscheduler:whereis_name({{?MODULE, node()}, {?MODULE, node()}}),
+    Self = Via:whereis_name({{?MODULE, node()}}),
+    Self = Via:whereis_name({{?MODULE, node()}, {?MODULE, node()}}),
 
-    {'EXIT', {badnode, node}} = (catch sscheduler:whereis_name({{?MODULE,
+    {'EXIT', {badnode, node}} = (catch Via:whereis_name({{?MODULE,
                                                                  node}})),
 
     erlang:unregister(?MODULE),
 
-    undefined = sscheduler:whereis_name({?MODULE}),
-    undefined = sscheduler:whereis_name({?MODULE, ?MODULE}),
+    undefined = Via:whereis_name({?MODULE}),
+    undefined = Via:whereis_name({?MODULE, ?MODULE}),
 
-    undefined = sscheduler:whereis_name({{?MODULE, node()}}),
-    undefined = sscheduler:whereis_name({{?MODULE, node()},
+    undefined = Via:whereis_name({{?MODULE, node()}}),
+    undefined = Via:whereis_name({{?MODULE, node()},
                                           {?MODULE, node()}}),
 
     ok.
 
-whereis_global(_) ->
+whereis_global(Config) ->
+    Via = ?config(via, Config),
     Self = self(),
     yes = global:register_name({?MODULE, global}, Self),
     Name = {global, {?MODULE, global}},
 
-    Self = sscheduler:whereis_name({Name}),
-    Self = sscheduler:whereis_name({Name, Name}),
+    Self = Via:whereis_name({Name}),
+    Self = Via:whereis_name({Name, Name}),
 
     global:unregister_name({?MODULE, global}),
 
-    undefined = sscheduler:whereis_name({Name}),
-    undefined = sscheduler:whereis_name({Name, Name}),
+    undefined = Via:whereis_name({Name}),
+    undefined = Via:whereis_name({Name, Name}),
 
     ok.
 
-whereis_via(_) ->
+whereis_via(Config) ->
+    Via = ?config(via, Config),
     Self = self(),
     yes = global:register_name({?MODULE, via}, Self),
     Name = {via, global, {?MODULE, via}},
 
-    Self = sscheduler:whereis_name({Name}),
-    Self = sscheduler:whereis_name({Name, Name}),
+    Self = Via:whereis_name({Name}),
+    Self = Via:whereis_name({Name, Name}),
 
     global:unregister_name({?MODULE, via}),
 
-    undefined = sscheduler:whereis_name({Name}),
-    undefined = sscheduler:whereis_name({Name, Name}),
+    undefined = Via:whereis_name({Name}),
+    undefined = Via:whereis_name({Name, Name}),
 
     ok.
 
-whereis_empty(_) ->
-    undefined = sscheduler:whereis_name({}),
+whereis_empty(Config) ->
+    Via = ?config(via, Config),
+    undefined = Via:whereis_name({}),
 
     ok.
 
-send_pid(_) ->
+send_pid(Config) ->
+    Via = ?config(via, Config),
     Self = self(),
     Ref = make_ref(),
 
-    sscheduler:send({Self}, Ref),
+    Via:send({Self}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
-    sscheduler:send({Self, Self}, Ref),
+    Via:send({Self, Self}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
     ok.
 
-send_local(_) ->
+send_local(Config) ->
+    Via = ?config(via, Config),
     erlang:register(?MODULE, self()),
     Ref = make_ref(),
 
-    sscheduler:send({?MODULE}, Ref),
+    Via:send({?MODULE}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
-    sscheduler:send({?MODULE, ?MODULE}, Ref),
+    Via:send({?MODULE, ?MODULE}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
-    Self = sscheduler:send({{?MODULE, node()}}, Ref),
+    Self = Via:send({{?MODULE, node()}}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
-    Self = sscheduler:send({{?MODULE, node()}, {?MODULE, node()}}, Ref),
+    Self = Via:send({{?MODULE, node()}, {?MODULE, node()}}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
     erlang:unregister(?MODULE),
 
-    try sscheduler:send({?MODULE}, Ref) of
+    try Via:send({?MODULE}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{?MODULE}, Ref]}} ->
+        exit:{noproc, {Via, send, [{?MODULE}, Ref]}} ->
             ok
     end,
 
-    try sscheduler:send({?MODULE, ?MODULE}, Ref) of
+    try Via:send({?MODULE, ?MODULE}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{?MODULE, ?MODULE}, Ref]}} ->
+        exit:{noproc, {Via, send, [{?MODULE, ?MODULE}, Ref]}} ->
             ok
     end,
 
-    try sscheduler:send({{?MODULE, node()}}, Ref) of
+    try Via:send({{?MODULE, node()}}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{{?MODULE, Node}}, Ref]}}
+        exit:{noproc, {Via, send, [{{?MODULE, Node}}, Ref]}}
           when Node =:= node() ->
             ok
     end,
 
-    try sscheduler:send({{?MODULE, node()}, {?MODULE, node()}}, Ref) of
+    try Via:send({{?MODULE, node()}, {?MODULE, node()}}, Ref) of
         _ ->
             exit(no_exit)
     catch
         exit:{noproc,
-              {sscheduler, send,
+              {Via, send,
                [{{?MODULE, Node2}, {?MODULE, Node2}}, Ref]}}
           when Node2 =:= node() ->
             ok
@@ -222,76 +233,79 @@ send_local(_) ->
 
     ok.
 
-send_global(_) ->
+send_global(Config) ->
+    Via = ?config(via, Config),
     yes = global:register_name({?MODULE, global}, self()),
     Name = {global, {?MODULE, global}},
     Ref = make_ref(),
 
-    sscheduler:send({Name}, Ref),
+    Via:send({Name}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
-    sscheduler:send({Name, Name}, Ref),
+    Via:send({Name, Name}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
     global:unregister_name({?MODULE, global}),
 
-    try sscheduler:send({Name}, Ref) of
+    try Via:send({Name}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{Name}, Ref]}} ->
+        exit:{noproc, {Via, send, [{Name}, Ref]}} ->
             ok
     end,
 
-    try sscheduler:send({Name, Name}, Ref) of
+    try Via:send({Name, Name}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{Name, Name}, Ref]}} ->
+        exit:{noproc, {Via, send, [{Name, Name}, Ref]}} ->
             ok
     end,
 
     ok.
 
-send_via(_) ->
+send_via(Config) ->
+    Via = ?config(via, Config),
     yes = global:register_name({?MODULE, via}, self()),
     Name = {via, global, {?MODULE, via}},
     Ref = make_ref(),
 
-    sscheduler:send({Name}, Ref),
+    Via:send({Name}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
-    sscheduler:send({Name, Name}, Ref),
+    Via:send({Name, Name}, Ref),
     receive Ref -> ok after 100 -> exit(no_msg) end,
 
     global:unregister_name({?MODULE, via}),
 
-    try sscheduler:send({Name}, Ref) of
+    try Via:send({Name}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{Name}, Ref]}} ->
+        exit:{noproc, {Via, send, [{Name}, Ref]}} ->
             ok
     end,
 
-    try sscheduler:send({Name, Name}, Ref) of
+    try Via:send({Name, Name}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{Name, Name}, Ref]}} ->
+        exit:{noproc, {Via, send, [{Name, Name}, Ref]}} ->
             ok
     end,
 
     ok.
 
-send_empty(_) ->
+send_empty(Config) ->
+    Via = ?config(via, Config),
     Ref = make_ref(),
 
-    try sscheduler:send({}, Ref) of
+    try Via:send({}, Ref) of
         _ ->
             exit(no_exit)
     catch
-        exit:{noproc, {sscheduler, send, [{}, Ref]}} ->
+        exit:{noproc, {Via, send, [{}, Ref]}} ->
             ok
     end,
 

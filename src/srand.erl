@@ -53,7 +53,7 @@ whereis_name({Name}) ->
     end;
 whereis_name(Processes) when is_tuple(Processes) ->
     Size = tuple_size(Processes),
-    N = erlang:phash({self(), make_ref()}, Size) + 1,
+    N = erlang:phash2({self(), make_ref()}, Size) + 1,
     Name = element(N, Processes),
     case sbroker_gen:whereis(Name) of
         Pid when is_pid(Pid) ->
