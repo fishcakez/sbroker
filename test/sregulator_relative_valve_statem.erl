@@ -39,7 +39,7 @@ args() ->
          {choose(-10, 10), Min, Max}).
 
 init({Target, Min, Max}) ->
-    NTarget = sbroker_time:convert_time_unit(Target, milli_seconds, native),
+    NTarget = sbroker_util:relative_target(Target),
     {Min, Max, closed, {NTarget, undefined}}.
 
 handle_update(Value, Time, {Target, _}) ->
@@ -54,6 +54,6 @@ handle(_, State) ->
     {closed, State}.
 
 config_change({Target, Min, Max}, Time, {_, Value}) ->
-    NTarget = sbroker_time:convert_time_unit(Target, milli_seconds, native),
+    NTarget = sbroker_util:relative_target(Target),
     {Status, State} = handle(Time, {NTarget, Value}),
     {Min, Max, Status, State}.

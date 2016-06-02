@@ -155,8 +155,8 @@ terminate(_, _) ->
 %% Internal
 
 init(Time, Target, Interval) ->
-    Alpha = sbroker_time:convert_time_unit(8, 1, native),
-    Beta = sbroker_time:convert_time_unit(4, 5, native),
+    Alpha = erlang:convert_time_unit(8, 1, native),
+    Beta = erlang:convert_time_unit(4, 5, native),
     NTarget = sbroker_util:sojourn_target(Target),
     NInterval = sbroker_util:interval(Interval),
     #pie{target=NTarget, interval=NInterval, alpha=Alpha, beta=Beta,

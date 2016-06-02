@@ -3,6 +3,4 @@ sudo: false
 otp_release:
     - 18.3
     - 18.0
-    - 17.5
-    - 17.0
 script: "rebar get-deps compile ct -C rebar.test.config"

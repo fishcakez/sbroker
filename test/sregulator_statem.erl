@@ -881,12 +881,9 @@ status_post(#state{sys=Sys} = State,
             [{header, "Status for sregulator <" ++_ },
              {data, [{"Status", SysState},
                      {"Parent", Self},
-                     {"Time", {TimeMod, Time}}]},
+                     {"Time", Time}]},
              {items, {"Installed handlers", Handlers}}]) ->
-    SysState =:= Sys andalso Self =:= self() andalso
-    ((erlang:function_exported(erlang, monotonic_time, 0) andalso
-      TimeMod =:= erlang) orelse TimeMod =:= sbroker_legacy) andalso
-    is_integer(Time) andalso
+    SysState =:= Sys andalso Self =:= self() andalso is_integer(Time) andalso
     get_state_post(State, Handlers);
 status_post(_, Status) ->
     ct:pal("Status: ~p", [Status]),

@@ -153,15 +153,14 @@ manager() ->
 
 time() ->
     ?LET(Time, choose(-10, 10),
-         sbroker_time:convert_time_unit(Time, milli_seconds, native)).
+         erlang:convert_time_unit(Time, milli_seconds, native)).
 
 time(undefined) ->
     time();
 time(Time) ->
     oneof([Time,
            ?LET(Incr, choose(5, 5),
-                Time + sbroker_time:convert_time_unit(Incr, milli_seconds,
-                                                      native))]).
+                Time + erlang:convert_time_unit(Incr, milli_seconds, native))]).
 
 tag() ->
     elements([a, b, c]).

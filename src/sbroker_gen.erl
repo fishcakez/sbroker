@@ -43,7 +43,7 @@
     {log_to_file, file:filename()} | {install, {fun(), any()}}.
 -type start_option() ::
     {debug, debug_option()} | {timeout, timeout()} |
-    {spawn_opt, [proc_lib:spawn_option()]} | {time_module, module()} |
+    {spawn_opt, [proc_lib:spawn_option()]} |
     {read_time_after, non_neg_integer() | infinity}.
 -type start_return() :: {ok, pid()} | ignore | {error, any()}.
 
@@ -220,15 +220,5 @@ init_it(Starter, Parent, Name, Behaviour, {Mod, Args, TimeOpts}, GenOpts) ->
 %% Internal
 
 partition_options(Opts) ->
-    TimeMod = proplists:get_value(time_module, Opts, time_module()),
     ReadAfter = proplists:get_value(read_time_after, Opts, ?READ_TIME_AFTER),
-    TimeOpts = [{time_module, TimeMod}, {read_time_after, ReadAfter}],
-    GenOpts = proplists:delete(time_module, Opts),
-    GenOpts2 = proplists:delete(read_time_after, GenOpts),
-    {TimeOpts, GenOpts2}.
-
-time_module() ->
-    case erlang:function_exported(erlang, monotonic_time, 0) of
-        true  -> erlang;
-        false -> sbroker_legacy
-    end.
+    {[{read_time_after, ReadAfter}], proplists:delete(read_time_after, Opts)}.

@@ -123,8 +123,8 @@ update(#pie{drop_prob=DropProb, old=Old, target=Target,
             current=Current, burst_allowance=BurstAllow, update=Update,
             update_next=UpdateNext, prev_update=PrevUpdate} = Pie, Time)
   when UpdateNext =< Time ->
-    Alpha = sbroker_time:convert_time_unit(8, 1, native),
-    Beta = sbroker_time:convert_time_unit(4, 5, native),
+    Alpha = erlang:convert_time_unit(8, 1, native),
+    Beta = erlang:convert_time_unit(4, 5, native),
     P = (Current-Target) / Alpha + (Current-Old) / Beta,
 
     NP = if

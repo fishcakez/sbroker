@@ -26,6 +26,7 @@
 -export([interval/1]).
 -export([min_max/2]).
 -export([lower_upper/2]).
+-export([uniform_interval_s/2]).
 
 -spec timeout(Timeout) -> NTimeout when
       Timeout :: timeout(),
@@ -77,7 +78,16 @@ lower_upper(Lower, Upper) when Lower =< Upper ->
 lower_upper(Lower, Upper) ->
     error(badarg, [Lower, Upper]).
 
+-spec uniform_interval_s(Interval, State) -> {CurrentInterval, NState} when
+    Interval :: pos_integer(),
+    State :: rand:state(),
+    CurrentInterval :: pos_integer(),
+    NState :: rand:state().
+uniform_interval_s(Interval, State) ->
+    {Int, NState} = rand:uniform_s(Interval, State),
+    {(Interval div 2) + Int, NState}.
+
 %% Internal
 
 native(Time) ->
-    sbroker_time:convert_time_unit(Time, milli_seconds, native).
+    erlang:convert_time_unit(Time, milli_seconds, native).

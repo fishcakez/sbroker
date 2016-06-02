@@ -36,7 +36,7 @@ module() ->
     sregulator_meter.
 
 args() ->
-    Seed = sbroker_rand:export_seed_s(sbroker_rand:seed_s()),
+    Seed = rand:export_seed_s(rand:seed_s(exsplus)),
     {regulators(), term_to_binary(Seed)}.
 
 regulators() ->
@@ -47,7 +47,7 @@ regulators() ->
 init(Time, {Queues, BinSeed}) ->
     NQueues = [#queue{ask=Ask, interval=sbroker_util:interval(Interval)} ||
                {Ask, Interval} <- Queues],
-    Rand = sbroker_rand:seed_s(binary_to_term(BinSeed)),
+    Rand = rand:seed_s(binary_to_term(BinSeed)),
     State = #state{queues=NQueues, time=Time, rand=Rand},
     {State, timeout(State, Time)}.
 
@@ -61,7 +61,7 @@ update_next(#state{time=PrevTime, rand=Rand, queues=Queues} = State, Time) ->
                              {Queue#queue{rem_interval=NRem}, NRand};
                          _ ->
                              {NRem, NRand2} =
-                                 sbroker_rand:uniform_interval_s(Interval,
+                                 sbroker_util:uniform_interval_s(Interval,
                                                                  NRand),
                              NQueue = Queue#queue{start_interval=Time,
                                                   rem_interval=NRem},
@@ -117,14 +117,14 @@ flush_update_post(Queue, ExpRelativeTime) ->
 change(#state{queues=OldQueues} = State, Time, {Queues, BinSeed}) ->
     NQueues = [#queue{ask=Ask, interval=sbroker_util:interval(Interval)} ||
                {Ask, Interval} <- Queues],
-    Rand = sbroker_rand:seed_s(binary_to_term(BinSeed)),
+    Rand = rand:seed_s(binary_to_term(BinSeed)),
     Change = fun(#queue{ask=Ask, interval=Interval} = Queue, NRand) ->
                      case lists:keyfind(Ask, #queue.ask, OldQueues) of
                          #queue{start_interval=undefined} ->
                              {Queue, NRand};
                          #queue{start_interval=Start} ->
                              {Current, NRand2} =
-                                sbroker_rand:uniform_interval_s(Interval,
+                                sbroker_util:uniform_interval_s(Interval,
                                                                 NRand),
                              Rem = max((Start+Current) - Time, 0),
                              NQueue = Queue#queue{start_interval=Start,

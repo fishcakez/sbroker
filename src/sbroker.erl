@@ -138,7 +138,7 @@
     {log_to_file, file:filename()} | {install, {fun(), any()}}.
 -type start_option() ::
     {debug, debug_option()} | {timeout, timeout()} |
-    {spawn_opt, [proc_lib:spawn_option()]} | {time_module, module()} |
+    {spawn_opt, [proc_lib:spawn_option()]} |
     {read_time_after, non_neg_integer() | infinity}.
 -type start_return() :: {ok, pid()} | ignore | {error, any()}.
 -type handler_spec() :: {module(), any()}.
@@ -155,7 +155,6 @@
                  parent :: pid(),
                  dbg :: [sys:dbg_opt()],
                  name :: name() | pid(),
-                 time_mod :: module(),
                  ask_mod :: module(),
                  bid_mod :: module()}).
 
@@ -586,14 +585,11 @@ len_r(Broker, Timeout) ->
 %% broker options `Opts'.
 %%
 %% `Opts' is a `proplist' and supports `debug', `timeout' and `spawn_opt' used
-%% by `gen_server' and `gen_fsm'. `time_module' sets the `sbroker_time'
-%% callback module, which defaults to `erlang' if `erlang:monotonic_time/0' is
-%% exported, otherwise `sbroker_legacy'. `read_time_after' sets the number of
-%% requests when a cached time is stale and the time is read again. Its value is
+%% by `gen_server' and `gen_fsm'. `read_time_after' sets the number of requests
+%% when a cached time is stale and the time is read again. Its value is
 %% `non_neg_integer()' or `infinity' and defaults to `16'.
 %%
 %% @see gen_server:start_link/3
-%% @see sbroker_time
 -spec start_link(Module, Args, Opts) -> StartReturn when
       Module :: module(),
       Args :: any(),
@@ -632,14 +628,13 @@ timeout(Broker) ->
 init_it(Starter, Parent, Name, Mod, Args, Opts) ->
     DbgOpts = proplists:get_value(debug, Opts, []),
     Dbg = sys:debug_options(DbgOpts),
-    {TimeMod, ReadAfter} = time_options(Opts),
+    ReadAfter = proplists:get_value(read_time_after, Opts),
     try Mod:init(Args) of
         {ok, {{AskMod, AskArgs}, {BidMod, BidArgs}, MeterArgs}}
           when is_list(MeterArgs) ->
             Config = #config{mod=Mod, args=Args, parent=Parent, dbg=Dbg,
-                             name=Name, time_mod=TimeMod, ask_mod=AskMod,
-                             bid_mod=BidMod},
-            Now = monotonic_time(Config),
+                             name=Name, ask_mod=AskMod, bid_mod=BidMod},
+            Now = erlang:monotonic_time(),
             Time = #time{now=Now, send=Now, read_after=ReadAfter, seq=0,
                          meters=[]},
             init(Starter, Time, AskArgs, BidArgs, MeterArgs, Config);
@@ -729,8 +724,7 @@ system_terminate(Reason, Parent, Dbg, [_, Time, Asks, Bids, _, Config]) ->
 format_status(Opt,
               [PDict, SysState, Parent, _,
                [State, #time{now=Now, meters=Meters}, Asks, Bids, _,
-                #config{name=Name, ask_mod=AskMod, bid_mod=BidMod,
-                        time_mod=TimeMod}]]) ->
+                #config{name=Name, ask_mod=AskMod, bid_mod=BidMod}]]) ->
     Header = gen:format_status_header("Status for sbroker", Name),
     Meters2 = [{MeterMod, meter, Meter} || {MeterMod, Meter} <- Meters],
     Handlers = [{AskMod, ask, Asks}, {BidMod, ask_r, Bids} | Meters2],
@@ -740,17 +734,12 @@ format_status(Opt,
      {data, [{"Status", SysState},
              {"Parent", Parent},
              {"Active queue", format_state(State)},
-             {"Time", {TimeMod, Now}}]},
+             {"Time", Now}]},
      {items, {"Installed handlers", Handlers2}}];
 format_status(Opt, [PDict, SysState, Parent, Dbg, {change, _, Misc}]) ->
     format_status(Opt, [PDict, SysState, Parent, Dbg, Misc]).
 
 %% Internal
-
-time_options(Opts) ->
-    TimeMod = proplists:get_value(time_module, Opts),
-    ReadAfter = proplists:get_value(read_time_after, Opts),
-    {TimeMod, ReadAfter}.
 
 init(Starter, Time, AskArgs, BidArgs, MeterArgs,
      #config{ask_mod=AskMod, bid_mod=BidMod, name=Name} = Config) ->
@@ -794,20 +783,17 @@ unregister_name(Self) when is_pid(Self) ->
 
 enter_loop(Starter, Time, Asks, Bids, Last, Next, Config) ->
     proc_lib:init_ack(Starter, {ok, self()}),
-    Timeout = idle_timeout(Time, Next, Config),
+    Timeout = idle_timeout(Time, Next),
     idle_recv(bidding, Timeout, Time, Asks, Bids, Last, Config).
 
-monotonic_time(#config{time_mod=TimeMod}) ->
-    TimeMod:monotonic_time().
-
-mark(Time, Config) ->
-    Now = monotonic_time(Config),
+mark(Time) ->
+    Now = erlang:monotonic_time(),
     _ = self() ! {'$mark', Now},
     Time#time{now=Now, send=Now, seq=0}.
 
 update_time(State, #time{seq=Seq, read_after=Seq} = Time, Asks, Bids, Last,
             Config) ->
-    Now = monotonic_time(Config),
+    Now = erlang:monotonic_time(),
     update_meter(Now, State, Time, Asks, Bids, Last, Config);
 update_time(_, #time{seq=Seq} = Time, _, _, _, _) ->
     Time#time{seq=Seq+1}.
@@ -842,32 +828,32 @@ meter_stop(Reason, Asks, Bids,
     terminate(Reason, Callbacks, Config).
 
 idle(State, #time{seq=0} = Time, Asks, Bids, Last, Next, Config) ->
-    Timeout = idle_timeout(Time, Next, Config),
+    Timeout = idle_timeout(Time, Next),
     idle_recv(State, Timeout, Time, Asks, Bids, Last, Config);
 idle(State, Time, Asks, Bids, Last, Next, Config) ->
-    Now = monotonic_time(Config),
+    Now = erlang:monotonic_time(),
     NTime = update_meter(Now, State, Time, Asks, Bids, Last, Config),
-    Timeout = idle_timeout(NTime, Next, Config),
+    Timeout = idle_timeout(NTime, Next),
     idle_recv(State, Timeout, NTime, Asks, Bids, Last, Config).
 
-idle_timeout(#time{now=Now, next=Next1}, Next2, #config{time_mod=TimeMod}) ->
+idle_timeout(#time{now=Now, next=Next1}, Next2) ->
     case min(Next1, Next2) of
         infinity ->
             infinity;
         Next ->
             Diff = Next-Now,
-            Timeout = TimeMod:convert_time_unit(Diff, native, milli_seconds),
+            Timeout = erlang:convert_time_unit(Diff, native, milli_seconds),
             max(Timeout, 1)
     end.
 
 idle_recv(State, Timeout, Time, Asks, Bids, Last, Config) ->
     receive
         Msg ->
-            NTime = mark(Time, Config),
+            NTime = mark(Time),
             handle(State, Msg, NTime, Asks, Bids, Last, infinity, Config)
     after
         Timeout ->
-            NTime = mark(Time, Config),
+            NTime = mark(Time),
             timeout(State, NTime, Asks, Bids, Last, Config)
     end.
 

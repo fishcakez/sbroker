@@ -112,15 +112,14 @@ manager() ->
 
 time() ->
     ?LET(Time, choose(-10, 10),
-         sbroker_time:convert_time_unit(Time, milli_seconds, native)).
+         erlang:convert_time_unit(Time, milli_seconds, native)).
 
 time(undefined) ->
     time();
 time(Time) ->
     oneof([Time,
            ?LET(Incr, choose(5, 5),
-                Time + sbroker_time:convert_time_unit(Incr, milli_seconds,
-                                                      native))]).
+                Time + erlang:convert_time_unit(Incr, milli_seconds, native))]).
 
 init_or_change(undefined, undefined, _, Mod, Args, Time) ->
     {State, Timeout} = Mod:init(Time, update_args(Mod, Args)),
@@ -190,15 +189,12 @@ handle_update_args(#state{mod=Mod, time=Time, meter=M}) ->
     ?LET({QueueTime, ProcessTime, RelTime},
          {choose(0, 5), choose(0, 5), choose(-5, 5)},
          begin
-             NQueueTime = sbroker_time:convert_time_unit(QueueTime,
-                                                         milli_seconds,
-                                                         native),
-             NProcessTime = sbroker_time:convert_time_unit(ProcessTime,
-                                                           milli_seconds,
-                                                           native),
-             NRelTime = sbroker_time:convert_time_unit(RelTime,
-                                                       milli_seconds,
-                                                       native),
+             NQueueTime = erlang:convert_time_unit(QueueTime, milli_seconds,
+                                                   native),
+             NProcessTime = erlang:convert_time_unit(ProcessTime, milli_seconds,
+                                                     native),
+             NRelTime = erlang:convert_time_unit(RelTime, milli_seconds,
+                                                 native),
              [Mod, choose(0,5), NQueueTime, NProcessTime, NRelTime, time(Time),
               M]
          end).

@@ -54,7 +54,7 @@
                 updated = undefined :: undefined | integer()}).
 
 -record(state, {wheel :: gb_trees:tree(integer(), [#entry{}]) | #entry{},
-                rand :: sbroker_rand:state(),
+                rand :: rand:state(),
                 update_next :: integer()}).
 
 %% @private
@@ -65,20 +65,20 @@
       Regulator :: sregulator:regulator(),
       Queue :: ask | ask_r,
       Update :: pos_integer(),
-      Seed :: sbroker_rand:seed(),
+      Seed :: rand:seed(),
       State :: #state{},
       UpdateNext :: integer().
 init(Time, {[Regulator], Seed}) ->
     Entry = entry(Regulator),
-    Rand = sbroker_rand:seed_s(Seed),
+    Rand = rand:seed_s(Seed),
     {#state{wheel=Entry, rand=Rand, update_next=Time}, Time};
 init(Time, {Regulators, Seed}) ->
     Entries = entries(Regulators),
     Wheel = gb_trees:insert(Time, Entries, gb_trees:empty()),
-    Rand = sbroker_rand:seed_s(Seed),
+    Rand = rand:seed_s(Seed),
     {#state{wheel=Wheel, rand=Rand, update_next=Time}, Time};
 init(Time, Regulators) ->
-    Seed = sbroker_rand:export_seed_s(sbroker_rand:seed_s()),
+    Seed = rand:export_seed_s(rand:seed_s(exsplus)),
     init(Time, {Regulators, Seed}).
 
 %% @private
@@ -99,7 +99,7 @@ handle_update(_, _, RelativeTime, Time,
                                   update=Update}=Entry, rand=Rand}) ->
     cast(Regulator, Queue, RelativeTime),
     NEntry = Entry#entry{updated=Time},
-    {Current, NRand} = sbroker_rand:uniform_interval_s(Update, Rand),
+    {Current, NRand} = sbroker_util:uniform_interval_s(Update, Rand),
     Next = Time + Current,
     {#state{wheel=NEntry, rand=NRand, update_next=Next}, Next};
 handle_update(_, _, RelativeTime, Time, #state{wheel=Wheel, rand=Rand}) ->
@@ -133,25 +133,25 @@ code_change(_, Time, State, _) ->
       Regulator :: sregulator:regulator(),
       Queue :: ask | ask_r,
       Update :: pos_integer(),
-      Seed :: sbroker_rand:seed(),
+      Seed :: rand:seed(),
       State :: #state{},
       NState :: #state{},
       UpdateNext :: integer().
 config_change({Regulators, Seed}, Time,
               #state{wheel=#entry{regulator=Regulator, queue=Queue}=Entry}) ->
-    Rand = sbroker_rand:seed_s(Seed),
+    Rand = rand:seed_s(Seed),
     NEntries = entries(Regulators),
     Old = maps:from_list([{{Regulator, Queue}, Entry}]),
     change(NEntries, Time, Old, Rand);
 config_change({Regulators, Seed}, Time, #state{wheel=Wheel}) ->
-    Rand = sbroker_rand:seed_s(Seed),
+    Rand = rand:seed_s(Seed),
     NEntries = entries(Regulators),
     OldEntries = [{{Regulator, Queue}, Entry} ||
                   {_, Entries} <- gb_trees:to_list(Wheel),
                   Entry = #entry{regulator=Regulator, queue=Queue} <- Entries],
     change(NEntries, Time, maps:from_list(OldEntries), Rand);
 config_change(Regulators, Time, #state{rand=Rand} = State) ->
-    Seed = sbroker_rand:export_seed_s(Rand),
+    Seed = rand:export_seed_s(Rand),
     config_change({Regulators, Seed}, Time, State).
 
 %% @private
@@ -204,7 +204,7 @@ is_process(_) ->
 update([Entry | Rest], Relative, Time, Rand, Wheel) ->
     #entry{regulator=Regulator, update=Update, queue=Queue} = Entry,
     cast(Regulator, Queue, Relative),
-    {Current, NRand} = sbroker_rand:uniform_interval_s(Update, Rand),
+    {Current, NRand} = sbroker_util:uniform_interval_s(Update, Rand),
     NWheel = insert(Time+Current, Entry#entry{updated=Time}, Wheel),
     update(Rest, Relative, Time, NRand, NWheel);
 update([], Relative, Time, Rand, Wheel) ->
@@ -247,7 +247,7 @@ change([Entry], Time, Old, Rand) ->
     #entry{regulator=Regulator, queue=Queue, update=Update} = Entry,
     case maps:find({Regulator, Queue}, Old) of
         {ok, #entry{updated=Updated}} when is_integer(Updated) ->
-            {Current, NRand} = sbroker_rand:uniform_interval_s(Update, Rand),
+            {Current, NRand} = sbroker_util:uniform_interval_s(Update, Rand),
             Next = max(Updated+Current, Time),
             NEntry = Entry#entry{updated=Updated},
             {#state{wheel=NEntry, rand=NRand, update_next=Next}, Next};
@@ -261,7 +261,7 @@ change([Entry | Entries], Time, Old, Rand, Wheel) ->
     #entry{regulator=Regulator, queue=Queue, update=Update} = Entry,
     case maps:find({Regulator, Queue}, Old) of
         {ok, #entry{updated=Updated}} when is_integer(Updated) ->
-            {Current, NRand} = sbroker_rand:uniform_interval_s(Update, Rand),
+            {Current, NRand} = sbroker_util:uniform_interval_s(Update, Rand),
             Next = max(Updated+Current, Time),
             NWheel = insert(Next, Entry#entry{updated=Updated}, Wheel),
             change(Entries, Time, Old, NRand, NWheel);
