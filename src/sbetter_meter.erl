@@ -21,7 +21,25 @@
 %% approximate queue sojourn times for use with the `sbetter' load balancer.
 %%
 %% `sbetter_meter' can be used as the `sbroker_meter' in a `sbroker' or
-%% a `sregulator'. Its argument can take any form and is ignored.
+%% a `sregulator'. Its argument is of the form:
+%% ```
+%% {AskUpper :: non_neg_integer(), AskRUpper :: non_neg_integer(),
+%%  Update :: pos_integer()}.
+%% ```
+%% `AskUpper' is the maximum `ask' sojourn time and `AskRUpper' is the maximum
+%% `ask_r' sojourn time that will be updated to the `sbetter_server' for use
+%% with `sbetter'. If a match doesn't occur on the `sbroker' or `sregulator' the
+%% approximate sojourn time will increase unbounded for one of the two queues.
+%% Limiting this value prevents the situation where one process becomes stuck as
+%% the "worst" option because it hasn't matched for the longest when the
+%% processes' queues would be equivalently "bad".
+%%
+%% For example if using the `sbroker_timeout_queue' with timeout time of `5000',
+%% then all requests are dropped after `5000' and so become approximately
+%% equivalent once sojourn time is `5000'.
+%%
+%% `Update' is the update interval in `milli_seconds'  when the process is idle.
+%%
 %% @see sbetter
 %% @see sbetter_server
 -module(sbetter_meter).
@@ -35,64 +53,91 @@
 -export([config_change/3]).
 -export([terminate/2]).
 
-%% @private
--spec init(Time, Arg) -> {Pid, Time} when
-      Time :: integer(),
-      Arg :: any(),
-      Pid :: pid().
-init(Time, _) ->
-    Pid = self(),
-    true = sbetter_server:register(Pid),
-    % Want to update immediately as default value is max small int on 64bit VM.
-    {Pid, Time}.
+%% types
+
+-record(state, {ask :: non_neg_integer(),
+                bid :: non_neg_integer(),
+                update :: pos_integer(),
+                update_next :: integer()}).
 
 %% @private
--spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, Pid) ->
-    {Pid, infinity} when
+-spec init(Time, {AskUpper, AskRUpper, Update}) -> {State, Time} when
+      Time :: integer(),
+      AskUpper :: non_neg_integer(),
+      AskRUpper :: non_neg_integer(),
+      Update :: pos_integer(),
+      State :: #state{}.
+init(Time, {Ask, Bid, Update}) ->
+    NAsk = sbroker_util:sojourn_target(Ask),
+    NBid = sbroker_util:sojourn_target(Bid),
+    NUpdate = sbroker_util:interval(Update),
+    true = sbetter_server:register(self(), NAsk, NBid),
+    {#state{ask=NAsk, bid=NBid, update=NUpdate, update_next=Time}, Time}.
+
+%% @private
+-spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, State) ->
+    {NState, UpdateNext} when
       QueueDelay :: non_neg_integer(),
       ProcessDelay :: non_neg_integer(),
       RelativeTime :: integer(),
       Time :: integer(),
-      Pid :: pid().
-handle_update(QueueDelay, ProcessDelay, RelativeTime, _, Pid) ->
-    AskSojourn = sojourn(QueueDelay + ProcessDelay, RelativeTime),
-    AskRSojourn = sojourn(QueueDelay + ProcessDelay, -RelativeTime),
-    true = sbetter_server:update(Pid, AskSojourn, AskRSojourn),
-    {Pid, infinity}.
+      State :: #state{},
+      NState :: #state{},
+      UpdateNext :: integer().
+handle_update(QueueDelay, ProcessDelay, RelativeTime, Time,
+              #state{ask=Ask, bid=Bid, update=Update} = State) ->
+    AskSojourn = sojourn(QueueDelay + ProcessDelay, RelativeTime, Ask),
+    BidSojourn = sojourn(QueueDelay + ProcessDelay, -RelativeTime, Bid),
+    true = sbetter_server:update(self(), AskSojourn, BidSojourn),
+    Next = Time + Update,
+    {State#state{update_next=Next}, Next}.
 
 %% @private
--spec handle_info(Msg, Time, Pid) -> {Pid, infinity} when
+-spec handle_info(Msg, Time, State) -> {State, UpdateNext} when
       Msg :: any(),
       Time :: integer(),
-      Pid :: pid().
-handle_info(_, _, Pid) ->
-    {Pid, infinity}.
+      State :: #state{},
+      UpdateNext :: integer().
+handle_info(_, Time, State) ->
+    handle(Time, State).
 
 %% @private
--spec code_change(OldVsn, Time, Pid, Extra) -> {Pid, infinity} when
+-spec code_change(OldVsn, Time, State, Extra) -> {State, UpdateNext} when
       OldVsn :: any(),
       Time :: integer(),
-      Pid :: pid(),
-      Extra :: any().
-code_change(_, _, Pid, _) ->
-    {Pid, infinity}.
+      State :: #state{},
+      Extra :: any(),
+      UpdateNext :: integer().
+code_change(_, Time, State, _) ->
+    handle(Time, State).
 
 %% @private
--spec config_change(Arg, Time, Pid) -> {Pid, infinity} when
-      Arg :: term(),
+-spec config_change({AskUpper, AskRUpper, Update}, Time, State) ->
+    {NState, UpdateNext} when
+      AskUpper :: non_neg_integer(),
+      AskRUpper :: non_neg_integer(),
+      Update :: pos_integer(),
       Time :: integer(),
-      Pid :: pid().
-config_change(_, _, Pid) ->
-    {Pid, infinity}.
+      State :: #state{},
+      NState :: #state{},
+      UpdateNext :: integer().
+config_change({Ask, Bid, Update}, Time, _) ->
+    NAsk = sbroker_util:sojourn_target(Ask),
+    NBid = sbroker_util:sojourn_target(Bid),
+    NUpdate = sbroker_util:interval(Update),
+    {#state{ask=NAsk, bid=NBid, update=NUpdate, update_next=Time}, Time}.
 
 %% @private
--spec terminate(Reason, Pid) -> true when
+-spec terminate(Reason, State) -> true when
       Reason :: any(),
-      Pid :: pid().
-terminate(_, Pid) ->
-    sbetter_server:unregister(Pid).
+      State :: #state{}.
+terminate(_, _) ->
+    sbetter_server:unregister(self()).
 
 %% Internal
 
-sojourn(QueueDelay, RelativeTime) ->
-    QueueDelay + max(RelativeTime, 0).
+sojourn(QueueDelay, RelativeTime, Upper) ->
+    min(Upper, QueueDelay + max(RelativeTime, 0)).
+
+handle(Time, #state{update_next=Next} = State) ->
+    {State, max(Next, Time)}.

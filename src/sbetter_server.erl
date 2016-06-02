@@ -25,7 +25,7 @@
 
 %% public API
 
--export([register/1]).
+-export([register/3]).
 -export([unregister/1]).
 -export([update/3]).
 
@@ -46,22 +46,24 @@
 %% macros
 
 -define(TIMEOUT, 5000).
--define(LARGE_INT, 576460752303423487). % Max small integer on 64bit VM.
 
 %% public API
 
-%% @doc Register the local process `Pid' with the server.
+%% @doc Register the local process `Pid' with the server and sets the `ask' and
+%% `ask_r' values (such as sojourn times) as integer values `AskValue' and
+%% `AskRValue'.
 %%
 %% Returns `true' if the process is successfully registered, or `false' if
 %% already registered.
-%%
-%% A process must be registered to use `update/3'. Initial values are set to
-%% `576460752303423487'. The server will synchronously link to the `Pid'.
--spec register(Pid) -> Result when
+-spec register(Pid, AskValue, AskRValue) -> Result when
       Pid :: pid(),
+      AskValue :: integer(),
+      AskRValue :: integer(),
       Result :: boolean().
-register(Pid) when is_pid(Pid), node(Pid) == node() ->
-    gen_server:call(?MODULE, {register, Pid}, ?TIMEOUT).
+register(Pid, AskValue, BidValue)
+  when is_pid(Pid), node(Pid) == node(),
+       is_integer(AskValue), is_integer(BidValue) ->
+    gen_server:call(?MODULE, {register, Pid, AskValue, BidValue}, ?TIMEOUT).
 
 %% @doc Unregister the process `Pid' with the server.
 %%
@@ -81,10 +83,10 @@ unregister(Pid) when is_pid(Pid), node(Pid) == node() ->
       AskValue :: integer(),
       AskRValue :: integer(),
       Result :: boolean().
-update(Pid, AskValue, AskRValue)
-  when is_integer(AskValue), is_integer(AskRValue) ->
+update(Pid, AskValue, BidValue)
+  when is_integer(AskValue), is_integer(BidValue) ->
     ets:update_element(?MODULE, {Pid, ask}, {2, AskValue}) andalso
-    ets:update_element(?MODULE, {Pid, ask_r}, {2, AskRValue}).
+    ets:update_element(?MODULE, {Pid, bid}, {2, BidValue}).
 
 %% private API
 
@@ -99,8 +101,10 @@ start_link() ->
       Pid :: pid(),
       Key :: ask | ask_r,
       SojournTime :: non_neg_integer().
-lookup(Pid, Key) ->
-    ets:update_counter(?MODULE, {Pid, Key}, {2, 0}).
+lookup(Pid, ask) ->
+    ets:update_counter(?MODULE, {Pid, ask}, {2, 0});
+lookup(Pid, ask_r) ->
+    ets:update_counter(?MODULE, {Pid, bid}, {2, 0}).
 
 %% gen_server API
 
@@ -112,9 +116,9 @@ init(Table) ->
     {ok, Table}.
 
 %% @private
-handle_call({register, Pid}, _, Table) ->
+handle_call({register, Pid, AskValue, BidValue}, _, Table) ->
     link(Pid),
-    {reply, insert_new(Table, Pid), Table};
+    {reply, insert_new(Table, Pid, AskValue, BidValue), Table};
 handle_call({unregister, Pid}, _, Table) ->
     delete(Table, Pid),
     unlink(Pid),
@@ -145,10 +149,10 @@ terminate(_, _) ->
 
 %% Helpers
 
-insert_new(Table, Pid) ->
-    ets:insert_new(Table, {{Pid, ask}, ?LARGE_INT}) andalso
-    ets:insert_new(Table, {{Pid, ask_r}, ?LARGE_INT}).
+insert_new(Table, Pid, AskValue, BidValue) ->
+    ets:insert_new(Table, {{Pid, ask}, AskValue}) andalso
+    ets:insert_new(Table, {{Pid, bid}, BidValue}).
 
 delete(Table, Pid) ->
     ets:delete(Table, {Pid, ask}),
-    ets:delete(Table, {Pid, ask_r}).
+    ets:delete(Table, {Pid, bid}).

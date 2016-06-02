@@ -190,7 +190,7 @@ whereis_empty(_) ->
 
 send_pid(_) ->
     Self = self(),
-    sbetter_server:register(Self),
+    sbetter_server:register(Self, 1, 1),
     Ref = make_ref(),
 
     sbetter:send({{Self}, ask}, Ref),
@@ -204,7 +204,7 @@ send_pid(_) ->
 send_local(_) ->
     Self = self(),
     erlang:register(?MODULE, Self),
-    sbetter_server:register(Self),
+    sbetter_server:register(Self, 1, 1),
     Ref = make_ref(),
 
     sbetter:send({{?MODULE}, ask}, Ref),
@@ -265,7 +265,7 @@ send_local(_) ->
 send_global(_) ->
     Self = self(),
     yes = global:register_name({?MODULE, global}, Self),
-    sbetter_server:register(Self),
+    sbetter_server:register(Self, 1, 1),
     Name = {global, {?MODULE, global}},
     Ref = make_ref(),
 
@@ -308,7 +308,7 @@ send_global(_) ->
 send_via(_) ->
     Self = self(),
     yes = global:register_name({?MODULE, via}, Self),
-    sbetter_server:register(Self),
+    sbetter_server:register(Self, 1, 1),
     Name = {via, global, {?MODULE, via}},
     Ref = make_ref(),
 
@@ -372,5 +372,5 @@ send_empty(_) ->
 
 better_pid() ->
     Pid = spawn_link(timer, sleep, [infinity]),
-    sbetter_server:register(Pid),
+    sbetter_server:register(Pid, 0, 0),
     Pid.

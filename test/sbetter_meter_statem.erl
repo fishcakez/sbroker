@@ -29,25 +29,35 @@
 -export([change/3]).
 -export([timeout/2]).
 
+-record(state, {ask_upper :: non_neg_integer(),
+                bid_upper :: non_neg_integer(),
+                update :: pos_integer(),
+                updated :: undefined | integer()}).
+
 module() ->
     sbetter_meter.
 
 args() ->
-    undefined.
+    {choose(0, 5), choose(0, 5), choose(1, 5)}.
 
-init(Time, undefined) ->
-    {undefined, Time}.
+init(Time, {Ask, Bid, Update}) ->
+    NAsk = sbroker_util:sojourn_target(Ask),
+    NBid = sbroker_util:sojourn_target(Bid),
+    NUpdate = sbroker_util:interval(Update),
+    {#state{ask_upper=NAsk, bid_upper=NBid, update=NUpdate}, Time}.
 
-update_next(undefined, _, _, _, _, _) ->
-    {undefined, infinity}.
+update_next(#state{update=NUpdate} = State, Time, _, _, _, _) ->
+    {State#state{updated=Time}, NUpdate+Time}.
 
-update_post(undefined, _, _, QueueDelay, ProcessDelay, RelativeTime) ->
-    {lookup_post(QueueDelay, ProcessDelay, RelativeTime, ask) andalso
-     lookup_post(QueueDelay, ProcessDelay, -RelativeTime, ask_r), infinity}.
+update_post(#state{ask_upper=Ask, bid_upper=Bid, update=Update}, Time,
+            _, QueueDelay, ProcessDelay, RelativeTime) ->
+    {lookup_post(QueueDelay, ProcessDelay, RelativeTime, ask, Ask) andalso
+     lookup_post(QueueDelay, ProcessDelay, -RelativeTime, ask_r, Bid),
+     Update+Time}.
 
-lookup_post(QueueDelay, ProcessDelay, RelativeTime, Queue) ->
+lookup_post(QueueDelay, ProcessDelay, RelativeTime, Queue, Upper) ->
     ObsValue = sbetter_server:lookup(self(), Queue),
-    case QueueDelay + ProcessDelay + max(RelativeTime, 0) of
+    case min(Upper, QueueDelay + ProcessDelay + max(RelativeTime, 0)) of
         ObsValue ->
             true;
         ExpValue ->
@@ -56,8 +66,10 @@ lookup_post(QueueDelay, ProcessDelay, RelativeTime, Queue) ->
             false
     end.
 
-change(undefined, _, _) ->
-    {undefined, infinity}.
+change(_, Time, Args) ->
+    init(Time, Args).
 
-timeout(_, _) ->
-    infinity.
+timeout(#state{updated=undefined}, Time) ->
+    Time;
+timeout(#state{update=Update, updated=Updated}, Time) ->
+    max(Time, Updated+Update).

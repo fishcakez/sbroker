@@ -52,7 +52,7 @@
 %% may exit with `{nobetter, pid()}'. The `sbetter_meter' will register with the
 %% server. However other methods can be used to register and update the
 %% `sbetter_server'. Registering with the `sbetter_server' must be done with
-%% `sbetter_server:register/1' and not using
+%% `sbetter_server:register/3' and not using
 %% `start_link({via, sbetter, ...}, ...)'.
 %%
 %% @reference Michael Miztenmacher, The Power of Two Choices in Randomized

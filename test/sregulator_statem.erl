@@ -243,7 +243,7 @@ valve_spec() ->
 
 meter_spec() ->
     oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
-           {sbetter_statem_meter, {self, []}},
+           {sbetter_statem_meter, {self, {1000, 1000, 1000}}},
            {sregulator_meter, [{undefined, ask, 1000}]}]).
 
 start_link(Init) ->

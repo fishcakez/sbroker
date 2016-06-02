@@ -25,6 +25,7 @@
 -export([relative_target/1]).
 -export([interval/1]).
 -export([min_max/2]).
+-export([lower_upper/2]).
 
 -spec timeout(Timeout) -> NTimeout when
       Timeout :: timeout(),
@@ -51,7 +52,7 @@ relative_target(Target) ->
 -spec interval(Interval) -> NInterval when
       Interval :: pos_integer(),
       NInterval :: pos_integer().
-interval(Interval) when Interval > 0->
+interval(Interval) when Interval > 0 ->
     native(Interval);
 interval(Other) ->
     error(badarg, [Other]).
@@ -65,6 +66,16 @@ min_max(Min, Max) when is_integer(Min), is_integer(Max), Min >= 0, Max >= Min ->
     {Min, Max};
 min_max(Min, Max) ->
     error(badarg, [Min, Max]).
+
+-spec lower_upper(Lower, Upper) -> {NLower, NUpper} when
+      Lower :: integer(),
+      Upper :: integer(),
+      NLower :: integer(),
+      NUpper :: integer().
+lower_upper(Lower, Upper) when Lower =< Upper ->
+    {native(Lower), native(Upper)};
+lower_upper(Lower, Upper) ->
+    error(badarg, [Lower, Upper]).
 
 %% Internal
 
