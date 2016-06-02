@@ -234,11 +234,11 @@ handle_ask(_, Max, Len, _) when Len > Max, Max =/= -1 ->
 handle_ask(Min, _, Len, ?MAX_DROP) when Len > Min ->
     drop;
 handle_ask(Min, _, Len, DropInt) when Len > Min, DropInt > 0 ->
-    case erlang:phash({self(), make_ref()}, ?MAX_DROP) of
-        Hash when Hash > DropInt ->
-            go;
+    case erlang:phash2({self(), make_ref()}, ?MAX_DROP) of
+        Hash when Hash < DropInt ->
+            drop;
         _ ->
-            drop
+            go
     end;
 handle_ask(_, _, _, _) ->
     go.
