@@ -103,7 +103,7 @@ Otherwise:
 ```
 rebar3 edoc
 ```
-Then visit doc/index.html`.
+Then visit `doc/index.html`.
 
 Test
 ----

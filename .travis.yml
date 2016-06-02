@@ -5,5 +5,4 @@ otp_release:
     - 18.0
     - 17.5
     - 17.0
-install: "rebar3 as test compile"
-script: "rebar3 ct"
+script: "rebar get-deps compile ct -C rebar.test.config"
