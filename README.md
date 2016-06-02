@@ -293,6 +293,14 @@ differentiate between flows. However the PIE meter does not combine well because
 it can not differentiate between the different flows and will see heavily
 fluctuating `SojournTime` values.
 
+It is also possible to load balance request between multiple brokers with
+`srand` and `sscheduler`. These choose a random broker or a broker based on
+scheduler id. One of these can be combined with the `sbetter` load balancer that
+tries to even out the random load balancing by occasionally comparing the
+sojourn times on two random brokers and choosing the broker with the shortest
+sojourn time. All three of these load balancing modules can be used to load
+balanace any OTP process.
+
 Relative Time and Regulation
 ----------------------------
 A negative `RelativeTime` means the counterparty sent their request before the
