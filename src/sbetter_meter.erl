@@ -25,7 +25,7 @@
 %% ```
 %% {AskUpper :: non_neg_integer(), AskRUpper :: non_neg_integer(),
 %%  Update :: pos_integer()}.
-%% ```
+%% '''
 %% `AskUpper' is the maximum `ask' sojourn time and `AskRUpper' is the maximum
 %% `ask_r' sojourn time that will be updated to the `sbetter_server' for use
 %% with `sbetter'. If a match doesn't occur on the `sbroker' or `sregulator' the

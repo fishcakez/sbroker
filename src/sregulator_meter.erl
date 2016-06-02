@@ -26,7 +26,7 @@
 %% ```
 %% [{Regulator :: sregulator:regulator(), Queue :: ask | ask_r,
 %%   Update :: pos_integer()}, ...}].
-%% ```
+%% '''
 %%
 %% `Regulator' is a regulator process to update with the approximate relative
 %% time of queue `Queue' with updates uniformly distributed from `0.5 * Update'
