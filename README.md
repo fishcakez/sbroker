@@ -91,11 +91,6 @@ Pid = spawn_link(fun() -> sbroker:ask_r(Broker) end),
 
 Build
 -----
-Rebar:
-```
-rebar compile
-```
-Rebar3:
 ```
 rebar3 compile
 ```
@@ -104,15 +99,14 @@ Documentation
 -------------
 Available at: http://hexdocs.pm/sbroker/
 
-Rebar builds documentation:
+Otherwise:
 ```
-rebar doc
+rebar3 edoc
 ```
-Then visit `doc/index.html`.
+Then visit doc/index.html`.
 
 Test
 ----
-Testing requires rebar3:
 ```
 rebar3 ct
 ```
