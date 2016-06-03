@@ -6,12 +6,12 @@ Sojourn Broker - process broker for matchmaking between two groups of processes.
 Introduction
 ------------
 
-Sojourn Broker is an alternative to traditional pooling approaches that focuses
+Sojourn Broker is an alternative to traditional pooling approaches, it focuses
 on the queues involved. Both clients and workers are explicitly enqueued into
 the relevant queues and a match occurs once both a client and a worker are
 queued. Both queues have many configuration options (see "Smart Queues" below)
-that can reconfigured live as part of a code update or config change in a relup,
-or from the shell without dropping requests.
+that can reconfigured live as part of a code update or config change in a
+release upgrade, or from the shell without dropping requests.
 
 There is a simple interface to match processes. One party calls `sbroker:ask/1`
 and the counterparty `sbroker:ask_r/1`. If a match is found both return
@@ -217,10 +217,10 @@ Smart Queues
 ------------
 
 The primary goal of Sojourn Broker is to reduce upper tail latency. The first
-step to achieving this is by only queuing when ready to handle a match. However
-once in the queue the request has to wait for a match, which may never come if a
-resource is unavailable or there are a lot of other requests causing the queue
-to move slowly.
+step to achieving this is by only queuing a request when ready to handle a
+match. Once in the queue the request has to wait for a match, which may not
+occur in a reasonable time if a resource is unavailable or there are a lot of
+other requests causing the queue to move slowly.
 
 The simplest approach is to limit the length of the queue and either prevent new
 requests joining the queue or drop the oldest request in the queue when the
@@ -286,20 +286,20 @@ then it will gain a similar proportion of matches. To avoid this situation
 `sbroker_fair_queue` can be used to load balance clients (or workers) on the
 broker itself. The fair queue creates one queue per application, client or other
 value and dequeues using a round robin strategy. Queues are created on demand
-and removed when nolonger used.
+and removed when no longer used.
 
 The CoDel algorithm works better with the fair queue than without because it can
 differentiate between flows. However the PIE meter does not combine well because
 it can not differentiate between the different flows and will see heavily
 fluctuating `SojournTime` values.
 
-It is also possible to load balance request between multiple brokers with
+It is also possible to load balance requests between multiple brokers with
 `srand` and `sscheduler`. These choose a random broker or a broker based on
 scheduler id. One of these can be combined with the `sbetter` load balancer that
 tries to even out the random load balancing by occasionally comparing the
 sojourn times on two random brokers and choosing the broker with the shortest
 sojourn time. All three of these load balancing modules can be used to load
-balanace any OTP process.
+balance any OTP process.
 
 Relative Time and Regulation
 ----------------------------
@@ -351,13 +351,13 @@ be ready, which could be the newly created worker.
 However with `RelativeTime` the group of workers can continuously monitor the
 queue congestion and pre-emptively create a worker before the empty worker queue
 situation occurs. One approach is to try to maintain a `RelativeTime` above a
-certain value by creating a worker every time it is below this value.
+certain value by creating a worker every time it is below a certain value.
 Effectively trying to keep the worker queue slightly slow so the client queue is
 always fast. This is an extension of the previous approach where a worker was
 created when the `RelativeTime` is less than or equal to `0`. For example,
-create a worker when workers are waiting less than `100` milliseconds,
-i.e. `RelativeTime < 100` milliseconds. See `sregulator` and
-`sregulator_relative_valve` for more information.
+create a worker when workers send a request less than `100` milliseconds before
+clients send a request, i.e. `RelativeTime < 100` milliseconds. See `sregulator`
+and `sregulator_relative_valve` for more information.
 
 If the `SojournTime` is used to gauge queue congestion in the worker's queue,
 the same issue occurs in the workers as the clients: unable to distinguish
@@ -376,7 +376,8 @@ term changes are adapted too without reacting too quickly to an initial burst.
 See `sregulator_codel_valve` for more information.
 
 An `sregulator` is similar to an `sbroker`, except the regulator acts as the
-`ask_r` and controls matching with `ask` requests using an `sregulator_valve`.
+`ask_r` side and controls matching with `ask` requests using an
+`sregulator_valve`.
 
 ```erlang
 -module(sregulator_example).
