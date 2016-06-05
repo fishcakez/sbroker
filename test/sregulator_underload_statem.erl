@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sbroker_alarm_statem).
+-module(sregulator_underload_statem).
 
 -include_lib("proper/include/proper.hrl").
 
@@ -29,13 +29,13 @@
 -export([change/3]).
 -export([timeout/2]).
 
--record(state, {target, interval, alarm, time, status, queue, interval_time}).
+-record(state, {target, interval, alarm, time, status, valve, interval_time}).
 
 module() ->
-    sbroker_alarm_meter.
+    sregulator_underload_meter.
 
 args() ->
-    {choose(0, 3),
+    {choose(-3, 3),
      choose(1, 5),
      desc()}.
 
@@ -43,30 +43,30 @@ desc() ->
     oneof([a, b, c]).
 
 init(Time, {Target, Interval, Alarm}) ->
-    State = #state{target=sbroker_util:sojourn_target(Target),
+    State = #state{target=sbroker_util:relative_target(Target),
                    interval=sbroker_util:interval(Interval), alarm=Alarm,
-                   status=fast, time=Time, queue=fast, interval_time=0},
+                   status=fast, time=Time, valve=fast, interval_time=0},
     {State, timeout(State, Time)}.
 
-update_next(State, Time, MsgQLen, QueueDelay, _, _) ->
-    NState = next(queue(MsgQLen, QueueDelay, State), State, Time),
+update_next(State, Time, _, _, _, RelativeTime) ->
+    NState = next(valve(RelativeTime, State), State, Time),
     {NState, timeout(NState, Time)}.
 
-update_post(State, Time, MsgQLen, QueueDelay, _, _) ->
-    NState = next(queue(MsgQLen, QueueDelay, State), State, Time),
+update_post(State, Time, _, _, _, RelativeTime) ->
+    NState = next(valve(RelativeTime, State), State, Time),
     {alarm_post(NState), timeout(NState, Time)}.
 
 change(#state{alarm=Alarm, interval_time=IntervalTime, time=PrevTime} = State,
        Time, {Target, Interval, Alarm}) ->
     NIntervalTime = IntervalTime - PrevTime + Time,
-    NState = State#state{target=sbroker_util:sojourn_target(Target),
+    NState = State#state{target=sbroker_util:relative_target(Target),
                          interval=sbroker_util:interval(Interval), time=Time,
                          interval_time=NIntervalTime},
     {NState, timeout(NState, Time)};
 change(_, Time, Args) ->
     init(Time, Args).
 
-timeout(#state{status=Status, queue=Status}, _) ->
+timeout(#state{status=Status, valve=Status}, _) ->
     infinity;
 timeout(#state{time=PrevTime, interval_time=IntervalTime,
                interval=Interval}, Time) ->
@@ -75,16 +75,14 @@ timeout(#state{time=PrevTime, interval_time=IntervalTime,
 
 %% Internal
 
-queue(_, QueueDelay, #state{target=Target}) when QueueDelay < Target ->
+valve(RelativeTime, #state{target=Target}) when -RelativeTime < Target ->
     fast;
-queue(0, 0, #state{target=0}) ->
-    fast;
-queue(_, _, _) ->
+valve(_, _) ->
     slow.
 
-next(Status, #state{status=Status, queue=Status} = State, Time) ->
+next(Status, #state{status=Status, valve=Status} = State, Time) ->
     State#state{time=Time};
-next(NStatus, #state{queue=NStatus, interval=Interval, time=PrevTime,
+next(NStatus, #state{valve=NStatus, interval=Interval, time=PrevTime,
                      interval_time=IntervalTime} = State, Time) ->
     case IntervalTime-PrevTime+Time of
         NIntervalTime when NIntervalTime >= Interval ->
@@ -93,13 +91,13 @@ next(NStatus, #state{queue=NStatus, interval=Interval, time=PrevTime,
             State#state{interval_time=NIntervalTime, time=Time}
     end;
 next(NStatus, #state{} = State, Time) ->
-    State#state{queue=NStatus, interval_time=0, time=Time}.
+    State#state{valve=NStatus, interval_time=0, time=Time}.
 
 alarm_post(#state{status=fast, alarm=Alarm}) ->
     case sbroker_test_handler:get_alarms() of
         [] ->
             true;
-        [{Alarm, {message_queue_slow, Pid}}] when Pid == self() ->
+        [{Alarm, {valve_slow, Pid}}] when Pid == self() ->
             ct:pal("Alarm set"),
             false
     end;
@@ -108,6 +106,6 @@ alarm_post(#state{status=slow, alarm=Alarm}) ->
         [] ->
             ct:pal("Alarm clear"),
             false;
-        [{Alarm, {message_queue_slow, Pid}}] when Pid == self() ->
+        [{Alarm, {valve_slow, Pid}}] when Pid == self() ->
             true
     end.

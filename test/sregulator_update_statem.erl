@@ -17,7 +17,7 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
--module(sregulator_meter_statem).
+-module(sregulator_update_statem).
 
 -include_lib("proper/include/proper.hrl").
 
@@ -33,7 +33,7 @@
 -record(queue, {ask, interval, start_interval, rem_interval=0}).
 
 module() ->
-    sregulator_meter.
+    sregulator_update_meter.
 
 args() ->
     Seed = rand:export_seed_s(rand:seed_s(exsplus)),

@@ -21,7 +21,7 @@
 %% slow for an interval. Once the message queue becomes fast for an interval the
 %% alarm is cleared.
 %%
-%% `sbroker_alarm_meter' can be used as the `sbroker_meter' in a `sbroker' or
+%% `sbroker_overload_meter' can be used as the `sbroker_meter' in a `sbroker' or
 %% a `sregulator'. Its argument is of the form:
 %% ```
 %% {Target :: non_neg_integer(), Interval :: pos_integer(), AlarmId :: any()}
@@ -32,7 +32,12 @@
 %% if the sojourn time is below `Target'  for `Interval' milliseconds the alarm
 %% is cleared. The description of the alarm is `{message_queue_slow, Pid}' where
 %% `Pid' is the `pid()' of the process.
--module(sbroker_alarm_meter).
+%%
+%% This meter detects when the process is receiving more requests than it can
+%% handle and not whether a `sbroker_queue' is congested. If a `sbroker_queue'
+%% becomes congested it will drop requests to clear the congestion, causing a
+%% congestion alarm to be cleared very quickly.
+-module(sbroker_overload_meter).
 
 -behaviour(sbroker_meter).
 

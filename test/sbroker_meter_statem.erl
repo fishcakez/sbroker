@@ -106,8 +106,9 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
 
 manager() ->
     frequency([{2, sbetter_meter_statem},
-               {2, sregulator_meter_statem},
-               {3, sbroker_alarm_statem},
+               {2, sregulator_update_statem},
+               {3, sregulator_underload_statem},
+               {3, sbroker_overload_statem},
                {4, sprotector_pie_statem}]).
 
 time() ->
@@ -135,7 +136,7 @@ init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
             Stop
     end.
 
-update_args(sregulator_meter, {Queues, BinSeed}) ->
+update_args(sregulator_update_meter, {Queues, BinSeed}) ->
     Regs = [{self(), Queue, Interval} || {Queue, Interval} <- Queues],
     {Regs, binary_to_term(BinSeed)};
 update_args(_, Args) ->

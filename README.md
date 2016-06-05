@@ -67,8 +67,8 @@ the queue is referred to as the `ask_r` queue.
 `MeterSpec` is a `handler_spec` for a meter running on the broker. Meters are
 given metric information and are called when the time is updated, see
 `sbroker_meter`. The following `sbroker_meter` modules are provided:
-`sbroker_alarm_meter`, `sbetter_meter`, `sprotector_pie_meter` and
-`sregulator_meter`.
+`sbroker_overload_meter`, `sbetter_meter`, `sprotector_pie_meter`,
+`sregulator_update_meter` and `sregulator_underload_meter`.
 
 For example:
 ```erlang
@@ -404,11 +404,11 @@ Then to use the regulator:
 {go, Ref, Pid, _, _} = sregulator:ask(sregulator_example).
 ```
 
-The `sregulator` is updated using the `sregulator_meter` in either a `sbroker`
-or `sregulator`, or explicitly using `sregulator:update/3` and
+The `sregulator` is updated using the `sregulator_update_meter` in either a
+`sbroker` or `sregulator`, or explicitly using `sregulator:update/3` and
 `sregulator:cast/2`:
 ```erlang
-{sregulator_meter, [{sregulator_example, ask_r, 100}]}
+{sregulator_update_meter, [{sregulator_example, ask_r, 100}]}
 ```
 This will meter will update `sregulator_example` with the `RelativeTime` of the
 `ask_r` queue around every 100 milliseconds.
@@ -421,7 +421,7 @@ init() ->
     loop(Ref, Pid).
 
 loop(Ref, Pid) ->
-    % The regulated queue is `ask_r`, so sregulator_meter above uses `ask_r` too
+    % The regulated queue is `ask_r` so sregulator_update_meter uses `ask_r` too
     case sbroker:ask_r(sbroker_example) of
         {go, _, _, _, _} ->
             % stuff happens

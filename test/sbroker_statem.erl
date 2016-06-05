@@ -221,9 +221,9 @@ queue_spec() ->
      {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}}.
 
 meter_spec() ->
-    oneof([{sbroker_alarm_meter, {0, 1000, ?MODULE}},
-          {sbetter_statem_meter, {self, {1000, 1000, 1000}}},
-          {sregulator_meter, [{undefined, ask, 1000}]}]).
+    oneof([{sbroker_overload_meter, {0, 1000, ?MODULE}},
+           {sbetter_statem_meter, {self, {1000, 1000, 1000}}},
+           {sregulator_update_meter, [{undefined, ask, 1000}]}]).
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, update_spec(Init)),
@@ -711,9 +711,9 @@ change_code_args(#state{sbroker=Broker}) ->
     Mod = oneof([{?MODULE, init()},
                  sbroker_statem_queue,
                  sbroker_statem2_queue,
-                 sbroker_alarm_meter,
+                 sbroker_overload_meter,
                  sbetter_statem_meter,
-                 sregulator_meter]),
+                 sregulator_update_meter]),
     [Broker, Mod, ?TIMEOUT].
 
 change_code(Broker, {?MODULE, Init}, Timeout) ->

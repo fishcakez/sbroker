@@ -21,8 +21,8 @@
 %% after a random interval. Regulators are updated with `sregulator:cast/2' and
 %% any errors sending the update are ignored.
 %%
-%% `sregulator_meter' can be used as the `sbroker_meter' in a `sbroker' or
-%% a `sregulator'. Its argument is of the form:
+%% `sregulator_update_meter' can be used as the `sbroker_meter' in a `sbroker'
+%% or a `sregulator'. Its argument is of the form:
 %% ```
 %% [{Regulator :: sregulator:regulator(), Queue :: ask | ask_r,
 %%   Update :: pos_integer()}, ...}].
@@ -36,7 +36,7 @@
 %% @see sregulator
 %% @reference Sally Floyd and Van Jacobson, The Synchronization of Periodic
 %% Routing Messages, 1994.
--module(sregulator_meter).
+-module(sregulator_update_meter).
 
 -behaviour(sbroker_meter).
 
