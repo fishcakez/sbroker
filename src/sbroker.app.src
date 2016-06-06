@@ -1,6 +1,6 @@
 {application, sbroker,
  [{description, "Low level pooling library"},
-  {vsn, "0.7.0"},
+  {vsn, "1.0.0-beta.1"},
   {mod, {sbroker_app, []}},
   {registered, []},
   {applications,
