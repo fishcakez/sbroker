@@ -363,8 +363,9 @@ async_ask(Broker, ReqValue) ->
 %% @doc Sends an asynchronous request to match with a process calling `ask_r/2'.
 %% Returns `{await, Tag, Pid}'.
 %%
-%% `Tag' is a `any()' that identifies the reply containing the result of the
-%% request. `Process/' is the `pid()' of the broker or `{atom(), node()}' if the
+%% `To' is a tuple containing the process, `pid()', to send the reply to and
+%% `Tag', `any()', that identifies the reply containing the result of the
+%% request. `Process' is the `pid()' of the broker or `{atom(), node()}' if the
 %% broker is registered locally on a different node. To cancel all requests
 %% identified by `Tag' on broker `Process' call `cancel(Process, Tag)'.
 %%
@@ -385,13 +386,15 @@ async_ask(Broker, ReqValue) ->
 %% `{drop, 0}' and does not send the request.
 %%
 %% @see cancel/2
--spec async_ask(Broker, ReqValue, Tag) -> {await, Tag, Process} | {drop, 0} when
+-spec async_ask(Broker, ReqValue, To) -> {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       ReqValue :: any(),
+      To :: {Pid, Tag},
+      Pid :: pid(),
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
-async_ask(Broker, ReqValue, Tag) ->
-    sbroker_gen:async_call(Broker, ask, ReqValue, Tag).
+async_ask(Broker, ReqValue, To) ->
+    sbroker_gen:async_call(Broker, ask, ReqValue, To).
 
 %% @equiv async_ask_r(Broker, self())
 -spec async_ask_r(Broker) -> {await, Tag, Process} | {drop, 0} when
@@ -418,14 +421,16 @@ async_ask_r(Broker, ReqValue) ->
 %%
 %% @see async_ask/3
 %% @see cancel/2
--spec async_ask_r(Broker, ReqValue, Tag) ->
+-spec async_ask_r(Broker, ReqValue, To) ->
     {await, Tag, Process} | {drop, 0} when
       Broker :: broker(),
       ReqValue :: any(),
+      To :: {Pid, Tag},
+      Pid :: pid(),
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
-async_ask_r(Broker, ReqValue, Tag) ->
-    sbroker_gen:async_call(Broker, bid, ReqValue, Tag).
+async_ask_r(Broker, ReqValue, To) ->
+    sbroker_gen:async_call(Broker, bid, ReqValue, To).
 
 %% @equiv dynamic_ask(Broker, self())
 -spec dynamic_ask(Broker) -> Go | Await | Drop when

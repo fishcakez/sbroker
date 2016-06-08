@@ -953,7 +953,8 @@ client_call({Pid, MRef}, Call) ->
 client_init(Broker, async_bid) ->
     MRef = monitor(process, Broker),
     ARef = make_ref(),
-    {await, ARef, Broker} = sbroker:async_ask_r(Broker, self(), ARef),
+    Self = self(),
+    {await, ARef, Broker} = sbroker:async_ask_r(Broker, Self, {Self, ARef}),
     client_init(MRef, Broker, ARef, queued);
 client_init(Broker, dynamic_bid) ->
     case sbroker:dynamic_ask_r(Broker) of
@@ -970,7 +971,8 @@ client_init(Broker, nb_bid) ->
 client_init(Broker, async_ask) ->
     MRef = monitor(process, Broker),
     ARef = make_ref(),
-    {await, ARef, Broker} = sbroker:async_ask(Broker, self(), ARef),
+    Self = self(),
+    {await, ARef, Broker} = sbroker:async_ask(Broker, Self, {Self, ARef}),
     client_init(MRef, Broker, ARef, queued);
 client_init(Broker, dynamic_ask) ->
     case sbroker:dynamic_ask(Broker) of

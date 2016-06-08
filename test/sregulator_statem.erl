@@ -933,7 +933,7 @@ client_call({Pid, MRef}, Call) ->
 client_init(Regulator, async_ask) ->
     MRef = monitor(process, Regulator),
     ARef = make_ref(),
-    {await, ARef, Regulator} = sregulator:async_ask(Regulator, ARef),
+    {await, ARef, Regulator} = sregulator:async_ask(Regulator, {self(), ARef}),
     client_init(MRef, Regulator, ARef, undefined, queued);
 client_init(Regulator, nb_ask) ->
     MRef = monitor(process, Regulator),

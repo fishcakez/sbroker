@@ -263,21 +263,23 @@ async_ask(Regulator) ->
 %% @doc Send an asynchronous run request using tag, `Tag'. Returns
 %% `{await, Tag, Process}'.
 %%
-%% `Tag' is any term, `any()', that idenitifes the reply containing the result
-%% of the request. `Process' is the `pid()' of the regulator or
-%% `{atom(), node()}' if the regulator is registered locally on a different
-%% node.
+%% `To' is a tuple containing the process, `pid()', to send the reply to and
+%% `Tag', `any()', that idenitifes the reply containing the result of the
+%% request. `Process' is the `pid()' of the regulator or `{atom(), node()}' if
+%% the regulator is registered locally on a different node.
 %%
 %% Otherwise this function is equivalent to `async_ask/1'.
 %%
 %% @see async_ask/1
 %% @see cancel/2
--spec async_ask(Regulator, Tag) -> {await, Tag, Process} | {drop, 0} when
+-spec async_ask(Regulator, To) -> {await, Tag, Process} | {drop, 0} when
       Regulator :: regulator(),
+      To :: {Pid, Tag},
+      Pid :: pid(),
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
-async_ask(Regulator, Tag) ->
-    sbroker_gen:async_call(Regulator, ask, self(), Tag).
+async_ask(Regulator, To) ->
+    sbroker_gen:async_call(Regulator, ask, self(), To).
 
 %% @doc Send a run request to the regulator, `Regulator'. If not immediately
 %% allowed to run the request is converted to an `async_ask/1'.

@@ -106,19 +106,21 @@ async_call(Process, Label, Msg) ->
             {drop, 0}
     end.
 
--spec async_call(Process, Label, Msg, Tag) ->
+-spec async_call(Process, Label, Msg, To) ->
     {await, Tag, NProcess} | {drop, 0} when
       Process :: process(),
       Label :: atom(),
       Msg :: any(),
+      To :: {Pid, Tag},
+      Pid :: pid(),
       Tag :: reference(),
       NProcess :: pid() | {atom(), node()}.
-async_call(Process, Label, Msg, Tag) ->
+async_call(Process, Label, Msg, {Pid, Tag} = To) when is_pid(Pid) ->
     try whereis(Process) of
          undefined ->
             exit({noproc, {?MODULE, async_call, [Process, Label, Msg, Tag]}});
         NProcess ->
-            _ = NProcess ! {Label, {self(), Tag}, Msg},
+            _ = NProcess ! {Label, To, Msg},
             {await, Tag, NProcess}
     catch
         exit:drop ->

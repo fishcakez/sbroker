@@ -108,7 +108,7 @@ ask(_) ->
     {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
-    {await, Ref, Broker} = sbroker:async_ask_r(Broker, self(), Ref),
+    {await, Ref, Broker} = sbroker:async_ask_r(Broker, Self, {Self, Ref}),
     1 = sbroker:len_r(Broker, ?TIMEOUT),
     {go, Ref2, Self, AskRel, AskTime} = sbroker:ask(Broker),
     0 = sbroker:len(Broker, ?TIMEOUT),
@@ -126,7 +126,7 @@ ask_r(_) ->
     {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
     Self = self(),
-    {await, Ref, Broker} = sbroker:async_ask(Broker, self(), Ref),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Self, {Self, Ref}),
     1 = sbroker:len(Broker, ?TIMEOUT),
     {go, Ref2, Self, AskRRel, AskRTime} = sbroker:ask_r(Broker),
     0 = sbroker:len(Broker, ?TIMEOUT),
@@ -143,7 +143,8 @@ ask_r(_) ->
 await_timeout(_) ->
     {ok, Broker} = sbroker_test:start_link(),
     Ref = make_ref(),
-    {await, Ref, Broker} = sbroker:async_ask(Broker, self(), Ref),
+    Self = self(),
+    {await, Ref, Broker} = sbroker:async_ask(Broker, Self, {Self, Ref}),
     {'EXIT',
      {timeout, {sbroker, await, [Ref, 0]}}} = (catch sbroker:await(Ref, 0)),
     ok.
@@ -170,7 +171,9 @@ skip_down_match(_) ->
                   end),
     receive
         {'DOWN', MRef, _, _, normal} ->
-            {await, Ref, _} = sbroker:async_ask_r(Broker, self(), make_ref()),
+            Ref = make_ref(),
+            Self = self(),
+            {await, Ref, _} = sbroker:async_ask_r(Broker, Self, {Self, Ref}),
             sys:resume(Broker),
             {drop, _} = sbroker:await(Ref, ?TIMEOUT),
             ok
