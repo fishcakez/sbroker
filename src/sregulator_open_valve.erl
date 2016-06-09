@@ -43,11 +43,13 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([size/1]).
+-export([open_time/1]).
 -export([terminate/2]).
 
 %% types
 
 -record(state, {max :: non_neg_integer() | infinity,
+                small_time :: integer(),
                 map :: sregulator_valve:internal_map()}).
 
 %% sregulator_valve api
@@ -58,26 +60,28 @@
       Time :: integer(),
       Max :: non_neg_integer() | infinity,
       State :: #state{}.
-init(Map, _, Max) ->
+init(Map, Time, Max) ->
     {0, Max} = sbroker_util:min_max(0, Max),
-    handle(#state{max=Max, map=Map}).
+    handle(#state{max=Max, small_time=Time, map=Map}).
 
 %% @private
 -spec handle_ask(Pid, Ref, Time, State) ->
-    {open | closed, NState, infinity} when
+    {go, Open, open | closed, NState, infinity} when
       Pid :: pid(),
       Ref :: reference(),
       Time :: integer(),
       State :: #state{},
+      Open :: integer(),
       NState :: #state{}.
-handle_ask(Pid, Ref, _, #state{max=Max, map=Map} = State) ->
+handle_ask(Pid, Ref, _, #state{max=Max, small_time=Small, map=Map} = State)
+  when map_size(Map) < Max ->
     NMap = maps:put(Ref, Pid, Map),
     NState = State#state{map=NMap},
-    if
-        map_size(NMap) < Max ->
-            {open, NState, infinity};
-        true ->
-            {closed, NState, infinity}
+    case map_size(NMap) of
+        Max ->
+            {go, Small, closed, NState, infinity};
+        _ ->
+            {go, Small, open, NState, infinity}
     end.
 
 %% @private
@@ -87,12 +91,15 @@ handle_ask(Pid, Ref, _, #state{max=Max, map=Map} = State) ->
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-handle_done(Ref, _, #state{max=Max, map=Map} = State) ->
+handle_done(Ref, Time, #state{max=Max, map=Map} = State) ->
     Before = map_size(Map),
     NMap = maps:remove(Ref, Map),
     After = map_size(NMap),
     NState = State#state{map=NMap},
     if
+        After < Before, Before =:= Max ->
+            demonitor(Ref, [flush]),
+            {done, open, NState#state{small_time=Time}, infinity};
         After < Before, After < Max ->
             demonitor(Ref, [flush]),
             {done, open, NState, infinity};
@@ -107,24 +114,26 @@ handle_done(Ref, _, #state{max=Max, map=Map} = State) ->
 
 %% @private
 -spec handle_continue(Ref, Time, State) ->
-    {continue | done | error, open | closed, NState, infinity} when
+    {go, Open, open | closed, NState, infinity} |
+    {done | error, open | closed, NState, infinity} when
       Ref :: reference(),
       Time :: integer(),
       State :: #state{},
+      Open :: integer(),
       NState :: #state{}.
-handle_continue(Ref, _, #state{max=Max, map=Map} = State)
+handle_continue(Ref, _, #state{max=Max, small_time=Small, map=Map} = State)
   when map_size(Map) < Max ->
     case maps:find(Ref, Map) of
         {ok, _} ->
-            {continue, open, State, infinity};
+            {go, Small, open, State, infinity};
         error ->
             {error, open, State, infinity}
     end;
-handle_continue(Ref, _, #state{max=Max, map=Map} = State)
+handle_continue(Ref, Time, #state{max=Max, map=Map} = State)
   when map_size(Map) =:= Max ->
     case maps:find(Ref, Map) of
         {ok, _} ->
-            {continue, closed, State, infinity};
+            {go, Time, closed, State, infinity};
         error ->
             {error, closed, State, infinity}
     end;
@@ -155,9 +164,15 @@ handle_update(_, _, State) ->
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-handle_info({'DOWN', Ref, process, _, _}, _, #state{map=Map} = State) ->
+handle_info({'DOWN', Ref, _, _, _}, Time, #state{map=Map, max=Max} = State) ->
+    Before = map_size(Map),
     NMap = maps:remove(Ref, Map),
-    handle(State#state{map=NMap});
+    case map_size(NMap) of
+        After when Before =:= Max, After < Max ->
+            handle(State#state{map=NMap, small_time=Time});
+        _ ->
+            handle(State#state{map=NMap})
+    end;
 handle_info(_,  _, State) ->
     handle(State).
 
@@ -196,6 +211,16 @@ config_change(Max, _, State) ->
       Size :: non_neg_integer().
 size(#state{map=Map}) ->
     map_size(Map).
+
+%% @private
+-spec open_time(State) -> Open | closed when
+      State :: #state{},
+      Open :: integer().
+open_time(#state{map=Map, max=Max, small_time=Small})
+  when map_size(Map) < Max ->
+    Small;
+open_time(#state{}) ->
+    closed.
 
 %% @private
 -spec terminate(Reason, State) -> Map when

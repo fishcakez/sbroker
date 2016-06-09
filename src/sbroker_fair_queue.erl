@@ -73,6 +73,7 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
+-export([send_time/1]).
 -export([terminate/2]).
 
 %% types
@@ -216,14 +217,14 @@ code_change(_, Time, #state{next=Next} = State, _) ->
 config_change({Module, Args, Index}, Time,
               #state{module=Module, index=Index} = State) ->
     Change = fun(_, Q) ->
-                     sbroker_queue:config_change(Module, Args, Time, Q)
+                     Module:config_change(Args, Time, Q)
              end,
     change(Change, Module, Args, State);
 config_change({Module2, Args, Index}, Time,
               #state{module=Module, index=Index} = State) ->
     Change = fun(_, Q) ->
-                     InternalQ = sbroker_queue:terminate(Module, change, Q),
-                     sbroker_queue:init(Module2, InternalQ, Time, Args)
+                     InternalQ = Module:terminate(change, Q),
+                     Module2:init(InternalQ, Time, Args)
              end,
     change(Change, Module2, Args, State);
 config_change({_, _, _} = Arg, Time, State) ->
@@ -237,6 +238,14 @@ len(#state{module=Module, queues=Qs}) ->
     maps:fold(fun(_, Q, Len) -> Module:len(Q) + Len end, 0, Qs).
 
 %% @private
+-spec send_time(State) -> SendTime | empty when
+      State :: #state{},
+      SendTime :: integer().
+send_time(#state{module=Module, queues=Qs}) ->
+    maps:fold(fun(_, Q, SendTime) -> min(Module:send_time(Q), SendTime) end,
+              empty, Qs).
+
+%% @private
 -spec terminate(Reason, State) -> InternalQ when
       Reason :: sbroker_handlers:reason(),
       State :: #state{},
@@ -244,7 +253,7 @@ len(#state{module=Module, queues=Qs}) ->
 terminate(Reason, #state{module=Module, queues=Qs, empties=Es})
   when Reason == change; Reason == stop ->
     Terminate = fun(_, Q, Acc) ->
-                        InternalQ = sbroker_queue:terminate(Module, Reason, Q),
+                        InternalQ = Module:terminate(Reason, Q),
                         queue:to_list(InternalQ) ++ Acc
                 end,
     EmptyTerminate = fun(QKey, {Q, _}, Acc) ->

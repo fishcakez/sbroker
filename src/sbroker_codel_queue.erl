@@ -83,6 +83,7 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
+-export([send_time/1]).
 -export([terminate/2]).
 
 %% types
@@ -283,6 +284,16 @@ config_change(Arg, Time,
       Len :: non_neg_integer().
 len(#state{len=Len}) ->
     Len.
+
+%% @private
+-spec send_time(State) -> SendTime | empty when
+      State :: #state{},
+      SendTime :: integer().
+send_time(#state{len=0}) ->
+    empty;
+send_time(#state{queue=Q}) ->
+    {SendTime, _, _, _} = queue:get(Q),
+    SendTime.
 
 %% @private
 -spec terminate(Reason, State) -> Q when

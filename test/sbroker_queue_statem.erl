@@ -83,6 +83,7 @@ command(#state{mod=Mod} = State) ->
                {4, {call, Mod, handle_info, info_args(State)}},
                {4, {call, ?MODULE, shutdown, shutdown_args(State)}},
                {4, {call, Mod, len, len_args(State)}},
+               {4, {call, Mod, send_time, send_time_args(State)}},
                {1, {call, Mod, terminate, terminate_args(State)}}]).
 
 precondition(State, {call, _, init_or_change, Args}) ->
@@ -103,6 +104,8 @@ precondition(State, {call, _, shutdown, Args}) ->
     shutdown_pre(State, Args);
 precondition(State, {call, _, len, Args}) ->
     len_pre(State, Args);
+precondition(State, {call, _, send_time, Args}) ->
+    send_time_pre(State, Args);
 precondition(State, {call, _, terminate, Args}) ->
     terminate_pre(State, Args).
 
@@ -122,6 +125,8 @@ next_state(State, Value, {call, _, shutdown, Args}) ->
     shutdown_next(State, Value, Args);
 next_state(State, Value, {call, _, len, Args}) ->
     len_next(State, Value, Args);
+next_state(State, Value, {call, _, send_time, Args}) ->
+    send_time_next(State, Value, Args);
 next_state(State, Value, {call, _, terminate, Args}) ->
     terminate_next(State, Value, Args).
 
@@ -141,6 +146,8 @@ postcondition(State, {call, _, shutdown, Args}, Result) ->
     shutdown_post(State, Args, Result);
 postcondition(State, {call, _, len, Args}, Result) ->
     len_post(State, Args, Result);
+postcondition(State, {call, _, send_time, Args}, Result) ->
+    send_time_post(State, Args, Result);
 postcondition(State, {call, _, terminate, Args}, Result) ->
     terminate_post(State, Args, Result).
 
@@ -171,7 +178,9 @@ init_or_change(undefined, undefined, _, Mod, Args, Time) ->
 init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
     Callback = {sbroker_queue, Mod1, State1, Mod2, Args2},
     Name = {?MODULE, self()},
-    case sbroker_handlers:config_change(Time, [Callback], [], [], Name) of
+    % Should use time for queue so use send time that will crash if used
+    case sbroker_handlers:config_change(bad_send, Time, [Callback], [], [],
+                                        Name) of
         {ok, [{_, _, NState, Timeout}], {[], infinity}} ->
             {ok, NState, Timeout};
         {stop, _} = Stop ->
@@ -569,6 +578,33 @@ len_post(#state{list=L}, _, Len) ->
             true;
         ExpLen ->
             ct:pal("Length~nExpected: ~p~nObserved: ~p", [ExpLen, Len]),
+            false
+    end.
+
+send_time_args(#state{queue=Q}) ->
+    [Q].
+
+send_time_pre(_, _) ->
+    true.
+
+send_time_next(State, _, _) ->
+    State.
+
+send_time_post(#state{list=[]}, _, SendTime) ->
+    case SendTime of
+        empty ->
+            true;
+        _ ->
+            ct:pal("Send Time~nExpected: ~p~nObserved: ~p", [empty, SendTime]),
+            false
+    end;
+send_time_post(#state{list=[{Sojourn, _, _}|_], time=Time}, _, SendTime) ->
+    case Time - Sojourn of
+        SendTime ->
+            true;
+        ExpSendTime ->
+            ct:pal("Send Time~nExpected: ~p~nObserved: ~p",
+                   [ExpSendTime, SendTime]),
             false
     end.
 

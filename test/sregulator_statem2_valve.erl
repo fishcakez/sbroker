@@ -33,6 +33,7 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([size/1]).
+-export([open_time/1]).
 -export([terminate/2]).
 
 %% sregulator_valve api
@@ -66,6 +67,9 @@ config_change(Opens, Time, State) ->
 
 size(State) ->
     sregulator_statem_valve:size(State).
+
+open_time(State) ->
+    sregulator_statem_valve:open_time(State).
 
 terminate(Reason, State) ->
     sregulator_statem_valve:terminate(Reason, State).

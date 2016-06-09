@@ -111,7 +111,7 @@
 
 %% private api
 
--export([code_change/5]).
+-export([code_change/6]).
 -export([terminate/3]).
 
 %% types
@@ -141,16 +141,17 @@
 %% private api
 
 %% @private
--spec code_change(Module, OldVsn, Time, State, Extra) ->
+-spec code_change(Module, OldVsn, Send, Time, State, Extra) ->
     {NState, TimeoutTime} when
       Module :: module(),
       OldVsn :: any(),
+      Send :: integer(),
       Time :: integer(),
       State :: any(),
       Extra :: any(),
       NState :: any(),
       TimeoutTime :: integer() | infinity.
-code_change(Mod, OldVsn, Time, State, Extra) ->
+code_change(Mod, OldVsn, _, Time, State, Extra) ->
     Mod:code_change(OldVsn, Time, State, Extra).
 
 %% @private

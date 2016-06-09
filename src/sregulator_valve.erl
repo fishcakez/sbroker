@@ -54,11 +54,13 @@
 %% ```
 %% -callback handle_ask(Ref :: reference() Pid :: pid(), Time :: integer(),
 %%                      State :: any()) ->
-%%      {Status :: open | closed, NState :: any(),
+%%      {go, Open, Status :: open | closed, NState :: any(),
 %%       TimeoutTime :: integer() | infinity}.
 %% '''
 %% `Ref' is a monitor reference of the sender, `Pid', as in the `InternalMap'
 %% in `init/3'.
+%%
+%% `Open' is the time the valve opened to allow this request.
 %%
 %% The other variables are equivalent to those in `init/3', with `NState' being
 %% the new state.
@@ -78,14 +80,18 @@
 %% When a request is asking to continue, `handle_continue/3':
 %% -callback handle_continue(Ref :: reference(), Time :: integer(),
 %%                       State :: any()) ->
-%%      {Result :: continue | done | error, Status :: open | closed,
-%%       NState :: any(), TimeoutTime :: integer() | infinity}.
+%%      {Result :: go, Open :: integer(), , Status :: open | closed,
+%%       NState :: any(), TimeoutTime :: integer() | infinity} |
+%%      {Result :: done | error, Status :: open | closed, NState :: any(),
+%%       TimeoutTime :: integer() | infinity}.
 %% '''
-%% `Result' is `continue' if `Ref' is known by the valve and is allowed to
+%%
+%% `Result' is `go' if `Ref' is known by the valve and is allowed to
 %% continue, if `Ref' is removed from the valve it is `done' and if `Ref' is not
 %% found in the valve it is `error'.
 %%
 %% The other variables are equivalent to those in `handle_ask/3'.
+%%
 %% When handling a message, `handle_info/3':
 %% ```
 %% -callback handle_info(Msg :: any(), Time :: integer(), State :: any()) ->
@@ -139,6 +145,14 @@
 %% being monitorred. This callback must be idempotent and not change the status
 %% of the valve.
 %%
+%% When returning the open time for the time the valve opened or will open if
+%% no side effects before then, `open_time/1':
+%% ```
+%% -callback open_time(State :: any()) -> OpenTime :: integer() | closed.
+%% '''
+%% `State' is the current state of the valve and `OpenTime' is the open time of
+%% the valve, if closed and will not open without a side effect then `closed'.
+%%
 %% When cleaning up the valve, `terminate/2':
 %% ```
 %% -callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
@@ -163,9 +177,9 @@
 %% sbroker_handlers api
 
 -export([initial_state/0]).
--export([init/4]).
--export([code_change/5]).
--export([config_change/4]).
+-export([init/5]).
+-export([code_change/6]).
+-export([config_change/5]).
 -export([terminate/3]).
 
 %% types
@@ -180,7 +194,7 @@
 
 -callback handle_ask(Pid :: pid(), Ref :: reference(), Time :: integer(),
                      State :: any()) ->
-    {Status :: open | closed, NState :: any(),
+    {Result :: go, Open :: integer(), Status :: open | closed, NState :: any(),
      TimeoutTime :: integer() | infinity}.
 
 -callback handle_done(Ref :: reference(), Time :: integer(), State :: any()) ->
@@ -189,8 +203,10 @@
 
 -callback handle_continue(Ref :: reference(), Time :: integer(),
                           State :: any()) ->
-    {Result :: continue | done | error, Status :: open | closed,
-     NState :: any(), TimeoutTime :: integer() | infinity}.
+    {Result :: go, Open :: integer(), Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity} |
+    {Result :: done | error, Status :: open | closed, NState :: any(),
+     TimeoutTime :: integer() | infinity}.
 
 -callback handle_update(RelativeTime :: integer(), Time :: integer(),
                         State :: any()) ->
@@ -216,6 +232,8 @@
 
 -callback size(State :: any()) -> Size :: non_neg_integer().
 
+-callback open_time(State :: any()) -> Open :: integer() | closed.
+
 -callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
     Map :: internal_map().
 
@@ -228,23 +246,25 @@ initial_state() ->
     #{}.
 
 %% @private
--spec init(Module, Map, Time, Args) -> {{Status, State}, TimeoutTime} when
+-spec init(Module, Map, Send, Time, Args) -> {{Status, State}, TimeoutTime} when
     Module :: module(),
     Map :: internal_map(),
+    Send :: integer(),
     Time :: integer(),
     Args :: any(),
     Status :: open | closed,
     State :: any(),
     TimeoutTime :: integer() | infinity.
-init(Mod, Map, Now, Args) ->
-    {Status, State, TimeoutTime} = Mod:init(Map, Now, Args),
+init(Mod, Map, Send, _, Args) ->
+    {Status, State, TimeoutTime} = Mod:init(Map, Send, Args),
     {{Status, State}, TimeoutTime}.
 
 %% @private
--spec code_change(Module, OldVsn, Time, {Status, State}, Extra) ->
+-spec code_change(Module, OldVsn, Send, Time, {Status, State}, Extra) ->
     {{NStatus, NState}, TimeoutTime} when
       Module :: module(),
       OldVsn :: any(),
+      Send :: integer(),
       Time :: integer(),
       Status :: open | closed,
       State :: any(),
@@ -252,23 +272,24 @@ init(Mod, Map, Now, Args) ->
       NStatus :: open | closed,
       NState :: any(),
       TimeoutTime :: integer() | infinity.
-code_change(Mod, OldVsn, Time, {_, State}, Extra) ->
-    {Status, NState, TimeoutTime} = Mod:code_change(OldVsn, Time, State, Extra),
+code_change(Mod, OldVsn, Send, _, {_, State}, Extra) ->
+    {Status, NState, TimeoutTime} = Mod:code_change(OldVsn, Send, State, Extra),
     {{Status, NState}, TimeoutTime}.
 
 %% @private
--spec config_change(Module, Args, Time, {Status, State}) ->
+-spec config_change(Module, Args, Send, Time, {Status, State}) ->
     {{NStatus, NState}, TimeoutTime} when
     Module :: module(),
     Args :: any(),
+    Send :: integer(),
     Time :: integer(),
     Status :: open | closed,
     State :: any(),
     NStatus :: open | closed,
     NState :: any(),
     TimeoutTime :: integer() | infinity.
-config_change(Mod, Args, Now, {_, State}) ->
-    {Status, NState, TimeoutTime} = Mod:config_change(Args, Now, State),
+config_change(Mod, Args, Send, _, {_, State}) ->
+    {Status, NState, TimeoutTime} = Mod:config_change(Args, Send, State),
     {{Status, NState}, TimeoutTime}.
 
 %% @private

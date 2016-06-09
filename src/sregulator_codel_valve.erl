@@ -88,6 +88,7 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([size/1]).
+-export([open_time/1]).
 -export([terminate/2]).
 
 %% types
@@ -99,6 +100,7 @@
                 count=0 :: non_neg_integer(),
                 open_next :: integer(),
                 open_first=infinity :: integer() | infinity | opening | await,
+                small_time :: integer(),
                 map :: sregulator_valve:internal_map()}).
 
 %% sregulator_valve api
@@ -118,34 +120,35 @@ init(Map, Time, {RelativeTarget, Interval, Min, Max}) ->
     State = #state{min=Min, max=Max,
                    target=sbroker_util:relative_target(RelativeTarget),
                    interval=sbroker_util:interval(Interval), open_next=Time,
-                   map=Map},
+                   small_time=Time, map=Map},
     handle(Time, State).
 
 %% @private
 -spec handle_ask(Pid, Ref, Time, State) ->
-    {open | closed, NState, infinity} when
+    {go, Open, open | closed, NState, infinity} when
       Pid :: pid(),
       Ref :: reference(),
       Time :: integer(),
       State :: #state{},
+      Open :: integer(),
       NState :: #state{}.
 handle_ask(Pid, Ref, Time,
-           #state{min=Min, open_first=First, open_next=Next,
+           #state{min=Min, open_first=First, open_next=Next, small_time=Small,
                   count=C, map=Map} = State) ->
     NMap = maps:put(Ref, Pid, Map),
     NState = State#state{map=NMap},
     if
         map_size(NMap) < Min ->
-            {open, NState, infinity};
+            {go, Small, open, NState, infinity};
         %% open based on size of Min-1
         map_size(NMap) =:= Min ->
-            handle(Time, NState);
+            go(Small, Time, NState);
         %% opening and fast for a consecutive interval
         First == opening, Time >= Next->
-            handle(Time, open_control(C+1, Next, NState));
+            go(Next, Time, open_control(C+1, Next, NState));
         %% fast for an initial interval
         Time >= First ->
-            handle(Time, open_control(Time, NState))
+            go(First, Time, open_control(Time, NState))
     end.
 
 %% @private
@@ -161,28 +164,30 @@ handle_done(Ref, Time, #state{map=Map} = State) ->
 
 %% @private
 -spec handle_continue(Ref, Time, State) ->
-    {continue | done | error, open | closed, NState, infinity} when
+    {go, Open, open | closed, NState, infinity} |
+    {done | error, open | closed, NState, infinity} when
       Ref :: reference(),
       Time :: integer(),
       State :: #state{},
+      Open :: integer(),
       NState :: #state{}.
 handle_continue(Ref, Time,
                 #state{min=Min, max=Max, open_first=First, open_next=Next,
-                       count=C, map=Map} = State) ->
+                       small_time=Small, count=C, map=Map} = State) ->
   Size = map_size(Map),
   if
       Size < Min ->
-          continue(Ref, Map, Size, Time, State, State);
+          continue(Ref, Map, Size, Small, Time, State, State);
       Size =:= Min ->
-          continue(Ref, Map, Size, Time, State, State);
+          continue(Ref, Map, Size, Time, Time, State, State);
       Size > Max ->
           done(Ref, Map, Size, Time, State);
       First == opening, Time >= Next ->
           NState = open_control(C+1, Next, State),
-          continue(Ref, Map, Size, Time, State, NState);
+          continue(Ref, Map, Size, Next, Time, State, NState);
       is_integer(First), Time >= First ->
           NState = open_control(Time, State),
-          continue(Ref, Map, Size, Time, State, NState);
+          continue(Ref, Map, Size, First, Time, State, NState);
       true ->
           done(Ref, Map, Size, Time, State)
   end.
@@ -216,9 +221,15 @@ handle_update(_, Time, State) ->
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-handle_info({'DOWN', Ref, process, _, _}, Time, #state{map=Map} = State) ->
+handle_info({'DOWN', Ref, _, _, _}, Time, #state{map=Map, min=Min} = State) ->
+    Before = map_size(Map),
     NMap = maps:remove(Ref, Map),
-    handle(Time, State#state{map=NMap});
+    case map_size(NMap) of
+        After when Before =:= Min, After < Min ->
+            handle(Time, State#state{map=NMap, small_time=Time});
+        _ ->
+            handle(Time, State#state{map=NMap})
+    end;
 handle_info(_, Time, State) ->
     handle(Time, State).
 
@@ -266,6 +277,24 @@ size(#state{map=Map}) ->
     map_size(Map).
 
 %% @private
+-spec open_time(State) -> Open | closed when
+      State :: #state{},
+      Open :: integer().
+open_time(#state{map=Map, min=Min, small_time=Small})
+  when map_size(Map) < Min ->
+    Small;
+open_time(#state{map=Map, max=Max}) when map_size(Map) >= Max ->
+    closed;
+open_time(#state{open_first=infinity}) ->
+    closed;
+open_time(#state{open_first=await}) ->
+    closed;
+open_time(#state{open_first=opening, open_next=Next}) ->
+    Next;
+open_time(#state{open_first=First}) ->
+    First.
+
+%% @private
 -spec terminate(Reason, State) -> Map when
       Reason :: any(),
       State :: #state{},
@@ -274,6 +303,9 @@ terminate(_, #state{map=Map}) ->
     Map.
 
 %% Internal
+
+go(Open, Time, #state{map=Map} = State) ->
+    {go, Open, status(map_size(Map), Time, State), State, infinity}.
 
 handle(Time, #state{map=Map} = State) ->
     {status(map_size(Map), Time, State), State, infinity}.
@@ -309,20 +341,22 @@ open_control(C, Time, #state{interval=Interval} = State) ->
     Next = Time + trunc(Interval / math:sqrt(C)),
     State#state{count=C, open_first=await, open_next=Next}.
 
-continue(Ref, Map, Size, Time, ErrorState, OKState) ->
+continue(Ref, Map, Size, Open, Time, ErrorState, OKState) ->
     case maps:find(Ref, Map) of
         {ok, _} ->
-            {continue, status(Size, Time, OKState), OKState, infinity};
+            {go, Open, status(Size, Time, OKState), OKState, infinity};
         error ->
             {error, status(Size, Time, ErrorState), ErrorState, infinity}
     end.
 
-done(Ref, Map, Before, Time, State) ->
+done(Ref, Map, Before, Time, #state{min=Min} = State) ->
     NMap = maps:remove(Ref, Map),
     NState = State#state{map=NMap},
     case map_size(NMap) of
         Before ->
             {error, status(Before, Time, NState), NState, infinity};
+        _ when Before =:= Min ->
+            {done, open, NState#state{small_time=Time}, infinity};
         After ->
             demonitor(Ref, [flush]),
             {done, status(After, Time, NState), NState, infinity}

@@ -31,6 +31,7 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
+-export([send_time/1]).
 -export([terminate/2]).
 
 -record(state, {config :: [non_neg_integer()],
@@ -115,6 +116,14 @@ config_change({Out, Config}, Time, State) ->
 
 len(#state{queue=Q}) ->
     queue:len(Q).
+
+send_time(#state{queue=Q}) ->
+    case queue:peek(Q) of
+        {value, {SendTime, _, _, _}} ->
+            SendTime;
+        empty ->
+            empty
+    end.
 
 terminate(_, #state{queue=Q}) ->
     Q.

@@ -129,7 +129,9 @@ init_or_change(Mod1, State1, _, Mod2, Args2, Time) ->
     Meters = [{Mod1, State1}],
     MeterArgs = [{Mod2, update_args(Mod2, Args2)}],
     Name = {?MODULE, self()},
-    case sbroker_handlers:config_change(Time, [], Meters, MeterArgs, Name) of
+    % Should use time for meter so use sent time that will crash if used
+    case sbroker_handlers:config_change(bad_send, Time, [], Meters, MeterArgs,
+                                        Name) of
         {ok, [], {[{Mod2, NState}], Timeout}} ->
             {ok, NState, Timeout};
         {stop, _} = Stop ->

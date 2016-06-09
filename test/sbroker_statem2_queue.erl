@@ -31,6 +31,7 @@
 -export([code_change/4]).
 -export([config_change/3]).
 -export([len/1]).
+-export([send_time/1]).
 -export([terminate/2]).
 
 %% This sbroker_queue module is used to an alternate to sbroker_statem_queue
@@ -65,6 +66,9 @@ config_change(Args, Time, State) ->
 
 len(State) ->
     sbroker_statem_queue:len(State).
+
+send_time(State) ->
+    sbroker_statem_queue:send_time(State).
 
 terminate(Reason, State) ->
     sbroker_statem_queue:terminate(Reason, State).

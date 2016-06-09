@@ -138,6 +138,15 @@
 %% `State' is the current state of the queue and `Len' is the number of queued
 %% requests. This callback must be idempotent and so not drop any requests.
 %%
+%% When returning the send time of the oldest request in the queue,
+%% `send_time/1':
+%% ```
+%% -callback send_time(State :: any()) -> SendTime :: integer() | empty.
+%% '''
+%% `State' is the current state of the queue and `SendTime' is the send time of
+%% the oldest request, if not requests then `empty'. This callback must be
+%% idempotent and so not drop any requests.
+%%
 %% When cleaning up the queue, `terminate/2':
 %% ```
 %% -callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
@@ -166,9 +175,9 @@
 %% sbroker_handlers api
 
 -export([initial_state/0]).
--export([init/4]).
--export([code_change/5]).
--export([config_change/4]).
+-export([init/5]).
+-export([code_change/6]).
+-export([config_change/5]).
 -export([terminate/3]).
 
 %% types
@@ -210,6 +219,8 @@
 
 -callback len(State :: any()) -> Len :: non_neg_integer().
 
+-callback send_time(State :: any()) -> SendTime :: integer() | empty.
+
 -callback terminate(Reason :: sbroker_handlers:reason(), State :: any()) ->
     Q :: internal_queue().
 
@@ -235,38 +246,42 @@ initial_state() ->
     queue:new().
 
 %% @private
--spec init(Module, Q, Time, Args) -> {State, TimeoutTime} when
+-spec init(Module, Q, Send, Time, Args) -> {State, TimeoutTime} when
     Module :: module(),
     Q :: internal_queue(),
+    Send :: integer(),
     Time :: integer(),
     Args :: any(),
     State :: any(),
     TimeoutTime :: integer() | infinity.
-init(Mod, Q, Now, Args) ->
+init(Mod, Q, _, Now, Args) ->
     Mod:init(Q, Now, Args).
 
 %% @private
--spec code_change(Module, OldVsn, Time, State, Extra) ->
+-spec code_change(Module, OldVsn, Send, Time, State, Extra) ->
     {NState, TimeoutTime} when
       Module :: module(),
       OldVsn :: any(),
+      Send :: integer(),
       Time :: integer(),
       State :: any(),
       Extra :: any(),
       NState :: any(),
       TimeoutTime :: integer() | infinity.
-code_change(Mod, OldVsn, Time, State, Extra) ->
+code_change(Mod, OldVsn, _, Time, State, Extra) ->
     Mod:code_change(OldVsn, Time, State, Extra).
 
 %% @private
--spec config_change(Module, Args, Time, State) -> {NState, TimeoutTime} when
+-spec config_change(Module, Args, Send, Time, State) ->
+    {NState, TimeoutTime} when
     Module :: module(),
     Args :: any(),
+    Send :: integer(),
     Time :: integer(),
     State :: any(),
     NState :: any(),
     TimeoutTime :: integer() | infinity.
-config_change(Mod, Args, Now, State) ->
+config_change(Mod, Args, _, Now, State) ->
     Mod:config_change(Args, Now, State).
 
 %% @private
