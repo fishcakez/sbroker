@@ -279,8 +279,8 @@ async_ask(Regulator) ->
       Pid :: pid(),
       Tag :: any(),
       Process :: pid() | {atom(), node()}.
-async_ask(Regulator, To) ->
-    sbroker_gen:async_call(Regulator, ask, self(), To).
+async_ask(Regulator, {Pid, _} = To) when is_pid(Pid) ->
+    sbroker_gen:async_call(Regulator, ask, Pid, To).
 
 %% @doc Send a run request to the regulator, `Regulator'. If not immediately
 %% allowed to run the request is converted to an `async_ask/1'.
