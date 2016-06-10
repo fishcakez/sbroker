@@ -52,7 +52,7 @@
 %%
 %% When allowing a request to run, `handle_ask/4':
 %% ```
-%% -callback handle_ask(Ref :: reference() Pid :: pid(), Time :: integer(),
+%% -callback handle_ask(Ref :: reference(), Pid :: pid(), Time :: integer(),
 %%                      State :: any()) ->
 %%      {go, Open, Status :: open | closed, NState :: any(),
 %%       TimeoutTime :: integer() | infinity}.
