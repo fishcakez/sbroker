@@ -684,10 +684,10 @@ update_time(_, #time{seq=Seq} = Time, _, _, __) ->
 
 update_meter(Now, _, #time{meters=[]} = Time, _, _, _) ->
     Time#time{now=Now, seq=0};
-update_meter(Now, open, #time{send=Send, empty=Empty} = Time, Q, V,
+update_meter(Now, open, #time{send=Send} = Time, Q, V,
              #config{valve_mod=VMod} = Config) ->
     try VMod:open_time(V) of
-        Open when is_integer(Open), Open =< Send, Open >= Empty ->
+        Open when is_integer(Open), Open =< Send ->
             RelativeTime = Open - Send,
             update_meter(Now, open, RelativeTime, Open, Time, Q, V, Config);
         Other ->
@@ -871,7 +871,7 @@ closed(Msg, Time, Q, V, Next, Config) ->
 common({update, From, Value}, State, #time{send=Send} = Time, Q, V, _,
        #config{valve_mod=VMod} = Config) ->
     try VMod:handle_update(Value, Send, V) of
-        {NState, NV, Next}  when NState == open; NState == closed ->
+        {NState, NV, Next} when NState == open; NState == closed ->
             updated(From),
             queue_timeout(State, NState, Time, Q, NV, Next, Config);
         Other ->
