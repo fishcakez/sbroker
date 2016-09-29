@@ -223,7 +223,7 @@ drop_control(Sojourn,
         Interval ->
             {0.0, Pie};
         _ ->
-            {0.0, Pie#pie{allowance=Allowance}}
+            {0.0, Pie#pie{allowance=Interval}}
     end;
 drop_control(_, #pie{allowance=Allowance} = Pie) when Allowance > 0 ->
     {0.0, Pie};
