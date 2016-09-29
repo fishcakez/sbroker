@@ -39,9 +39,6 @@
               prev_update,
               drop_prob = 0.0}).
 
-%     tar,    cur,    old,     burst   burst_allow up   up_n     prev_up  drop_prob
-%{pie,2000000, 0,     4000000, 3000000,1000000, 3000000, -4000000,-7000000, 1.220703125e-6}
-%
 module() ->
     sprotector_pie_meter.
 
@@ -72,8 +69,8 @@ update_post({AskPie, BidPie}, Time, MsgQueueLen, QueueDelay, _, RelativeTime) ->
     {DropPost andalso len_post(MsgQueueLen), Next}.
 
 drop_post(ExpDrop, Queue) ->
-    case sprotector_server:lookup(self(), ask) of
-        Drop when Drop + 0.0005 > ExpDrop, Drop - 0.0005 < ExpDrop ->
+    case sprotector_server:lookup(self(), Queue) of
+        Drop when Drop + 0.000005 > ExpDrop, Drop - 0.000005 < ExpDrop ->
             true;
         ObsDrop ->
             ct:pal("Drop ~p~nExpected: ~p~nObserved: ~p",
@@ -146,14 +143,14 @@ update(#pie{drop_prob=DropProb, old=Old, target=Target,
 
     NDropProb = DropProb + NP,
 
-    NDropProb2 = if
-                     Current == 0.0, Old == 0.0 ->
-                         NDropProb * 0.98;
-                     true ->
-                         NDropProb
-                 end,
+    NDropProb2 = max(0.0, min(1.0, NDropProb)),
 
-    NDropProb3 = max(0.0, min(1.0, NDropProb2)),
+    NDropProb3 = if
+                     Current == 0, Old == 0 ->
+                         NDropProb2 * 0.98;
+                     true ->
+                         NDropProb2
+                 end,
 
     Pie#pie{drop_prob=NDropProb3, old=Current, prev_update=Time,
             update_next=Time+Update,
@@ -166,9 +163,9 @@ enqueue(#pie{drop_prob=DropProb, current=Current, target=Target, old=Old,
     if
         DropProb == 0.0, Current < Target div 2, Old < Target div 2 ->
             {0.0, Pie#pie{burst_allowance=Burst}};
-        DropProb < 0.2, Old < Target div 2 ->
-            {0.0, Pie};
         BurstAllow > 0 ->
+            {0.0, Pie};
+        DropProb < 0.2, Old < Target div 2 ->
             {0.0, Pie};
         true ->
             {DropProb, Pie}
