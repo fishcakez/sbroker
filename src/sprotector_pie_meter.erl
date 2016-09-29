@@ -189,7 +189,7 @@ update(Sojourn, Time,
     NDrop = adjust((Sojourn - Target) / Alpha + (Sojourn - Last) / Beta, Drop),
     NDrop2 = decay(NDrop, Sojourn, Last),
     NPie = Pie#pie{last=Sojourn, updated=Time, drop=NDrop2,
-                   allowance=min(0, Allowance-Updated)},
+                   allowance=max(0, Allowance-(Time-Updated))},
     drop_control(Sojourn, NPie).
 
 adjust(Diff, Drop) ->
@@ -248,7 +248,7 @@ change(Target, Interval, #pie{last=Last} = Pie) ->
 change_allowance(_, #pie{allowance=0}) ->
     0;
 change_allowance(NInterval, #pie{allowance=Allowance, interval=PrevInterval}) ->
-    min(0, Allowance - PrevInterval + NInterval).
+    max(0, Allowance - PrevInterval + NInterval).
 
 queue_len() ->
     {_, Len} = process_info(self(), message_queue_len),
