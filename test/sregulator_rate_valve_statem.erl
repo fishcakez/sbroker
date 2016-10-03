@@ -39,7 +39,7 @@ args() ->
     ?LET({Min, Max},
          ?SUCHTHAT({Min, Max}, {choose(0, 5), oneof([choose(0, 5), infinity])},
                    Min =< Max),
-         {choose(0, 2), 1, Min, Max}).
+         {choose(0, 5), choose(1, 5), Min, Max}).
 
 init({Limit, Interval, Min, Max}, Size, Time) ->
     NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),

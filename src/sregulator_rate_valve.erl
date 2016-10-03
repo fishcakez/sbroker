@@ -81,7 +81,7 @@
 init(Map, Time, {Limit, Interval, Min, Max}) ->
     {Min, Max} = sbroker_util:min_max(Min, Max),
     Limit = limit(Limit),
-    {Overflow, Opens, Next} = change(Map, Limit, Min, Time, queue:new()),
+    {Overflow, Opens, Next} = change(Map, Limit, 0, Min, Time, queue:new()),
     State = #state{min=Min, max=Max, interval=sbroker_util:interval(Interval),
                    overflow=Overflow, opens=Opens, open_next=Next,
                    small_time=Time, map=Map},
@@ -229,12 +229,13 @@ code_change(_, Time, State, _) ->
       NState :: #state{},
       NextTimeout :: integer() | infinity.
 config_change({Limit, Interval, Min, Max}, Time,
-              #state{opens=Opens, map=Map} = State) ->
+              #state{interval=PrevInterval, opens=Opens, map=Map} = State) ->
     {Min, Max} = sbroker_util:min_max(Min, Max),
     Limit = limit(Limit),
-    {Overflow, NOpens, Next} = change(Map, Limit, Min, Time, Opens),
-    NState = State#state{min=Min, max=Max,
-                         interval=sbroker_util:interval(Interval),
+    NInterval = sbroker_util:interval(Interval),
+    Diff = NInterval - PrevInterval,
+    {Overflow, NOpens, Next} = change(Map, Limit, Diff, Min, Time, Opens),
+    NState = State#state{min=Min, max=Max, interval=NInterval,
                          overflow=Overflow, opens=NOpens, open_next=Next},
     handle(Time, NState).
 
@@ -273,25 +274,29 @@ limit(Limit) when is_integer(Limit), Limit >= 0 ->
 limit(Limit) ->
     error(badarg, [Limit]).
 
-change(Map, Limit, Min, Time, Opens) ->
+change(Map, Limit, IntervalDiff, Min, Time, Opens) ->
     OverCapacity = max(0, map_size(Map) - Min),
-    change(Limit-OverCapacity, Time, Opens).
+    change(Limit-OverCapacity, IntervalDiff, Time, Opens).
 
-change(OpenLen, Time, Opens) when OpenLen > 0 ->
+change(OpenLen, IntervalDiff, Time, Opens) when OpenLen > 0 ->
     case queue:len(Opens) of
         PrevLen when PrevLen < OpenLen ->
-            List = queue:to_list(Opens),
+            List = adjust_opens(IntervalDiff, queue:to_list(Opens)),
             {Head, Tail} = lists:splitwith(fun(Open) -> Open < Time end, List),
             New = lists:duplicate(OpenLen-PrevLen, Time),
             NOpens = queue:from_list(Head ++ New ++ Tail),
             {0, NOpens, queue:get(NOpens)};
         PrevLen when PrevLen >= OpenLen ->
-            {NOpens, _} = queue:split(OpenLen, Opens),
+            List = queue:to_list(Opens),
+            NList = adjust_opens(IntervalDiff, lists:sublist(List, OpenLen)),
+            NOpens = queue:from_list(NList),
             {0, NOpens, queue:get(NOpens)}
     end;
-change(NegOverflow, _, _) ->
+change(NegOverflow, _, _, _) ->
     {-NegOverflow, queue:new(), infinity}.
 
+adjust_opens(0, Opens)    -> Opens;
+adjust_opens(Diff, Opens) -> [Open + Diff || Open <- Opens].
 
 limit_continue(_, #state{overflow=0, open_next=infinity} = State) ->
     State;
