@@ -68,7 +68,7 @@
 %%     end.
 %%
 %% continue(Ref) ->
-%%     case sregulator:continue(?MODULE, Ref, 5000) of
+%%     case sregulator:continue(?MODULE, Ref) of
 %%        {go, Ref, _, _, _} -> {ok, Ref};
 %%        {done, _}          -> {error, dropped};
 %%        {not_found, _}     -> {error, not_found}
