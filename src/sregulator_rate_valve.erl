@@ -24,7 +24,7 @@
 %% `sregulator'. Its argument is of the form:
 %% ```
 %% {Limit :: non_neg_integer(), Interval :: pos_integer(),
-%%  Min :: non_neg_integer(), Max :: non_neg_integer() | infinity
+%%  Min :: non_neg_integer(), Max :: non_neg_integer() | infinity}
 %% '''
 %% `Limit' is the number of new tasks that can run when the number of
 %% concurrent tasks is at or above the minimum capacity, `Min', and below the
