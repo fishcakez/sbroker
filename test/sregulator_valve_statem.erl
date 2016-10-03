@@ -41,7 +41,7 @@
 -export([shutdown/5]).
 
 -record(state, {manager, manager_state, mod, valve, time, list=[], done=[],
-                shutdown=[], min, max, status}).
+                shutdown=[], min, max, status, timeout}).
 
 quickcheck() ->
     quickcheck([]).
@@ -73,11 +73,10 @@ initial_state() ->
 
 command(#state{mod=undefined} = State) ->
     {call, ?MODULE, init_or_change, init_or_change_args(State)};
-command(#state{status=open} = State) ->
-    frequency([{2, command(State#state{status=closed})},
-               {1, {call, ?MODULE, handle_ask, handle_ask_args(State)}}]);
 command(#state{mod=Mod} = State) ->
-    frequency([{24, {call, Mod, handle_update, handle_update_args(State)}},
+    frequency([{handle_update_freq(State),
+                {call, Mod, handle_update, handle_update_args(State)}},
+               {12, {call, ?MODULE, handle_ask, handle_ask_args(State)}},
                {8, {call, ?MODULE, handle_done, handle_done_args(State)}},
                {8, {call, ?MODULE, handle_continue,
                     handle_continue_args(State)}},
@@ -155,6 +154,7 @@ postcondition(State, {call, _, terminate, Args}, Result) ->
 
 manager() ->
     frequency([{8, sregulator_codel_valve_statem},
+               {4, sregulator_rate_valve_statem},
                {4, sregulator_relative_valve_statem},
                {2, sregulator_open_valve_statem},
                {1, sregulator_statem_valve_statem}]).
@@ -201,41 +201,55 @@ init_or_change_pre(#state{manager=undefined, mod=undefined}, _) ->
 init_or_change_pre(#state{time=PrevTime}, [_, _, _, _, _, _, Time]) ->
     PrevTime >= Time.
 
-init_or_change_next(#state{manager=undefined} = State, Value,
+init_or_change_next(#state{manager=undefined, list=L} = State, Value,
                     [_, _, _, Manager, Mod, Args, Time]) ->
     V = {call, erlang, element, [3, Value]},
-    {Min, Max, Status, ManState} = Manager:init(Args),
+    Timeout = {call, erlang, element, [4, Value]},
+    {Min, Max, Status, ManState} = Manager:init(Args, length(L), Time),
     State#state{manager=Manager, mod=Mod, valve=V, time=Time,
-                manager_state=ManState, status=Status, min=Min, max=Max};
-init_or_change_next(#state{manager=Manager, manager_state=ManState} = State,
-                   Value, [Mod, _, _, Manager, Mod, Args, Time]) ->
+                manager_state=ManState, status=Status, min=Min, max=Max,
+                timeout=Timeout};
+init_or_change_next(#state{list=L, manager=Manager,
+                           manager_state=ManState} = State, Value,
+                    [Mod, _, _, Manager, Mod, Args, Time]) ->
     V = {call, erlang, element, [3, Value]},
-    {Min, Max, NStatus, NManState} = Manager:config_change(Args, Time,
-                                                           ManState),
+    Timeout = {call, erlang, element, [4, Value]},
+    {Min, Max, NStatus, NManState} = Manager:config_change(Args, length(L),
+                                                           Time, ManState),
     State#state{valve=V, manager_state=NManState, time=Time, status=NStatus,
-                min=Min, max=Max};
+                min=Min, max=Max, timeout=Timeout};
 init_or_change_next(#state{list=L}, Value,
                     [_, _, _, Manager, Mod, Args, Time]) ->
-    State = init_or_change_next(initial_state(), Value,
-                                [undefined, undefined, undefined, Manager, Mod,
-                                 Args, Time]),
-    State#state{list=L}.
+    InitState = initial_state(),
+    init_or_change_next(InitState#state{list=L}, Value,
+                        [undefined, undefined, undefined, Manager, Mod, Args,
+                         Time]).
 
 init_or_change_post(#state{manager=undefined}, _, _) ->
     true;
-init_or_change_post(#state{manager=Manager, manager_state=ManState} = State,
+init_or_change_post(#state{list=L, manager=Manager,
+                           manager_state=ManState} = State,
                     [Mod, _, _, Manager, Mod, Args, Time],
                     {ok, Status, V, Timeout}) ->
-    {Min, Max, Status2, _} = Manager:config_change(Args, Time, ManState),
-    post(State#state{min=Min, max=Max, status=Status2, valve=V}, Status) andalso
-    timeout_post(Time, Timeout);
+    {Min, Max, Status2, NManState} = Manager:config_change(Args, length(L),
+                                                           Time, ManState),
+    NState = State#state{min=Min, max=Max, manager_state=NManState,
+                         status=Status2, valve=V},
+    post(NState, Status, Timeout);
 init_or_change_post(#state{list=L}, [_, _, _, Manager, Mod, Args, Time],
                     {ok, Status, V, Timeout} = Result) ->
-    NState = init_or_change_next(initial_state(), Result,
-                                [undefined, undefined, undefined, Manager, Mod,
-                                 Args, Time]),
-    post(NState#state{list=L, valve=V}, Status) andalso
-    timeout_post(Time, Timeout).
+    InitState = initial_state(),
+    NState = init_or_change_next(InitState#state{list=L}, Result,
+                                 [undefined, undefined, undefined, Manager, Mod,
+                                  Args, Time]),
+    NState2 = NState#state{valve=V},
+    post(NState2, Status, Timeout).
+
+handle_update_freq(#state{manager=Manager}) ->
+    case erlang:function_exported(Manager, handle_update, 3) of
+        true  -> 24;
+        false -> 1
+    end.
 
 handle_update_args(#state{time=Time, valve=V}) ->
     [relative_time(), time(Time), V].
@@ -246,14 +260,17 @@ handle_update_pre(#state{time=PrevTime}, [_, Time, _]) ->
 handle_update_next(#state{manager=Manager, manager_state=ManState} = State,
                    Value, [RelativeTime, Time, _]) ->
     V = {call, erlang, element, [2, Value]},
-    {NStatus, NManState} = Manager:handle_update(RelativeTime, Time, ManState),
-    State#state{valve=V, time=Time, manager_state=NManState, status=NStatus}.
+    Timeout = {call, erlang, element, [3, Value]},
+    {NStatus, NManState} = handle_update(Manager, RelativeTime, Time, ManState),
+    State#state{valve=V, time=Time, manager_state=NManState, status=NStatus,
+                timeout=Timeout}.
 
 handle_update_post(#state{manager=Manager, manager_state=ManState} = State,
                    [RelativeTime, Time, _], {Status, V, Timeout}) ->
-    {Status2, _} = Manager:handle_update(RelativeTime, Time, ManState),
-    post(State#state{status=Status2, valve=V}, Status) andalso
-    timeout_post(Time, Timeout).
+    {Status2, NManState} = handle_update(Manager, RelativeTime, Time, ManState),
+    NState = State#state{time=Time, manager_state=NManState, status=Status2,
+                         valve=V},
+    post(NState, Status, Timeout).
 
 handle_ask(Mod, Time, V) ->
     {Pid, Ref} = Client = spawn_client(),
@@ -264,37 +281,29 @@ handle_ask(Mod, Time, V) ->
 handle_ask_args(#state{mod=Mod, time=Time, valve=V}) ->
     [Mod, time(Time), V].
 
-handle_ask_pre(#state{time=PrevTime, list=L, max=Max, status=Status},
+handle_ask_pre(#state{time=PrevTime, list=L, min=Min, max=Max, status=Status},
                [_, Time, _]) ->
-    Time >= PrevTime andalso length(L) < Max andalso Status == open.
+    Time >= PrevTime andalso
+    (length(L) < Min orelse (length(L) < Max andalso Status == open)).
 
-handle_ask_next(#state{list=L, min=Min, manager=Manager,
-                       manager_state=ManState} = State, Value, [_, Time, _])
-  when length(L) < Min ->
-    Client = {call, erlang, element, [1, Value]},
-    V = {call, erlang, element, [4, Value]},
-    {NStatus, NManState} = Manager:handle(Time, ManState),
-    State#state{list=L++[Client], valve=V, time=Time, manager_state=NManState,
-                status=NStatus};
 handle_ask_next(#state{list=L, manager=Manager, manager_state=ManState} = State,
                 Value, [_, Time, _]) ->
     Client = {call, erlang, element, [1, Value]},
     V = {call, erlang, element, [4, Value]},
-    {NStatus, NManState} = Manager:handle_ask(Time, ManState),
+    Timeout = {call, erlang, element, [5, Value]},
+    Handle = ask_function(State),
+    {NStatus, NManState} = Manager:Handle(Time, ManState),
     State#state{list=L++[Client], valve=V, time=Time, manager_state=NManState,
-                status=NStatus}.
+                status=NStatus, timeout=Timeout}.
 
-handle_ask_post(#state{list=L, min=Min, manager=Manager,
-                       manager_state=ManState} = State, [_, Time, OldV],
-                {Client, OpenTime, Status, V, Timeout}) when length(L) < Min ->
-    {Status2, _} = Manager:handle(Time, ManState),
-    post(State#state{list=L++[Client], status=Status2, valve=V}, Status) andalso
-    timeout_post(Time, Timeout) andalso open_time_post(State, [OldV], OpenTime);
 handle_ask_post(#state{list=L, manager=Manager, manager_state=ManState} = State,
                 [_, Time, OldV], {Client, OpenTime, Status, V, Timeout}) ->
-    {Status2, _} = Manager:handle_ask(Time, ManState),
-    post(State#state{list=L++[Client], status=Status2, valve=V}, Status) andalso
-    timeout_post(Time, Timeout) andalso open_time_post(State, [OldV], OpenTime).
+    Handle = ask_function(State),
+    {Status2, NManState} = Manager:Handle(Time, ManState),
+    NState = State#state{list=L++[Client], time=Time, manager_state=NManState,
+                         status=Status2, valve=V},
+    post(NState, Status, Timeout) andalso
+    open_time_post(State, [OldV], OpenTime).
 
 handle_done(Mod, undefined, Time, V) ->
     handle_done(Mod, {self(), make_ref()}, Time, V);
@@ -321,28 +330,35 @@ handle_done_next(#state{list=L, done=Done, manager=Manager,
                         manager_state=ManState} = State, Value,
                  [_, Client, Time, _]) ->
     V = {call, erlang, element, [3, Value]},
-    {NStatus, NManState} = Manager:handle(Time, ManState),
-    NState = State#state{valve=V, time=Time, manager_state=NManState,
-                         status=NStatus},
+    Timeout = {call, erlang, element, [4, Value]},
+    NState = State#state{valve=V, time=Time, timeout=Timeout},
     case lists:member(Client, L) of
         true ->
-            NState#state{list=L--[Client], done=Done++[Client]};
+            Handle = done_function(State),
+            {NStatus, NManState} = Manager:Handle(Time, ManState),
+            NState#state{list=L--[Client], done=Done++[Client], status=NStatus,
+                         manager_state=NManState};
         false ->
-            NState
+            {NStatus, NManState} = Manager:handle(Time, ManState),
+            NState#state{status=NStatus, manager_state=NManState}
     end.
 
 handle_done_post(#state{list=L, manager=Manager,
-                        manager_state=ManState} = State,
-                 [_, Client, Time, _], {Result, Status, V, Timeout}) ->
-   {Status2, _} = Manager:handle(Time, ManState),
-    NState = State#state{list=L--[Client], status=Status2, valve=V},
+                        manager_state=ManState} = State, [_, Client, Time, _],
+                {Result, Status, V, Timeout}) ->
+    NState = State#state{valve=V},
     case lists:member(Client, L) of
         true ->
-            result_post(Result, done) andalso post(NState, Status) andalso
-            timeout_post(Time, Timeout);
+            Handle = done_function(State),
+            {Status2, NManState} = Manager:Handle(Time, ManState),
+            NState2 = NState#state{list=L--[Client], time=Time,
+                                   manager_state=NManState, status=Status2},
+            result_post(Result, done) andalso post(NState2, Status, Timeout);
         false ->
-            result_post(Result, error) andalso post(NState, Status) andalso
-            timeout_post(Time, Timeout)
+            {Status2, NManState} = Manager:handle(Time, ManState),
+            NState2 = State#state{time=Time, manager_state=NManState,
+                                  status=Status2},
+            result_post(Result, error) andalso post(NState2, Status, Timeout)
     end.
 
 handle_continue(Mod, undefined, Time, V) ->
@@ -359,64 +375,83 @@ handle_continue_pre(State, Args) ->
 handle_continue_next(#state{list=L, done=Done, manager=Manager,
                             manager_state=ManState, min=Min, max=Max} = State,
                      Value, [_, Client, Time, _]) ->
-    {NStatus, NManState} = Manager:handle(Time, ManState),
-    NState = State#state{time=Time, manager_state=NManState,
-                         status=NStatus},
+    NState = State#state{time=Time},
     case lists:member(Client, L) of
         true when length(L) =< Min ->
             V = {call, erlang, element, [4, Value]},
+            Timeout = {call, erlang, element, [5, Value]},
+            Handle = done_function(NState),
+            {_, NManState} = Manager:Handle(Time, ManState),
             {NStatus2, NManState2} = Manager:handle(Time, NManState),
-            NState#state{valve=V, manager_state=NManState2, status=NStatus2};
-        true when length(L) > Max; NStatus == closed ->
+            NState#state{valve=V, manager_state=NManState2, status=NStatus2,
+                         timeout=Timeout};
+        true when length(L) > Max ->
             V = {call, erlang, element, [3, Value]},
+            Timeout = {call, erlang, element, [4, Value]},
+            Handle = done_function(NState),
+            {_, NManState} = Manager:Handle(Time, ManState),
             {NStatus2, NManState2} = Manager:handle(Time, NManState),
-             NState#state{valve=V, list=L--[Client], done=Done++[Client],
-                          manager_state=NManState2, status=NStatus2};
+            NState#state{valve=V, list=L--[Client], done=Done++[Client],
+                          manager_state=NManState2, status=NStatus2,
+                          timeout=Timeout};
         true ->
-            V = {call, erlang, element, [4, Value]},
-            {NStatus2, NManState2} = Manager:handle_ask(Time, NManState),
-            NState#state{valve=V, manager_state=NManState2, status=NStatus2};
+            continue_maybe_ask(NState, Value, Client);
         false ->
             V = {call, erlang, element, [3, Value]},
-            NState#state{valve=V}
+            Timeout = {call, erlang, element, [4, Value]},
+            {NStatus, NManState} = Manager:handle(Time, ManState),
+            NState#state{valve=V, manager_state=NManState, status=NStatus,
+                         timeout=Timeout}
     end.
 
 handle_continue_post(#state{list=L, manager=Manager, manager_state=ManState,
                             min=Min, max=Max} = State,
                      [_, Client, Time, _], {go, _, Status, V, Timeout}) ->
-    {Status2, NManState} = Manager:handle(Time, ManState),
-    NState = State#state{status=Status2, valve=V},
+    Handle = done_function(State),
+    {Status2, NManState} = Manager:Handle(Time, ManState),
+    NState = State#state{time=Time, status=Status2, valve=V},
     case lists:member(Client, L) of
         true when length(L) =< Min ->
-            {NStatus2, _} = Manager:handle(Time, NManState),
-            NState2 = NState#state{status=NStatus2},
-            post(NState2, Status) andalso timeout_post(Time, Timeout);
+            {NStatus2, NManState2} = Manager:handle(Time, NManState),
+            NState2 = NState#state{manager_state=NManState2, status=NStatus2},
+            post(NState2, Status, Timeout);
         true when length(L) =< Max, Status2 == open ->
-            {NStatus2, _} = Manager:handle_ask(Time, NManState),
-            NState2 = NState#state{status=NStatus2},
-            post(NState2, Status) andalso timeout_post(Time, Timeout);
+            {NStatus2, NManState2} = Manager:handle_ask(Time, NManState),
+            NState2 = NState#state{manager_state=NManState2, status=NStatus2},
+            post(NState2, Status, Timeout);
         true ->
             result_post(go, done);
         false ->
             result_post(go, error)
     end;
 handle_continue_post(#state{list=L, manager=Manager, manager_state=ManState,
-                            max=Max, done=Done} = State,
-                     [_, Client, Time, _], {Result, Status, V, Timeout}) ->
-    {Status2, NManState} = Manager:handle(Time, ManState),
-    NState = State#state{status=Status2, valve=V},
+                            max=Max} = State,
+                     [_, Client, Time, _], {done, Status, V, Timeout}) ->
+    Handle = done_function(State),
+    {NStatus, NManState} = Manager:Handle(Time, ManState),
+    NState = State#state{time=Time, valve=V},
     case lists:member(Client, L) of
-        true when length(L) > Max; Status2 == closed ->
-            {NStatus2, _} = Manager:handle(Time, NManState),
-            NState2 = NState#state{list=L--[Client], done=Done++[Client],
+        true when length(L) > Max; NStatus == closed ->
+            {NStatus2, NManState2} = Manager:handle(Time, NManState),
+            NState2 = NState#state{list=L--[Client], manager_state=NManState2,
                                    status=NStatus2},
-            result_post(Result, done) andalso post(NState2, Status) andalso
-            timeout_post(Time, Timeout);
+            post(NState2, Status, Timeout);
         true ->
-            result_post(Result, go);
+            result_post(done, go);
         false ->
-            result_post(Result, error) andalso post(NState, Status) andalso
-            timeout_post(Time, Timeout)
+            result_post(done, error)
+    end;
+handle_continue_post(#state{list=L, manager=Manager,
+                            manager_state=ManState} = State,
+                     [_, Client, Time, _], {error, Status, V, Timeout}) ->
+    case lists:member(Client, L) of
+        true ->
+            result_post(error, done_or_go);
+        false ->
+            {NStatus, NManState} = Manager:handle(Time, ManState),
+            NState = State#state{time=Time, manager_state=NManState,
+                                 status=NStatus, valve=V},
+            post(NState, Status, Timeout)
     end.
 
 handle_info_args(#state{time=Time, valve=V}) ->
@@ -428,14 +463,17 @@ handle_info_pre(#state{time=PrevTime}, [_, Time, _]) ->
 handle_info_next(#state{manager=Manager, manager_state=ManState} = State, Value,
                  [_, Time, _]) ->
     V = {call, erlang, element, [2, Value]},
+    Timeout = {call, erlang, element, [3, Value]},
     {Status, NManState} = Manager:handle(Time, ManState),
-    State#state{manager_state=NManState, status=Status, time=Time, valve=V}.
+    State#state{manager_state=NManState, status=Status, time=Time, valve=V,
+                timeout=Timeout}.
 
 handle_info_post(#state{manager=Manager, manager_state=ManState} = State,
                  [_, Time, _], {Status, V, Timeout}) ->
     {Status2, NManState} = Manager:handle(Time, ManState),
-    post(State#state{manager_state=NManState, status=Status2, valve=V}, Status)
-    andalso timeout_post(Time, Timeout).
+    NState = State#state{time=Time, manager_state=NManState, status=Status2,
+                         valve=V},
+    post(NState, Status, Timeout).
 
 handle_timeout_args(#state{time=Time, valve=V}) ->
     [time(Time), V].
@@ -446,14 +484,17 @@ handle_timeout_pre(#state{time=PrevTime}, [Time, _]) ->
 handle_timeout_next(#state{manager=Manager, manager_state=ManState} = State,
                     Value, [Time, _]) ->
     V = {call, erlang, element, [2, Value]},
+    Timeout = {call, erlang, element, [3, Value]},
     {Status, NManState} = Manager:handle(Time, ManState),
-    State#state{manager_state=NManState, status=Status, time=Time, valve=V}.
+    State#state{manager_state=NManState, status=Status, time=Time, valve=V,
+                timeout=Timeout}.
 
 handle_timeout_post(#state{manager=Manager, manager_state=ManState} = State,
                  [Time, _], {Status, V, Timeout}) ->
     {Status2, NManState} = Manager:handle(Time, ManState),
-    post(State#state{manager_state=NManState, status=Status2, valve=V}, Status)
-    andalso timeout_post(Time, Timeout).
+    NState = State#state{time=Time, manager_state=NManState, status=Status2,
+                         valve=V},
+    post(NState, Status, Timeout).
 
 shutdown_args(#state{list=L, done=Done, shutdown=Shutdown, mod=Mod, time=Time,
                      valve=V}) ->
@@ -491,23 +532,36 @@ shutdown_pre(#state{time=PrevTime, done=Done, shutdown=Shutdown},
 
 shutdown_next(#state{list=L, shutdown=Shutdown, manager=Manager,
                      manager_state=ManState} = State, Value,
-                 [_, Client, _, Time, _]) ->
+              [_, Client, _, Time, _]) ->
     V = {call, erlang, element, [2, Value]},
-    {NStatus, NManState} = Manager:handle(Time, ManState),
-    NState = State#state{valve=V, time=Time, manager_state=NManState,
-                         status=NStatus},
+    Timeout = {call, erlang, element, [3, Value]},
+    NState = State#state{valve=V, time=Time, timeout=Timeout},
     case lists:member(Client, L) of
         true ->
-            NState#state{list=L--[Client], shutdown=Shutdown++[Client]};
+            Handle = done_function(State),
+            {NStatus, NManState} = Manager:Handle(Time, ManState),
+            NState#state{list=L--[Client], shutdown=Shutdown++[Client],
+                         manager_state=NManState, status=NStatus};
         false ->
-            NState
+            {NStatus, NManState} = Manager:handle(Time, ManState),
+            NState#state{manager_state=NManState, status=NStatus}
     end.
 
 shutdown_post(#state{list=L, manager=Manager, manager_state=ManState} = State,
               [_, Client, _, Time, _], {Status, V, Timeout}) ->
-   {Status2, _} = Manager:handle(Time, ManState),
-   post(State#state{list=L--[Client], status=Status2, valve=V}, Status) andalso
-   timeout_post(Time, Timeout).
+    NState = State#state{valve=V, time=Time},
+    case lists:member(Client, L) of
+        true ->
+            Handle = done_function(State),
+            {NStatus, NManState} = Manager:Handle(Time, ManState),
+            NState2 = NState#state{list=L--[Client], manager_state=NManState,
+                                   status=NStatus},
+            post(NState2, Status, Timeout);
+        false ->
+            {Status2, NManState} = Manager:handle(Time, ManState),
+            NState2 = NState#state{manager_state=NManState, status=Status2},
+            post(NState2, Status, Timeout)
+    end.
 
 open_time_args(#state{valve=E}) ->
     [E].
@@ -519,25 +573,25 @@ open_time_next(State, _, _) ->
     State.
 
 open_time_post(#state{status=Status, list=L, min=Min, max=Max, time=Time}, _,
-               SendTime)
+               OpenTime)
   when length(L) < Min orelse (Status == open andalso length(L) < Max) ->
     if
-        SendTime =< Time ->
+        OpenTime =< Time ->
             true;
         true ->
             ct:pal("Open Time~nExpected: =<~p~nObserved: ~p",
-                   [Time, SendTime]),
+                   [Time, OpenTime]),
             false
     end;
-open_time_post(#state{time=Time}, _, SendTime) ->
-    case SendTime of
+open_time_post(#state{time=Time}, _, OpenTime) ->
+    case OpenTime of
         closed ->
             true;
-        _ when is_integer(SendTime), SendTime > Time ->
+        _ when is_integer(OpenTime), OpenTime > Time ->
             true;
         _ ->
             ct:pal("Open Time~nExpected: closed or >~p~nObserved: ~p",
-                   [Time, SendTime]),
+                   [Time, OpenTime]),
             false
     end.
 
@@ -556,12 +610,15 @@ terminate_post(#state{list=L}, _, Result) ->
 
 %% Helpers
 
-post(#state{list=L, min=Min} = State, Status) when length(L) < Min ->
-    size_post(State) andalso status_post(open, Status);
-post(#state{list=L, max=Max} = State, Status) when length(L) >= Max ->
-    size_post(State) andalso status_post(closed, Status);
-post(#state{status=Status2} = State, Status) ->
-    size_post(State) andalso status_post(Status2, Status).
+post(#state{list=L, min=Min} = State, Status, Timeout) when length(L) < Min ->
+    size_post(State) andalso status_post(open, Status) andalso
+    timeout_post(State, Timeout);
+post(#state{list=L, max=Max} = State, Status, Timeout) when length(L) >= Max ->
+    size_post(State) andalso status_post(closed, Status) andalso
+    timeout_post(State, Timeout);
+post(#state{status=Status2} = State, Status, Timeout) ->
+    size_post(State) andalso status_post(Status2, Status) andalso
+    timeout_post(State, Timeout).
 
 status_post(Expected, Observed) when Expected =:= Observed ->
     true;
@@ -585,13 +642,59 @@ result_post(Observed, Expected) ->
     ct:pal("Result~nExpected: ~p~nObserved: ~p", [Expected, Observed]),
     false.
 
-timeout_post(_, infinity) ->
+timeout_post(#state{list=L, min=Min}, Timeout) when length(L) < Min ->
+    do_timeout_post(infinity, Timeout);
+timeout_post(#state{list=L, max=Max}, Timeout) when length(L) >= Max ->
+    do_timeout_post(infinity, Timeout);
+timeout_post(#state{manager=Manager, time=Time, manager_state=ManState},
+             Timeout) ->
+    case erlang:function_exported(Manager, timeout, 2) of
+        true  -> do_timeout_post(Manager:timeout(Time, ManState), Timeout);
+        false -> do_timeout_post(infinity, Timeout)
+    end.
+
+do_timeout_post(Expected, Expected) ->
     true;
-timeout_post(Time, Timeout) when Timeout > Time ->
-    true;
-timeout_post(Time, Timeout) ->
-    ct:pal("Timeout~nExpected: >~p~nObserved: ~p", [Time, Timeout]),
+do_timeout_post(Expected, Observed) ->
+    ct:pal("Timeout~nExpected: ~pObserved: ~p", [Expected, Observed]),
     false.
+
+done_function(#state{list=L, min=Min}) ->
+      if
+          length(L) =< Min -> handle;
+          length(L) > Min  -> handle_done
+      end.
+
+ask_function(#state{list=L, min=Min}) ->
+      if
+          length(L) < Min  -> handle;
+          length(L) >= Min -> handle_ask
+      end.
+
+handle_update(Manager, RelativeTime, Time, ManState) ->
+    case erlang:function_exported(Manager, handle_update, 3) of
+        true  -> Manager:handle_update(RelativeTime, Time, ManState);
+        false -> Manager:handle(Time, ManState)
+    end.
+
+continue_maybe_ask(#state{time=Time, list=L, done=Done, manager=Manager,
+                          manager_state=ManState} = State, Value, Client) ->
+    Handle = done_function(State),
+    case Manager:Handle(Time, ManState) of
+        {open, NManState} ->
+            V = {call, erlang, element, [4, Value]},
+            Timeout = {call, erlang, element, [5, Value]},
+            {NStatus2, NManState2} = Manager:handle_ask(Time, NManState),
+            State#state{valve=V, manager_state=NManState2, status=NStatus2,
+                        timeout=Timeout};
+        {closed, NManState} ->
+            V = {call, erlang, element, [3, Value]},
+            Timeout = {call, erlang, element, [4, Value]},
+            {NStatus2, NManState2} = Manager:handle(Time, NManState),
+            State#state{valve=V, list=L--[Client], done=Done++[Client],
+                        manager_state=NManState2, status=NStatus2,
+                        timeout=Timeout}
+    end.
 
 spawn_client() ->
     Parent = self(),

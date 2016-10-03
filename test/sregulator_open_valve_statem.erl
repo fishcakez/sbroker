@@ -23,11 +23,12 @@
 
 -export([module/0]).
 -export([args/0]).
--export([init/1]).
+-export([init/3]).
 -export([handle_update/3]).
 -export([handle_ask/2]).
+-export([handle_done/2]).
 -export([handle/2]).
--export([config_change/3]).
+-export([config_change/4]).
 
 module() ->
     sregulator_open_valve.
@@ -35,7 +36,7 @@ module() ->
 args() ->
     oneof([choose(0, 5), infinity]).
 
-init(Max) ->
+init(Max, _, _) ->
     {0, Max, open, undefined}.
 
 handle_update(_, _, State) ->
@@ -44,8 +45,11 @@ handle_update(_, _, State) ->
 handle_ask(_, State) ->
     {open, State}.
 
+handle_done(_, State) ->
+    {open, State}.
+
 handle(_, State) ->
     {open, State}.
 
-config_change(Max, _, undefined) ->
+config_change(Max, _, _, undefined) ->
     {0, Max, open, undefined}.

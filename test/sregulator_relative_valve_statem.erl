@@ -23,11 +23,12 @@
 
 -export([module/0]).
 -export([args/0]).
--export([init/1]).
+-export([init/3]).
 -export([handle_update/3]).
 -export([handle_ask/2]).
+-export([handle_done/2]).
 -export([handle/2]).
--export([config_change/3]).
+-export([config_change/4]).
 
 module() ->
     sregulator_relative_valve.
@@ -38,7 +39,7 @@ args() ->
                    Min =< Max),
          {choose(-10, 10), Min, Max}).
 
-init({Target, Min, Max}) ->
+init({Target, Min, Max}, _, _) ->
     NTarget = sbroker_util:relative_target(Target),
     {Min, Max, closed, {NTarget, undefined}}.
 
@@ -48,12 +49,15 @@ handle_update(Value, Time, {Target, _}) ->
 handle_ask(Time, {Target, _}) ->
     handle(Time, {Target, undefined}).
 
+handle_done(Time, State) ->
+    handle(Time, State).
+
 handle(_, {Target, Value} = State) when Target > Value ->
     {open, State};
 handle(_, State) ->
     {closed, State}.
 
-config_change({Target, Min, Max}, Time, {_, Value}) ->
+config_change({Target, Min, Max}, _, Time, {_, Value}) ->
     NTarget = sbroker_util:relative_target(Target),
     {Status, State} = handle(Time, {NTarget, Value}),
     {Min, Max, Status, State}.

@@ -23,11 +23,11 @@
 
 -export([module/0]).
 -export([args/0]).
--export([init/1]).
--export([handle_update/3]).
+-export([init/3]).
 -export([handle_ask/2]).
+-export([handle_done/2]).
 -export([handle/2]).
--export([config_change/3]).
+-export([config_change/4]).
 
 module() ->
     sregulator_statem_valve.
@@ -35,22 +35,22 @@ module() ->
 args() ->
     ?SUCHTHAT(Opens, list(oneof([open, closed])), Opens =/= []).
 
-init([Open | Rest] = Opens) ->
+init([Open | Rest] = Opens, _, _) ->
     {0, infinity, Open, {Rest, Opens}}.
 
-handle_update(_, _, State) ->
+handle_ask(_, State) ->
     handle(State).
 
-handle_ask(_, State) ->
+handle_done(_, State) ->
     handle(State).
 
 handle(_, State) ->
     handle(State).
 
-config_change(Opens, _, {[Open | Rest], Opens}) ->
+config_change(Opens, _, _, {[Open | Rest], Opens}) ->
     {0, infinity, Open, {Rest, Opens}};
-config_change(Opens, _, _) ->
-    init(Opens).
+config_change(Opens, Size, Time, _) ->
+    init(Opens, Size, Time).
 
 %% Internal
 

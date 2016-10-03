@@ -23,11 +23,12 @@
 
 -export([module/0]).
 -export([args/0]).
--export([init/1]).
+-export([init/3]).
 -export([handle_update/3]).
 -export([handle_ask/2]).
+-export([handle_done/2]).
 -export([handle/2]).
--export([config_change/3]).
+-export([config_change/4]).
 
 -record(state, {target, interval, count=0, open_next=undefined,
                 first_above_time=undefined, opening=false, updated=false,
@@ -42,7 +43,7 @@ args() ->
                    Min =< Max),
          {choose(-10, 10), choose(1, 3), Min, Max}).
 
-init({Target, Interval, Min, Max}) ->
+init({Target, Interval, Min, Max}, _, _) ->
     NTarget = sbroker_util:relative_target(Target),
     NInterval = sbroker_util:interval(Interval),
     {Min, Max, closed, #state{target=NTarget, interval=NInterval}}.
@@ -60,10 +61,13 @@ handle_update(Value, Time, State) ->
 handle_ask(Time, State) ->
     handle_ask(State#state{now=Time}).
 
+handle_done(Time, State) ->
+    handle(Time, State).
+
 handle(Time, State) ->
     handle(State#state{now=Time}).
 
-config_change({Target, Interval, Min, Max}, Time,
+config_change({Target, Interval, Min, Max}, _, Time,
               #state{first_above_time=FirstAbove,
                      open_next=OpenNext} = State) ->
     NTarget = sbroker_util:relative_target(Target),
