@@ -39,6 +39,8 @@
 
 -export([ask/1]).
 -export([done/1]).
+-export([dirty_done/1]).
+-export([dirty_cancel/1]).
 -export([continue/1]).
 -export([await_timeout/1]).
 -export([await_down/1]).
@@ -54,7 +56,9 @@ suite() ->
     [{timetrap, {seconds, 60}}].
 
 groups() ->
-    [{simple, [ask, done, continue, await_timeout, await_down]},
+    [{simple,
+      [ask, done, dirty_done, dirty_cancel, continue, await_timeout,
+       await_down]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -128,6 +132,28 @@ done(_) ->
     {stop, _} = sregulator:done(Regulator, Ref, ?TIMEOUT),
     0 = sregulator:size(Regulator, ?TIMEOUT),
     {not_found, _} = sregulator:done(Regulator, Ref, ?TIMEOUT),
+    ok.
+
+dirty_done(_) ->
+    {ok, Regulator} = sregulator_test:start_link(),
+    ok = sregulator:update(Regulator, -1, ?TIMEOUT),
+    {go, Ref, Regulator, _, _} = sregulator:ask(Regulator),
+    ok = sregulator:dirty_done(Regulator, Ref),
+    0 = sregulator:size(Regulator, ?TIMEOUT),
+    ok = sregulator:dirty_done(Regulator, Ref),
+    0 = sregulator:size(Regulator, ?TIMEOUT),
+    ok.
+
+dirty_cancel(_) ->
+    {ok, Regulator} = sregulator_test:start_link(),
+    ok = sregulator:update(Regulator, -1, ?TIMEOUT),
+    {await, TagA, _} = sregulator:async_ask(Regulator),
+    ok = sregulator:dirty_cancel(Regulator, TagA),
+    {await, TagB, _} = sregulator:async_ask(Regulator),
+    ok = sregulator:dirty_cancel(Regulator, TagB),
+    0 = sregulator:len(Regulator, ?TIMEOUT),
+    receive {TagA, {go, _, _, _, _}} -> ok end,
+    receive {TagB, Msg} -> exit({no_cancel, Msg}) after 0 -> ok end,
     ok.
 
 continue(_) ->

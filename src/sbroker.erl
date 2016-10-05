@@ -104,9 +104,14 @@
 -export([dynamic_ask_r/1]).
 -export([dynamic_ask_r/2]).
 -export([await/2]).
+-export([cancel/2]).
 -export([cancel/3]).
+-export([dirty_cancel/2]).
+-export([change_config/1]).
 -export([change_config/2]).
+-export([len/1]).
 -export([len/2]).
+-export([len_r/1]).
 -export([len_r/2]).
 -export([start_link/3]).
 -export([start_link/4]).
@@ -545,6 +550,14 @@ await(Tag, Timeout) ->
             exit({timeout, {?MODULE, await, [Tag, Timeout]}})
     end.
 
+%% @equiv cancel(Broker, Tag, infinity)
+-spec cancel(Broker, Tag) -> Count | false when
+      Broker :: broker(),
+      Tag :: any(),
+      Count :: pos_integer().
+cancel(Broker, Tag) ->
+    cancel(Broker, Tag, infinity).
+
 %% @doc Cancels an asynchronous request. Returns the number of cancelled
 %% requests or `false' if no requests exist. In the later case a caller may wish
 %% to check its message queue for an existing reply.
@@ -559,6 +572,24 @@ await(Tag, Timeout) ->
 cancel(Broker, Tag, Timeout) ->
     sbroker_gen:simple_call(Broker, cancel, Tag, Timeout).
 
+%% @doc Cancels an asynchronous request.
+%%
+%% Returns `ok' without waiting for the broker to cancel requests.
+%%
+%% @see cancel/3
+-spec dirty_cancel(Broker, Tag) -> ok when
+      Broker :: broker(),
+      Tag :: any().
+dirty_cancel(Broker, Tag) ->
+    sbroker_gen:send(Broker, {cancel, dirty, Tag}).
+
+%% @equiv change_config(Broker, infinity)
+-spec change_config(Broker) -> ok | {error, Reason} when
+      Broker :: broker(),
+      Reason :: any().
+change_config(Broker) ->
+    change_config(Broker, infinity).
+
 %% @doc Change the configuration of the broker. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason', is the reason for failure.
 %%
@@ -571,6 +602,13 @@ cancel(Broker, Tag, Timeout) ->
 change_config(Broker, Timeout) ->
     sbroker_gen:simple_call(Broker, change_config, undefined, Timeout).
 
+%% @equiv len(Broker, infinity)
+-spec len(Broker) -> Length when
+      Broker :: broker(),
+      Length :: non_neg_integer().
+len(Broker) ->
+    len(Broker, infinity).
+
 %% @doc Get the length of the `ask' queue in the broker, `Broker'.
 -spec len(Broker, Timeout) -> Length when
       Broker :: broker(),
@@ -578,6 +616,13 @@ change_config(Broker, Timeout) ->
       Length :: non_neg_integer().
 len(Broker, Timeout) ->
     sbroker_gen:simple_call(Broker, len_ask, undefined, Timeout).
+
+%% @equiv len_r(Broker, infinity)
+-spec len_r(Broker) -> Length when
+      Broker :: broker(),
+      Length :: non_neg_integer().
+len_r(Broker) ->
+    len_r(Broker, infinity).
 
 %% @doc Get the length of the `ask_r' queue in the broker, `Broker'.
 -spec len_r(Broker, Timeout) -> Length when
@@ -976,7 +1021,7 @@ asking({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, _,
        #config{ask_mod=AskMod} = Config) ->
     try AskMod:handle_cancel(Tag, Now, Asks) of
         {Reply, NAsks, Next} ->
-            gen:reply(From, Reply),
+            cancelled(From, Reply),
             asking(Time, NAsks, Bids, Next, Config);
         Other ->
             asking_return(Other, Time, Asks, Bids, Config)
@@ -1193,7 +1238,7 @@ bidding({cancel, From, Tag}, #time{now=Now} = Time, Asks, Bids, _,
         #config{bid_mod=BidMod} = Config) ->
     try BidMod:handle_cancel(Tag, Now, Bids) of
         {Reply, NBids, Next} ->
-            gen:reply(From, Reply),
+            cancelled(From, Reply),
             bidding(Time, Asks, NBids, Next, Config);
         Other ->
             bidding_return(Other, Time, Asks, Bids, Config)
@@ -1233,6 +1278,11 @@ drop(From, #time{now=Now, send=Send}) ->
 
 async({_, Tag} = From) ->
     gen:reply(From, {await, Tag, self()}).
+
+cancelled(dirty, _) ->
+    ok;
+cancelled(From, Reply) ->
+    gen:reply(From, Reply).
 
 config_change(From, State, Time, Asks, Bids, Config) ->
     case config_change(Config) of

@@ -92,13 +92,21 @@
 -export([async_ask/2]).
 -export([dynamic_ask/1]).
 -export([await/2]).
+-export([cancel/2]).
 -export([cancel/3]).
+-export([dirty_cancel/2]).
 -export([continue/2]).
+-export([done/2]).
 -export([done/3]).
+-export([dirty_done/2]).
+-export([update/2]).
 -export([update/3]).
 -export([cast/2]).
+-export([change_config/1]).
 -export([change_config/2]).
+-export([len/1]).
 -export([len/2]).
+-export([size/1]).
 -export([size/2]).
 -export([start_link/3]).
 -export([start_link/4]).
@@ -343,6 +351,14 @@ await(Tag, Timeout) ->
             exit({timeout, {?MODULE, await, [Tag, Timeout]}})
     end.
 
+%% @see cancel(Regulator, Tag, infinity)
+-spec cancel(Regulator, Tag) -> Count | false when
+      Regulator :: regulator(),
+      Tag :: any(),
+      Count :: pos_integer().
+cancel(Regulator, Tag) ->
+    cancel(Regulator, Tag, infinity).
+
 %% @doc Cancel an asynchronous request.
 %%
 %% Returns the number of cancelled requests or `false' if no requests exist with
@@ -358,6 +374,17 @@ await(Tag, Timeout) ->
       Count :: pos_integer().
 cancel(Regulator, Tag, Timeout) ->
     sbroker_gen:simple_call(Regulator, cancel, Tag, Timeout).
+
+%% @doc Cancels an asynchronous request.
+%%
+%% Returns `ok' without waiting for the regulator to cancel requests.
+%%
+%% @see cancel/3
+-spec dirty_cancel(Regulator, Tag) -> ok when
+      Regulator :: regulator(),
+      Tag :: any().
+dirty_cancel(Regulator, Tag) ->
+    sbroker_gen:send(Regulator, {cancel, dirty, Tag}).
 
 %% @doc Send a request to continue running using an existing lock reference,
 %% `Ref'. The request is not queued.
@@ -392,6 +419,16 @@ cancel(Regulator, Tag, Timeout) ->
 continue(Regulator, Ref) ->
     sbroker_gen:call(Regulator, continue, Ref, infinity).
 
+%% @equiv done(Regulator, Ref, infinity)
+-spec done(Regulator, Ref) -> Stop | NotFound when
+      Regulator :: regulator(),
+      Ref :: reference(),
+      Stop :: {stop, SojournTime},
+      SojournTime :: non_neg_integer(),
+      NotFound :: {not_found, SojournTime}.
+done(Regulator, Ref) ->
+    done(Regulator, Ref, infinity).
+
 %% @doc Inform the regulator the process has finished running and release the
 %% lock, `Ref'.
 %%
@@ -411,6 +448,25 @@ continue(Regulator, Ref) ->
       NotFound :: {not_found, SojournTime}.
 done(Regulator, Ref, Timeout) ->
     sbroker_gen:simple_call(Regulator, done, Ref, Timeout).
+
+%% @doc Asynchronously inform the regulator the process has finished running and
+%% should release the lock, `Ref'.
+%%
+%% Returns `ok' without waiting for the regulator to release the lock.
+%%
+%% @see done/3
+-spec dirty_done(Regulator, Ref) -> ok when
+      Regulator :: regulator(),
+      Ref :: reference().
+dirty_done(Regulator, Ref) ->
+    sbroker_gen:send(Regulator, {done, dirty, Ref}).
+
+%% @equiv update(Regulator, Value, infinity).
+-spec update(Regulator, Value) -> ok when
+      Regulator :: regulator(),
+      Value :: integer().
+update(Regulator, Value) ->
+    update(Regulator, Value, infinity).
 
 %% @doc Synchronously update the valve in the regulator.
 %%
@@ -442,6 +498,13 @@ update(Regulator, Value, Timeout) when is_integer(Value) ->
 cast(Regulator, Value) when is_integer(Value) ->
     sbroker_gen:send(Regulator, {update, cast, Value}).
 
+%% @equiv change_config(Regulator, infinity)
+-spec change_config(Regulator) -> ok | {error, Reason} when
+      Regulator :: regulator(),
+      Reason :: any().
+change_config(Regulator) ->
+    change_config(Regulator, infinity).
+
 %% @doc Change the configuration of the regulator. Returns `ok' on success and
 %% `{error, Reason}' on failure, where `Reason' is the reason for failure.
 %%
@@ -454,6 +517,13 @@ cast(Regulator, Value) when is_integer(Value) ->
 change_config(Regulator, Timeout) ->
     sbroker_gen:simple_call(Regulator, change_config, undefined, Timeout).
 
+%% @equiv len(Regulator, infinity)
+-spec len(Regulator) -> Length when
+      Regulator :: regulator(),
+      Length :: non_neg_integer().
+len(Regulator) ->
+    len(Regulator, infinity).
+
 %% @doc Get the length of the internal queue in the regulator, `Regulator'.
 -spec len(Regulator, Timeout) -> Length when
       Regulator :: regulator(),
@@ -461,6 +531,13 @@ change_config(Regulator, Timeout) ->
       Length :: non_neg_integer().
 len(Regulator, Timeout) ->
     sbroker_gen:simple_call(Regulator, len, undefined, Timeout).
+
+%% @equiv size(Regulator, infinity)
+-spec size(Regulator) -> Size when
+      Regulator :: regulator(),
+      Size :: non_neg_integer().
+size(Regulator) ->
+    size(Regulator, infinity).
 
 %% @doc Get the number of processes holding a lock with the regulator,
 %% `Regulator'.
@@ -805,7 +882,7 @@ open({continue, From, Ref}, #time{now=Now, send=Send} = Time, Q, V, _,
             valve_exception(Class, Reason, open, Time, Q, V, Config)
     end;
 open({cancel, From, _}, Time, Q, V, _, Config) ->
-    gen:reply(From, false),
+    cancelled(From, false),
     timeout(open, Time, Q, V, Config);
 open(Msg, Time, Q, V, Next, Config) ->
     common(Msg, open, Time, Q, V, Next, Config).
@@ -857,7 +934,7 @@ closed({cancel, From, Tag}, #time{now=Now} = Time, Q, V, _,
        #config{queue_mod=QMod} = Config) ->
     try QMod:handle_cancel(Tag, Now, Q) of
         {Reply, NQ, Next} ->
-            gen:reply(From, Reply),
+            cancelled(From, Reply),
             valve_timeout(Time, NQ, V, Next, Config);
         Other ->
             queue_return(Other, closed, Time, Q, V, Config)
@@ -947,14 +1024,23 @@ go(From, Ref, Send, Open, Now) ->
     SojournTime = Now - Send,
     gen:reply(From, {go, Ref, self(), RelativeTime, SojournTime}).
 
+cancelled(dirty, _) ->
+    ok;
+cancelled(From, Reply) ->
+    gen:reply(From, Reply).
+
 updated(cast) ->
     ok;
 updated(From) ->
     gen:reply(From, ok).
 
+stop(dirty, _, _) ->
+    ok;
 stop(From, Send, Now) ->
     gen:reply(From, {stop, Now - Send}).
 
+not_found(dirty, _, _) ->
+    ok;
 not_found(From, Send, Now) ->
     gen:reply(From, {not_found, Now - Send}).
 

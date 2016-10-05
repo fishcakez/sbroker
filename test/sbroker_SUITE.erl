@@ -39,6 +39,7 @@
 
 -export([ask/1]).
 -export([ask_r/1]).
+-export([dirty_cancel/1]).
 -export([await_timeout/1]).
 -export([await_down/1]).
 -export([skip_down_match/1]).
@@ -54,7 +55,8 @@ suite() ->
     [{timetrap, {seconds, 120}}].
 
 groups() ->
-    [{simple, [ask, ask_r, await_timeout, await_down, skip_down_match]},
+    [{simple,
+      [ask, ask_r, dirty_cancel, await_timeout, await_down, skip_down_match]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -109,10 +111,10 @@ ask(_) ->
     Ref = make_ref(),
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask_r(Broker, Self, {Self, Ref}),
-    1 = sbroker:len_r(Broker, ?TIMEOUT),
+    1 = sbroker:len_r(Broker),
     {go, Ref2, Self, AskRel, AskTime} = sbroker:ask(Broker),
-    0 = sbroker:len(Broker, ?TIMEOUT),
-    0 = sbroker:len_r(Broker, ?TIMEOUT),
+    0 = sbroker:len(Broker),
+    0 = sbroker:len_r(Broker),
     AskRRel = -AskRel,
     {go, Ref2, Self, AskRRel, AskRTime} = sbroker:await(Ref, ?TIMEOUT),
     if
@@ -127,10 +129,10 @@ ask_r(_) ->
     Ref = make_ref(),
     Self = self(),
     {await, Ref, Broker} = sbroker:async_ask(Broker, Self, {Self, Ref}),
-    1 = sbroker:len(Broker, ?TIMEOUT),
+    1 = sbroker:len(Broker),
     {go, Ref2, Self, AskRRel, AskRTime} = sbroker:ask_r(Broker),
-    0 = sbroker:len(Broker, ?TIMEOUT),
-    0 = sbroker:len_r(Broker, ?TIMEOUT),
+    0 = sbroker:len(Broker),
+    0 = sbroker:len_r(Broker),
     AskRel = -AskRRel,
     {go, Ref2, Self, AskRel, AskTime} = sbroker:await(Ref, ?TIMEOUT),
     if
@@ -139,6 +141,20 @@ ask_r(_) ->
         true ->
             exit({bad_sojourn_times, AskRTime, AskTime})
     end.
+
+dirty_cancel(_) ->
+    {ok, Broker} = sbroker_test:start_link(),
+    {await, TagA, _} = sbroker:async_ask(Broker),
+    ok = sbroker:dirty_cancel(Broker, TagA),
+    ok = sbroker:dirty_cancel(Broker, TagA),
+    {await, TagB, _} = sbroker:async_ask_r(Broker),
+    ok = sbroker:dirty_cancel(Broker, TagB),
+    ok = sbroker:dirty_cancel(Broker, TagB),
+    0 = sbroker:len(Broker),
+    0 = sbroker:len_r(Broker),
+    receive {TagA, MsgA} -> exit({no_cancel, MsgA}) after 0 -> ok end,
+    receive {TagB, MsgB} -> exit({no_cancel, MsgB}) after 0 -> ok end,
+    ok.
 
 await_timeout(_) ->
     {ok, Broker} = sbroker_test:start_link(),
