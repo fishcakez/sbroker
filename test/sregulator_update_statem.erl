@@ -40,13 +40,18 @@ args() ->
     {regulators(), term_to_binary(Seed)}.
 
 regulators() ->
-    oneof([[{oneof([ask, ask_r]), choose(1, 5)}],
-           [{ask, choose(1, 5)}, {ask_r, choose(1, 5)}],
-           [{ask_r, choose(1, 5)}, {ask, choose(1, 5)}]]).
+    oneof([[{oneof([ask, ask_r]), config()}],
+           [{ask, config()}, {ask_r, config()}],
+           [{ask_r, config()}, {ask, config()}]]).
+
+config() ->
+    ?LET(Update, choose(1, 5), #{update => Update}).
 
 init(Time, {Queues, BinSeed}) ->
-    NQueues = [#queue{ask=Ask, interval=sbroker_util:interval(Interval)} ||
-               {Ask, Interval} <- Queues],
+    NQueues = [#queue{ask=Ask,
+                      interval=erlang:convert_time_unit(Interval, milli_seconds,
+                                                        native)} ||
+               {Ask, #{update := Interval}} <- Queues],
     Rand = rand:seed_s(binary_to_term(BinSeed)),
     State = #state{queues=NQueues, time=Time, rand=Rand},
     {State, timeout(State, Time)}.
@@ -115,8 +120,10 @@ flush_update_post(Queue, ExpRelativeTime) ->
     end.
 
 change(#state{queues=OldQueues} = State, Time, {Queues, BinSeed}) ->
-    NQueues = [#queue{ask=Ask, interval=sbroker_util:interval(Interval)} ||
-               {Ask, Interval} <- Queues],
+    NQueues = [#queue{ask=Ask,
+                      interval=erlang:convert_time_unit(Interval, milli_seconds,
+                                                        native)} ||
+               {Ask, #{update := Interval}} <- Queues],
     Rand = rand:seed_s(binary_to_term(BinSeed)),
     Change = fun(#queue{ask=Ask, interval=Interval} = Queue, NRand) ->
                      case lists:keyfind(Ask, #queue.ask, OldQueues) of

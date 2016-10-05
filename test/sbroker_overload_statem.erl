@@ -35,16 +35,20 @@ module() ->
     sbroker_overload_meter.
 
 args() ->
-    {choose(0, 3),
-     choose(1, 5),
-     desc()}.
+    ?LET({Target, Interval, Alarm},
+         {choose(0, 3), choose(1, 5), desc()},
+         #{target   => Target,
+           interval => Interval,
+           alarm    => Alarm}).
 
 desc() ->
     oneof([a, b, c]).
 
-init(Time, {Target, Interval, Alarm}) ->
-    State = #state{target=sbroker_util:sojourn_target(Target),
-                   interval=sbroker_util:interval(Interval), alarm=Alarm,
+init(Time, #{target := Target, interval := Interval, alarm := Alarm}) ->
+    State = #state{target=erlang:convert_time_unit(Target, milli_seconds,
+                                                   native),
+                   interval=erlang:convert_time_unit(Interval, milli_seconds,
+                                                     native), alarm=Alarm,
                    status=fast, time=Time, queue=fast, interval_time=0},
     {State, timeout(State, Time)}.
 
@@ -57,10 +61,13 @@ update_post(State, Time, MsgQLen, QueueDelay, _, _) ->
     {alarm_post(NState), timeout(NState, Time)}.
 
 change(#state{alarm=Alarm, interval_time=IntervalTime, time=PrevTime} = State,
-       Time, {Target, Interval, Alarm}) ->
+       Time, #{target := Target, interval := Interval, alarm := Alarm}) ->
     NIntervalTime = IntervalTime - PrevTime + Time,
-    NState = State#state{target=sbroker_util:sojourn_target(Target),
-                         interval=sbroker_util:interval(Interval), time=Time,
+    NState = State#state{target=erlang:convert_time_unit(Target, milli_seconds,
+                                                         native),
+                         interval=erlang:convert_time_unit(Interval,
+                                                           milli_seconds,
+                                                           native), time=Time,
                          interval_time=NIntervalTime},
     {NState, timeout(NState, Time)};
 change(_, Time, Args) ->

@@ -221,9 +221,9 @@ queue_spec() ->
      {oneof([out, out_r]), resize(4, list(oneof([0, choose(1, 2)])))}}.
 
 meter_spec() ->
-    oneof([{sbroker_overload_meter, {0, 1000, ?MODULE}},
-           {sbetter_statem_meter, {self, {1000, 1000, 1000}}},
-           {sregulator_update_meter, [{undefined, ask, 1000}]}]).
+    oneof([{sbroker_overload_meter, #{}},
+           {sbetter_statem_meter, {self, #{update => 1000}}},
+           {sregulator_update_meter, [{undefined, ask, #{update => 1000}}]}]).
 
 start_link(Init) ->
     application:set_env(sbroker, ?MODULE, update_spec(Init)),

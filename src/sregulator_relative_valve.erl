@@ -17,31 +17,30 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @doc Implements a valve which increases its size based on updates being below
-%% a target between a minimum and maximum capacity.
+%% @doc Implements a valve which increases its size when an update is below
+%% a target.
 %%
 %% `sregulator_relative_value' can be used as the `sregulator_valve' in a
-%% `sregulator'. Its argument is of the form:
+%% `sregulator'. It will provide a valve that increases in size when an update
+%% is below a target valve between the minimum and maximum capacity. Its
+%% argument, `spec()', is of the form:
 %% ```
-%% {Target :: integer(), Min :: non_neg_integer(),
-%%  Max :: non_neg_integer() | infinity}
+%% #{target   => Target :: integer(), % default: 100
+%%   min      => Min :: non_neg_integer(), % default: 0
+%%   max      => Max :: non_neg_integer() | infinity} % default: infinity
 %% '''
-%% `Target' is the target relative value in milliseconds. The valve will open
-%% when an update below the target (in `native' time units) is received if
-%% between the the minimum, `Min', and the maximum, `Max'. Once opened by an
-%% update the valve remains open until the concurrency level increases by 1 or
-%% an update greater than the target is received. The valve is always open when
-%% below the minimum and always closed once it reaches the maximum.
+%% `Target' is the target relative value in milliseconds (defaults to `100').
+%% The valve will open when an update below the target (in `native' time units)
+%% is received if between the the minimum, `Min' (defaults to `0'), and the
+%% maximum, `Max' (defaults to `infinity'). Once opened by an update the valve
+%% remains open until the concurrency level increases by 1 or an update greater
+%% than the target is received. The valve is always open when below the minimum
+%% and always closed once it reaches the maximum.
 %%
 %% This valve tries to enforce a minimum level of concurrency and will grow
 %% while a relevant `sbroker_queue' is moving quickly - up to a maximum.
-%% Therefore this valves expects the updates to be samples from the
-%% `RelativeTime' in `go' tuples. For example:
-%% ```
-%% {go, _Ref, _Value, RelativeTime, _SojournTime} = sbroker:ask(Broker),
-%% sregulator:update(Regulator, RelativeTime).
-%% '''
-%% To grow when a queue is moving slowly use `-RelativeTime'.
+%% Therefore this valve expects the updates to be from a
+%% `sregulator_update_meter'.
 %%
 %% By using a positive target `RelativeTime' of an `sbroker' queue, a pool of
 %% workers can grow before the queue is empty. Therefore preventing or delaying
@@ -71,6 +70,13 @@
 
 %% types
 
+-type spec() ::
+    #{target   => Target :: integer(),
+      min      => Min :: non_neg_integer(),
+      max      => Max :: non_neg_integer() | infinity}.
+
+-export_type([spec/0]).
+
 -record(state, {min :: non_neg_integer(),
                 max :: non_neg_integer() | infinity,
                 target :: integer(),
@@ -82,17 +88,14 @@
 %% sregulator_valve api
 
 %% @private
--spec init(Map, Time, {RelativeTarget, Min, Max}) ->
-    {open | closed, State, infinity} when
+-spec init(Map, Time, Spec) -> {open | closed, State, infinity} when
       Map :: sregulator_valve:internal_map(),
       Time :: integer(),
-      RelativeTarget :: integer(),
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       State :: #state{}.
-init(Map, Time, {RelativeTarget, Min, Max}) ->
-    {Min, Max} = sbroker_util:min_max(Min, Max),
-    Target = sbroker_util:relative_target(RelativeTarget),
+init(Map, Time, Spec) ->
+    {Min, Max} = sbroker_util:min_max(Spec),
+    Target = sbroker_util:relative_target(Spec),
     handle(#state{min=Min, max=Max, target=Target, updated=Time,
                   small_time=Time, map=Map}).
 
@@ -214,17 +217,14 @@ code_change(_, _, State, _) ->
     handle(State).
 
 %% @private
--spec config_change({RelativeTarget, Min, Max}, Time, State) ->
-    {open | closed, NState, infinity} when
-      RelativeTarget :: integer(),
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+-spec config_change(Spec, Time, State) -> {open | closed, NState, infinity} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-config_change({RelativeTarget, Min, Max}, _, State) ->
-    {Min, Max} = sbroker_util:min_max(Min, Max),
-    Target = sbroker_util:relative_target(RelativeTarget),
+config_change(Spec, _, State) ->
+    {Min, Max} = sbroker_util:min_max(Spec),
+    Target = sbroker_util:relative_target(Spec),
     handle(State#state{min=Min, max=Max, target=Target}).
 
 %% @private

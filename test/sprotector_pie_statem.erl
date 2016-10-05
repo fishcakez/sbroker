@@ -42,15 +42,23 @@
 module() ->
     sprotector_pie_meter.
 
+
 args() ->
+    ?LET({AskTarget, AskBurst, BidTarget, BidBurst, Update, Min, Max},
+         gen_args(),
+         #{ask    => #{target => AskTarget, interval => AskBurst},
+           ask_r  => #{target => BidTarget, interval => BidBurst},
+           update => Update, min => Min, max => Max}).
+
+gen_args() ->
     ?SUCHTHAT({_, _, _, _, _, Min, Max},
               {choose(0, 3), choose(1, 3), choose(0, 3), choose(1, 3),
                choose(1, 5), choose(0, 3), oneof([choose(0, 5), infinity])},
               Min =< Max).
 
-init(Time, {AskTarget, AskBurst, BidTarget, BidBurst, Update, _, _}) ->
-    {AskPie, Next} = pie_init(Time, AskTarget, AskBurst, Update),
-    {BidPie, Next} = pie_init(Time, BidTarget, BidBurst, Update),
+init(Time, #{ask := Ask, ask_r := Bid, update := Update}) ->
+    {AskPie, Next} = pie_init(Time, Ask, Update),
+    {BidPie, Next} = pie_init(Time, Bid, Update),
     {{AskPie, BidPie}, Next}.
 
 update_next({AskPie, BidPie}, Time, _, QueueDelay, _, RelativeTime) ->
@@ -88,10 +96,9 @@ len_post(MsgQueueLen) ->
             false
     end.
 
-change({AskPie, BidPie}, Time,
-       {AskTarget, AskBurst, BidTarget, BidBurst, Update, _, _}) ->
-    {NAskPie, Next} = pie_change(AskPie, Time, AskTarget, AskBurst, Update),
-    {NBidPie, Next} = pie_change(BidPie, Time, BidTarget, BidBurst, Update),
+change({AskPie, BidPie}, Time, #{ask := Ask, ask_r := Bid, update := Update}) ->
+    {NAskPie, Next} = pie_change(AskPie, Time, Ask, Update),
+    {NBidPie, Next} = pie_change(BidPie, Time, Bid, Update),
     {{NAskPie, NBidPie}, Next}.
 
 timeout({AskPie, BidPie}, Time) ->
@@ -99,11 +106,12 @@ timeout({AskPie, BidPie}, Time) ->
 
 %% Helpers
 
-pie_init(Time, Target, Burst, Update) ->
-    NBurst = sbroker_util:interval(Burst),
-    NUpdate = sbroker_util:interval(Update),
-    Pie = #pie{target=sbroker_util:sojourn_target(Target), burst=NBurst,
-               burst_allowance=NBurst, update=NUpdate, update_next=Time},
+pie_init(Time, #{target := Target, interval := Burst}, Update) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
+    NBurst = erlang:convert_time_unit(Burst, milli_seconds, native),
+    NUpdate = erlang:convert_time_unit(Update, milli_seconds, native),
+    Pie = #pie{target=NTarget, burst=NBurst, burst_allowance=NBurst,
+               update=NUpdate, update_next=Time},
     {Pie, Time}.
 
 pie_update(#pie{old=undefined} = Pie, Time, Sojourn) ->
@@ -171,14 +179,14 @@ enqueue(#pie{drop_prob=DropProb, current=Current, target=Target, old=Old,
             {DropProb, Pie}
     end.
 
-pie_change(#pie{current=undefined}, Time, Target, Burst, Update) ->
-    pie_init(Time, Target, Burst, Update);
+pie_change(#pie{current=undefined}, Time, Config, Update) ->
+    pie_init(Time, Config, Update);
 pie_change(#pie{burst_allowance=BurstAllow, burst=OldBurst,
-                update_next=UpdateNext, current=Current} = Pie, Time, Target,
-           Burst, Update) ->
-    NTarget = sbroker_util:sojourn_target(Target),
-    NBurst = sbroker_util:interval(Burst),
-    NUpdate = sbroker_util:interval(Update),
+                update_next=UpdateNext, current=Current} = Pie, Time,
+           #{target := Target, interval := Burst}, Update) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
+    NBurst = erlang:convert_time_unit(Burst, milli_seconds, native),
+    NUpdate = erlang:convert_time_unit(Update, milli_seconds, native),
     NUpdateNext = min(Time + NUpdate, UpdateNext),
     NBurstAllow = if
                       BurstAllow == 0 ->

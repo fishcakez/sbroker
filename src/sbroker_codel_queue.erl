@@ -17,30 +17,46 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @doc Implements a head or tail drop queue with queue management based roughly
-%% on CoDel (Controlling Queue Delay), see reference.
+%% @doc Implements a head or tail drop queue with queue management based on
+%% CoDel (Controlling Queue Delay).
 %%
-%% `sbroker_codel_queue' can be used as an `sbroker_queue' module in `sbroker'.
-%% Its argument is of the form:
+%% `sbroker_codel_queue' can be used as a `sbroker_queue' in a `sbroker' or
+%% `sregulator'. It will provide a FIFO or LIFO queue that drops request in the
+%% queue using CoDel when the minimum size is exceeded, and drops the head or
+%% tail request from the queue when a maximum size is exceeded. Its argument,
+%% `spec()', is of the form:
 %% ```
-%% {out | out_r, Target :: non_neg_integer(), Interval :: pos_integer(),
-%%  drop | drop_r, Min :: non_neg_integer(),
-%%  Max :: non_neg_integer() | infinity}.
+%% #{out      => Out :: out | out_r, % default: out
+%%   target   => Target :: non_neg_integer(), % default: 100
+%%   interval => Interval :: pos_integer(), % default: 1000
+%%   drop     => Drop :: drop | drop_r, % default: drop_r
+%%   min      => Min :: non_neg_integer(), % default: 0
+%%   max      => Max :: non_neg_integer() | infinity} % default: infinity
 %% '''
-%% The first element is `out' for a FIFO queue and `out_r' for a LIFO queue.
-%% `Target' is the target queue sojourn time and `Interval' is in the initial
-%% interval between drops when the queue is above the minimum size `Min'. The
-%% fourth element determines whether to drop from head (`drop') or drop from the
-%% tail (`drop_r') when the queue is above the maximum size `Max'.
+%% `Out' is either `out' for a FIFO queue (the default) or `out_r' for a LIFO
+%% queue. `Target' is the target queue sojourn time in milliseconds (defaults to
+%% `100'). `Interval' is in the initial interval in milliseconds (defaults to
+%% `1000') between drops when the queue is above the minimum size
+%% `Min' (defaults to `0'). `Drop' is either `drop_r' for tail drop (the
+%% default) where the last request is droppped, or `drop' for head drop, where
+%% the first request is dropped. Dropping occurs when queue is above the
+%% maximum size `Max' (defaults to `infinity').
 %%
 %% Initial parameters are recommended to be between the 95th and 99th percentile
 %% round trip time for the interval and the target between 5% and 10% of the
 %% interval. The round trip should be that between the actual initiator of the
 %% request (e.g. a remote client) and the queue. For example, the reference
 %% suggests an interval of 100ms and a target of 5ms when queuing TCP packets in
-%% a kernel's buffer. A TCP connection handshake is 3 way or 1.5 round trips.
-%% A request and response might be a few more round trips at the packet level
-%% even if using a single `:gen_tcp.send/2'.
+%% a kernel's buffer. A request and response might be a few more round trips at
+%% the packet level even if using a single `:gen_tcp.send/2'.
+%%
+%% A person perceives a response time of `100' milliseconds or less as
+%% instantaneous, and feels engaged with a system if response times are `1000'
+%% milliseconds or less. Therefore it is desirable for a system to respond
+%% within `1000' milliseconds as a worst case (upper percentile response time)
+%% and ideally to respond within `100' milliseconds (target response time).
+%% These also match with the suggested ratios for CoDel and so the default
+%% target is `100' milliseconds and the default is interval `1000' milliseconds.
 %%
 %% This implementation differs from the reference as enqueue and other functions
 %% can detect a slow queue and drop items. However once a slow item has been
@@ -66,6 +82,9 @@
 %%
 %% @reference Kathleen Nichols and Van Jacobson, Controlling Queue Delay,
 %% ACM Queue, 6th May 2012.
+%% @reference Stuart Card, George Robertson and Jock Mackinlay, The Information
+%% Visualizer: An Information Workspace, ACM Conference on Human Factors in
+%% Computing Systems, 1991.
 -module(sbroker_codel_queue).
 
 -behaviour(sbroker_queue).
@@ -88,6 +107,16 @@
 
 %% types
 
+-type spec() ::
+    #{out      => Out :: out | out_r,
+      target   => Target :: non_neg_integer(),
+      interval => Interval :: pos_integer(),
+      drop     => Drop :: drop | drop_r,
+      min      => Min :: non_neg_integer(),
+      max      => Max :: non_neg_integer() | infinity}.
+
+-export_type([spec/0]).
+
 -record(state, {out :: out | out_r,
                 target :: non_neg_integer(),
                 interval :: pos_integer(),
@@ -104,20 +133,14 @@
 %% public API
 
 %% @private
--spec init(Q, Time, {Out, Target, Interval, Drop, Min, Max}) ->
-    {State, NextTimeout} when
+-spec init(Q, Time, Spec) -> {State, NextTimeout} when
       Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
-      Out :: out | out_r,
-      Target :: non_neg_integer(),
-      Interval :: pos_integer(),
-      Drop :: drop | drop_r,
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       State :: #state{},
       NextTimeout :: integer() | infinity.
-init(Q, Time, Args) ->
-    handle_timeout(Time, from_queue(Q, queue:len(Q), Time, Args)).
+init(Q, Time, Spec) ->
+    handle_timeout(Time, from_queue(Q, queue:len(Q), Time, Spec)).
 
 %% @private
 -spec handle_in(SendTime, From, Value, Time, State) ->
@@ -258,22 +281,16 @@ code_change(_, Time, State, _) ->
     {State, max(Time, timeout_next(State))}.
 
 %% @private
--spec config_change({Out, Target, Interval, Drop, Min, Max}, Time, State) ->
-    {NState, NextTimeout} when
-      Out :: out | out_r,
-      Target :: non_neg_integer(),
-      Interval :: pos_integer(),
-      Drop :: drop | drop_r,
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+-spec config_change(Spec, Time, State) -> {NState, NextTimeout} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       NextTimeout :: integer() | infinity.
-config_change(Arg, Time,
+config_change(Spec, Time,
               #state{drop_first=DropFirst, drop_next=DropNext,
                      timeout_next=TimeoutNext, count=C, len=Len, queue=Q}) ->
-    State = from_queue(Q, Len, Time, Arg),
+    State = from_queue(Q, Len, Time, Spec),
     NState = State#state{drop_first=DropFirst, drop_next=DropNext,
                          timeout_next=TimeoutNext, count=C},
     change(Time, NState).
@@ -494,15 +511,14 @@ drop_queue(Time, Q) ->
     _ = queue:filter(Drop, Q),
     ok.
 
-from_queue(Q, Len, Time, {Out, Target, Interval, drop, Min, 0}) ->
-    from_queue(Q, Len, Time, {Out, Target, Interval, drop_r, Min, 0});
-from_queue(Q, Len, Time, {Out, Target, Interval, Drop, Min, Max})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) ->
-    {Min, Max} = sbroker_util:min_max(Min, Max),
-    State = #state{out=Out, target=sbroker_util:sojourn_target(Target),
-                   interval=sbroker_util:interval(Interval), drop=Drop, min=Min,
-                   max=Max, drop_next=Time, timeout_next=Time, len=Len,
+from_queue(Q, Len, Time, Spec) ->
+    Out = sbroker_util:out(Spec),
+    Interval = sbroker_util:interval(Spec),
+    Target = sbroker_util:sojourn_target(Spec),
+    Drop = sbroker_util:drop(Spec),
+    {Min, Max} = sbroker_util:min_max(Spec),
+    State = #state{out=Out, target=Target, interval=Interval, drop=Drop,
+                   min=Min, max=Max, drop_next=Time, timeout_next=Time, len=Len,
                    queue=Q},
     if
         Len > Max andalso Drop =:= drop ->

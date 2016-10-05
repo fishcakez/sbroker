@@ -17,21 +17,28 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
+%% @doc Sets an alarm when the regulator's valve is slow to get a match for an
+%% interval.
+%%
 %% @doc Sets a SASL `alarm_handler' alarm when the regulator's valve is slow to
 %% get match for an interval. Once the valve becomes fast for an interval the
 %% alarm is cleared.
 %%
-%% `sregulator_underload_meter' can be used in a `sregulator'. Its argument is
-%% of the form:
+%% `sregulator_underload_meter' can be used in as a `sbroker_meter' in a
+%% `sregulator'. It will set a SASL `alarm_handler' alarm when the regulator's
+%% valve is slow to get a match for an interval and clear it once the valve
+%% gets matches fast for an interval. Its argument, `spec()', is of the form:
 %% ```
-%% {Target :: integer(), Interval :: pos_integer(), AlarmId :: any()}
+%% #{alarm    => Alarm :: any(), % default: {underload, self()}
+%%   target   => Target :: integer(), % default: 100
+%%   interval => Interval :: pos_integer()}. % default: 1000
 %% '''
-%% `Target' is the target relative time of the valve in milliseconds. The
-%% meter will set the alarm `AlarmId' in `alarm_handler' if the relative time of
-%% the valve is above the target for `Interval' milliseconds. Once set
-%% if the relative time is below `Target'  for `Interval' milliseconds the alarm
-%% is cleared. The description of the alarm is `{valve_slow, Pid}' where
-%% `Pid' is the `pid()' of the process.
+%% `Alarm' is the `alarm_handler' alarm that will be set/cleared by the meter
+%% (defaults to `{underload, self()}'). `Target' is the target relative time for
+%% the valve to get a match (defaults to `100'). `Interval' is the interval in
+%% milliseconds (defaults to `1000') that the valve must be above the target for
+%% the alarm to be set and below the target for the alarm to be cleared. The
+%% description of the alarm is `{valve_slow, self()}'.
 %%
 %% This meter is only intended for a `sregulator' because a `sregulator_valve'
 %% will remain open when processes that should be available are not sending
@@ -51,6 +58,13 @@
 -export([config_change/3]).
 -export([terminate/2]).
 
+%% types
+
+-type spec() ::
+    #{alarm    => Alarm :: any(),
+      target   => Target :: integer(),
+      interval => Interval :: pos_integer()}.
+
 -record(state, {target :: integer(),
                 interval :: pos_integer(),
                 alarm_id :: any(),
@@ -58,17 +72,16 @@
                 toggle_next = infinity :: integer() | infinity}).
 
 %% @private
--spec init(Time, {Target, Interval, AlarmId}) -> {State, infinity} when
+-spec init(Time, Spec) -> {State, infinity} when
       Time :: integer(),
-      Target :: integer(),
-      Interval :: pos_integer(),
-      AlarmId :: any(),
+      Spec :: spec(),
       State :: #state{}.
-init(_, {Target, Interval, AlarmId}) ->
+init(_, Spec) ->
+    AlarmId = sbroker_util:alarm(underload, Spec),
+    Target = sbroker_util:relative_target(Spec),
+    Interval = sbroker_util:interval(Spec),
     alarm_handler:clear_alarm(AlarmId),
-    State = #state{target=sbroker_util:relative_target(Target),
-                   interval=sbroker_util:interval(Interval), alarm_id=AlarmId},
-    {State, infinity}.
+    {#state{target=Target, interval=Interval, alarm_id=AlarmId}, infinity}.
 
 %% @private
 -spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, State) ->
@@ -136,33 +149,33 @@ code_change(_, Time, #state{toggle_next=ToggleNext} = State, _) ->
     {State, max(Time, ToggleNext)}.
 
 %% @private
--spec config_change({Target, Interval, AlarmId}, Time, State) ->
-    {NState, Next} when
-      Target :: integer(),
-      Interval :: pos_integer(),
-      AlarmId :: any(),
+-spec config_change(Spec, Time, State) -> {NState, Next} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       Next :: integer() | infinity.
-config_change({Target, NInterval, AlarmId}, Time,
-              #state{alarm_id=AlarmId, interval=Interval,
+config_change(Spec, Time,
+              #state{alarm_id=AlarmId, interval=Interval, status=Status,
                      toggle_next=ToggleNext} = State) ->
-    NTarget = sbroker_util:relative_target(Target),
-    NInterval2 = sbroker_util:interval(NInterval),
-    NState = State#state{target=NTarget, interval=NInterval2, alarm_id=AlarmId},
-    case ToggleNext of
-        infinity ->
-            {NState, infinity};
-        _ ->
-            NToggleNext = ToggleNext+NInterval2-Interval,
-            {NState#state{toggle_next=NToggleNext}, max(Time, NToggleNext)}
-    end;
-config_change(Args, Time, #state{status=set, alarm_id=AlarmId}) ->
-    alarm_handler:clear_alarm(AlarmId),
-    init(Time, Args);
-config_change(Args, Time, _) ->
-    init(Time, Args).
+    case sbroker_util:alarm(underload, Spec) of
+        AlarmId when ToggleNext == infinity ->
+            NTarget = sbroker_util:relative_target(Spec),
+            NInterval = sbroker_util:interval(Spec),
+            {State#state{target=NTarget, interval=NInterval}, infinity};
+        AlarmId when is_integer(ToggleNext) ->
+            NTarget = sbroker_util:relative_target(Spec),
+            NInterval = sbroker_util:interval(Spec),
+            NToggleNext = ToggleNext+NInterval-Interval,
+            NState = State#state{target=NTarget, interval=NInterval,
+                                 toggle_next=NToggleNext},
+            {NState, max(Time, NToggleNext)};
+        _ when Status == set ->
+            alarm_handler:clear_alarm(AlarmId),
+            init(Time, Spec);
+        _ when Status == clear ->
+            init(Time, Spec)
+    end.
 
 %% @private
 -spec terminate(Reason, State) -> ok when

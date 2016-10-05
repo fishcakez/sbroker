@@ -38,14 +38,18 @@ module() ->
     sregulator_codel_valve.
 
 args() ->
+    ?LET({Target, Interval, Min, Max}, gen_args(),
+         #{target => Target, interval => Interval, min => Min, max => Max}).
+
+gen_args() ->
     ?LET({Min, Max},
          ?SUCHTHAT({Min, Max}, {choose(0, 5), oneof([choose(0, 5), infinity])},
                    Min =< Max),
          {choose(-10, 10), choose(1, 3), Min, Max}).
 
-init({Target, Interval, Min, Max}, _, _) ->
-    NTarget = sbroker_util:relative_target(Target),
-    NInterval = sbroker_util:interval(Interval),
+init(#{target := Target, interval := Interval, min := Min, max := Max}, _, _) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
+    NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),
     {Min, Max, closed, #state{target=NTarget, interval=NInterval}}.
 
 handle_update(Value, Time, State) ->
@@ -67,11 +71,11 @@ handle_done(Time, State) ->
 handle(Time, State) ->
     handle(State#state{now=Time}).
 
-config_change({Target, Interval, Min, Max}, _, Time,
-              #state{first_above_time=FirstAbove,
-                     open_next=OpenNext} = State) ->
-    NTarget = sbroker_util:relative_target(Target),
-    NInterval = sbroker_util:interval(Interval),
+config_change(#{target := Target, interval := Interval, min := Min, max := Max},
+              _, Time,#state{first_above_time=FirstAbove,
+                             open_next=OpenNext} = State) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
+    NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),
     NFirstAbove = reduce(FirstAbove, Time+NInterval),
     NOpenNext = reduce(OpenNext, Time+NInterval),
     NState = State#state{target=NTarget, interval=NInterval,

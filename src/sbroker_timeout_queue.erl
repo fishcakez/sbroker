@@ -14,25 +14,40 @@
 %% "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
 %% KIND, either express or implied. See the License for the
 %% specific language governing permissions and limitations
-%% under the License.
+%% under  License.
 %%
 %%-------------------------------------------------------------------
 %% @doc Implements a head or tail drop queue with a timeout queue management
-%% algorithm, where items are dropped once their sojourn time is greater than or
-%% equal to a timeout value.
+%% algorithm
 %%
-%% `sbroker_timeout_queue' can be used as an `sbroker_queue' module in
-%% `sbroker'. Its argument is of the form:
+%% `sbroker_timeout_queue' can be used as an `sbroker_queue' in a `sbroker' or
+%% `sregulator'. It will provide a FIFO or LIFO queue thats drops requests that
+%% remain in the queue for longer than a timeout when the minimum size is
+%% exceeded, and drops the head or tail request from the queue when a maximum
+%% size is exceeded. Its argument, `spec()', is of the form:
 %% ```
-%% {out | out_r, Timeout :: timeout(), drop | drop_r, Min :: non_neg_integer(),
-%%  Max :: non_neg_integer() | infinity}.
+%% #{out     => Out :: out | out_r, % default: out
+%%   timeout => Timeout :: timeout(), % default: 5000
+%%   drop    => Drop :: drop | drop_r, % default: drop_r
+%%   min     => Min :: non_neg_integer(), % default: 0
+%%   max     => Max :: non_neg_integer() | infinity} % default: infinity
 %% '''
-%% The first element is `out' for a FIFO queue and `out_r' for a LIFO queue.
-%% `Timeout' is the timeout value in `milli_seconds', i.e. the minimum
-%% sojourn time at which items are dropped from the queue when the queue is
-%% above the minimum size `Min'. The third element determines whether to drop
-%% from head (`drop') or drop from the tail (`drop_r') when the queue is above
-%% the maximum size `Max'.
+%% `Out' is either `out' for a FIFO queue (the default) or `out_r' for a LIFO
+%% queue. `Timeout' is timeout time in milliseconds or `infinity' (defaults to
+%% `5000') when requests are dropped from the queue when above the minimum size
+%% `Min' (defaults to `0'). `Drop' is either `drop_r' for tail drop (the
+%% default) where the last request is droppped, or `drop' for head drop, where
+%% the first request is dropped. Dropping occurs when queue is above the
+%% maximum size `Max' (defaults to `infinity').
+%%
+%% If it is possible for the counterparty in the broker to "disappear" for a
+%% period of time then setting a `Min' above `0' can leave `Min' items in the
+%% queue for an extended period of time as requests are only dropped when the
+%% queue size is above `Min'. This may be undesirable for client requests
+%% because the request could wait in the queue indefinitely if there are not
+%% enough requests to take the queue above `Min'. However it might be desired
+%% for database connections where it is ideal for a small number of connections
+%% to be waiting to handle a client request.
 -module(sbroker_timeout_queue).
 
 -behaviour(sbroker_queue).
@@ -55,6 +70,15 @@
 
 %% types
 
+-type spec() ::
+    #{out     => Out :: out | out_r,
+      timeout => Timeout :: timeout(),
+      drop    => Drop :: drop | drop_r,
+      min     => Min :: non_neg_integer(),
+      max     => Max :: non_neg_integer() | infinity}.
+
+-export_type([spec/0]).
+
 -record(state, {out :: out | out_r,
                 timeout :: timeout(),
                 drop :: drop | drop_r,
@@ -67,18 +91,14 @@
 %% public api
 
 %% @private
--spec init(Q, Time, {Out, Timeout, Drop, Min, Max}) -> {State, TimeoutNext} when
+-spec init(Q, Time, Spec) -> {State, TimeoutNext} when
       Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
-      Out :: out | out_r,
-      Timeout :: timeout(),
-      Drop :: drop | drop_r,
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       State :: #state{},
       TimeoutNext :: integer() | infinity.
-init(Q, Time, Args) ->
-    handle_timeout(Time, from_queue(Q, queue:len(Q), Time, Args)).
+init(Q, Time, Spec) ->
+    handle_timeout(Time, from_queue(Q, queue:len(Q), Time, Spec)).
 
 %% @private
 -spec handle_in(SendTime, From, Value, Time, State) ->
@@ -217,19 +237,14 @@ code_change(_, Time, State, _) ->
     {State, max(Time, timeout_next(State))}.
 
 %% @private
--spec config_change({Out, Timeout, Drop, Min, Max}, Time, State) ->
-    {NState, TimeoutNext} when
-      Out :: out | out_r,
-      Timeout :: timeout(),
-      Drop :: drop | drop_r,
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+-spec config_change(Spec, Time, State) -> {NState, TimeoutNext} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       TimeoutNext :: integer() | infinity.
-config_change(Arg, Time, #state{queue=Q, len=Len}) ->
-    handle_timeout(Time, from_queue(Q, Len, Time, Arg)).
+config_change(Spec, Time, #state{queue=Q, len=Len}) ->
+    handle_timeout(Time, from_queue(Q, Len, Time, Spec)).
 
 %% @private
 -spec len(State) -> Len when
@@ -357,22 +372,19 @@ timeout(Min, Len, Q, Time, #state{timeout=Timeout} = State) ->
             {NState, infinity}
     end.
 
-from_queue(Q, Len, Time, {Out, Timeout, Drop, Min, infinity})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) ->
-    NTimeout = sbroker_util:timeout(Timeout),
-    {Min, infinity} = sbroker_util:min_max(Min, infinity),
-    #state{out=Out, drop=Drop, min=Min, max=infinity, timeout=NTimeout,
-           timeout_next=first_timeout_next(Time, NTimeout), len=Len, queue=Q};
-from_queue(Q, Len, Time, {Out, Timeout, drop, Min, 0}) ->
-    from_queue(Q, Len, Time, {Out, Timeout, drop_r, Min, 0});
-from_queue(Q, Len, Time, {Out, Timeout, Drop, Min, Max})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) ->
-    {Min, Max} = sbroker_util:min_max(Min, Max),
-    NTimeout = sbroker_util:timeout(Timeout),
-    Next = first_timeout_next(Time, NTimeout),
-    State = #state{out=Out, drop=Drop, min=Min, max=Max, timeout=NTimeout,
+from_queue(Q, Len, Time, Spec) ->
+    Out = sbroker_util:out(Spec),
+    Timeout = sbroker_util:timeout(Spec),
+    Drop = sbroker_util:drop(Spec),
+    {Min, Max} = sbroker_util:min_max(Spec),
+    from_queue(Q, Len, Time, Out, Timeout, Drop, Min, Max).
+
+from_queue(Q, Len, Time, Out, Timeout, Drop, Min, infinity) ->
+    #state{out=Out, drop=Drop, min=Min, max=infinity, timeout=Timeout,
+           timeout_next=first_timeout_next(Time, Timeout), len=Len, queue=Q};
+from_queue(Q, Len, Time, Out, Timeout, Drop, Min, Max) ->
+    Next = first_timeout_next(Time, Timeout),
+    State = #state{out=Out, drop=Drop, min=Min, max=Max, timeout=Timeout,
                    timeout_next=Next, len=Len, queue=Q},
     case Len - Max of
         DropCount when DropCount > 0 andalso Drop =:= drop ->

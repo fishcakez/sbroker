@@ -59,6 +59,12 @@ module() ->
     sbroker_codel_queue.
 
 args() ->
+    ?LET({Out, Target, Interval, Drop, Min, Max},
+         gen_args(),
+         #{out => Out, target => Target, interval => Interval, drop => Drop,
+           min => Min, max => Max}).
+
+gen_args() ->
     ?SUCHTHAT({_, _, _, _, Min, Max},
               {oneof([out, out_r]),
                choose(0, 3),
@@ -71,9 +77,10 @@ args() ->
 time_dependence(#state{}) ->
     dependent.
 
-init({Out, Target, Interval, Drop, Min, Max}) ->
-    NTarget = sbroker_util:sojourn_target(Target),
-    NInterval = sbroker_util:interval(Interval),
+init(#{out := Out, target := Target, interval := Interval, drop := Drop,
+       min := Min, max := Max}) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
+    NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),
     {Out, Drop, Min, Max, #state{target=NTarget, interval=NInterval,
                                  max_packet=Min}}.
 
@@ -145,11 +152,13 @@ handle_out_r(Time, L, #state{max_packet=MaxPacket} = State) ->
             {Drops, NState}
     end.
 
-config_change(Time, {Out, Target, Interval, Drop, Min, Max},
+config_change(Time,
+              #{out := Out, target := Target, interval := Interval,
+                drop := Drop, min := Min, max := Max},
               #state{first_above_time=FirstAbove,
                      drop_next=DropNext} = State) ->
-    NTarget = sbroker_util:sojourn_target(Target),
-    NInterval = sbroker_util:interval(Interval),
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
+    NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),
     NFirstAbove = reduce(FirstAbove, Time+NInterval),
     NDropNext = reduce(DropNext, Time+NInterval),
     NState = State#state{target=NTarget, interval=NInterval, max_packet=Min,

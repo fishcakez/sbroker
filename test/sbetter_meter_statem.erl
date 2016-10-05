@@ -38,12 +38,17 @@ module() ->
     sbetter_meter.
 
 args() ->
-    {choose(0, 5), choose(0, 5), choose(1, 5)}.
+    ?LET({AskUpper, AskRUpper, Update},
+         {choose(0, 5), choose(0,5), choose(1,5)},
+         #{ask    => #{upper => AskUpper},
+           ask_r  => #{upper => AskRUpper},
+           update => Update}).
 
-init(Time, {Ask, Bid, Update}) ->
-    NAsk = sbroker_util:sojourn_target(Ask),
-    NBid = sbroker_util:sojourn_target(Bid),
-    NUpdate = sbroker_util:interval(Update),
+init(Time,
+     #{ask := #{upper := Ask}, ask_r := #{upper := Bid}, update := Update}) ->
+    NAsk = erlang:convert_time_unit(Ask, milli_seconds, native),
+    NBid = erlang:convert_time_unit(Bid, milli_seconds, native),
+    NUpdate = erlang:convert_time_unit(Update, milli_seconds, native),
     {#state{ask_upper=NAsk, bid_upper=NBid, update=NUpdate}, Time}.
 
 update_next(#state{update=NUpdate} = State, Time, _, _, _, _) ->

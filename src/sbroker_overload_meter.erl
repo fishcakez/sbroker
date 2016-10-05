@@ -17,26 +17,29 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @doc Sets a SASL `alarm_handler' alarm when the process's message queue is
-%% slow for an interval. Once the message queue becomes fast for an interval the
-%% alarm is cleared.
+%% @doc Sets an alarm when the process's message queue is slow for an interval.
 %%
-%% `sbroker_overload_meter' can be used as the `sbroker_meter' in a `sbroker' or
-%% a `sregulator'. Its argument is of the form:
+%% `sbroker_overload_meter' can be used as a `sbroker_meter' in a `sbroker' or
+%% a `sregulator'. It will set a SASL `alarm_handler' alarm when the process's
+%% message queue is slow for an interval and clear it once the message queue
+%% becomes fast for an interval. Its argument, `spec()', is of the form:
 %% ```
-%% {Target :: non_neg_integer(), Interval :: pos_integer(), AlarmId :: any()}
+%% #{alarm    => Alarm :: any(), % default: {overload, self()}
+%%   target   => Target :: non_neg_integer(), % default: 100
+%%   interval => Interval :: pos_integer()}. % default: 1000
 %% '''
-%% `Target' is the target sojourn time of the message queue in milliseconds. The
-%% meter will set the alarm `AlarmId' in `alarm_handler' if the sojourn time of
-%% the message queue is above the target for `Interval' milliseconds. Once set
-%% if the sojourn time is below `Target'  for `Interval' milliseconds the alarm
-%% is cleared. The description of the alarm is `{message_queue_slow, Pid}' where
-%% `Pid' is the `pid()' of the process.
+%% `Alarm' is the `alarm_handler' alarm that will be set/cleared by the meter
+%% (defaults to `{overload, self()}'). `Target' is the target sojourn time of
+%% the message queue in milliseconds (defaults to `100'). `Interval' is the
+%% interval in milliseconds (defaults to `1000') that the message queue must be
+%% above the target for the alarm to be set and below the target for the alarm
+%% to be cleared. The description of the alarm is
+%% `{message_queue_slow, self()}'.
 %%
 %% This meter detects when the process is receiving more requests than it can
 %% handle and not whether a `sbroker_queue' is congested. If a `sbroker_queue'
 %% becomes congested it will drop requests to clear the congestion, causing a
-%% congestion alarm to be cleared very quickly.
+%% congestion alarm (if one existed) to be cleared very quickly.
 -module(sbroker_overload_meter).
 
 -behaviour(sbroker_meter).
@@ -48,6 +51,15 @@
 -export([config_change/3]).
 -export([terminate/2]).
 
+%% types
+
+-type spec() ::
+    #{alarm    => Alarm :: any(),
+      target   => Target :: non_neg_integer(),
+      interval => Interval :: pos_integer()}.
+
+-export_type([spec/0]).
+
 -record(state, {target :: non_neg_integer(),
                 interval :: pos_integer(),
                 alarm_id :: any(),
@@ -55,17 +67,16 @@
                 toggle_next = infinity :: integer() | infinity}).
 
 %% @private
--spec init(Time, {Target, Interval, AlarmId}) -> {State, infinity} when
+-spec init(Time, Spec) -> {State, infinity} when
       Time :: integer(),
-      Target :: non_neg_integer(),
-      Interval :: pos_integer(),
-      AlarmId :: any(),
+      Spec :: spec(),
       State :: #state{}.
-init(_, {Target, Interval, AlarmId}) ->
+init(_, Spec) ->
+    AlarmId = sbroker_util:alarm(overload, Spec),
+    Target = sbroker_util:sojourn_target(Spec),
+    Interval = sbroker_util:interval(Spec),
     alarm_handler:clear_alarm(AlarmId),
-    State = #state{target=sbroker_util:sojourn_target(Target),
-                   interval=sbroker_util:interval(Interval), alarm_id=AlarmId},
-    {State, infinity}.
+    {#state{target=Target, interval=Interval, alarm_id=AlarmId}, infinity}.
 
 %% @private
 -spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, State) ->
@@ -133,33 +144,33 @@ code_change(_, Time, #state{toggle_next=ToggleNext} = State, _) ->
     {State, max(Time, ToggleNext)}.
 
 %% @private
--spec config_change({Target, Interval, AlarmId}, Time, State) ->
-    {NState, Next} when
-      Target :: non_neg_integer(),
-      Interval :: pos_integer(),
-      AlarmId :: any(),
+-spec config_change(Spec, Time, State) -> {NState, Next} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       Next :: integer() | infinity.
-config_change({Target, NInterval, AlarmId}, Time,
-              #state{alarm_id=AlarmId, interval=Interval,
+config_change(Spec, Time,
+              #state{alarm_id=AlarmId, interval=Interval, status=Status,
                      toggle_next=ToggleNext} = State) ->
-    NTarget = sbroker_util:sojourn_target(Target),
-    NInterval2 = sbroker_util:interval(NInterval),
-    NState = State#state{target=NTarget, interval=NInterval2, alarm_id=AlarmId},
-    case ToggleNext of
-        infinity ->
-            {NState, infinity};
-        _ ->
-            NToggleNext = ToggleNext+NInterval2-Interval,
-            {NState#state{toggle_next=NToggleNext}, max(Time, NToggleNext)}
-    end;
-config_change(Args, Time, #state{status=set, alarm_id=AlarmId}) ->
-    alarm_handler:clear_alarm(AlarmId),
-    init(Time, Args);
-config_change(Args, Time, _) ->
-    init(Time, Args).
+    case sbroker_util:alarm(overload, Spec) of
+        AlarmId when ToggleNext == infinity ->
+            NTarget = sbroker_util:sojourn_target(Spec),
+            NInterval = sbroker_util:interval(Spec),
+            {State#state{target=NTarget, interval=NInterval}, infinity};
+        AlarmId when is_integer(ToggleNext) ->
+            NTarget = sbroker_util:sojourn_target(Spec),
+            NInterval = sbroker_util:interval(Spec),
+            NToggleNext = ToggleNext+NInterval-Interval,
+            NState = State#state{target=NTarget, interval=NInterval,
+                                 toggle_next=NToggleNext},
+            {NState, max(Time, NToggleNext)};
+        _ when Status == set ->
+            alarm_handler:clear_alarm(AlarmId),
+            init(Time, Spec);
+        _ when Status == clear ->
+            init(Time, Spec)
+    end.
 
 %% @private
 -spec terminate(Reason, State) -> ok when

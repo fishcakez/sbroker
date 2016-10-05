@@ -19,7 +19,10 @@
 %%-------------------------------------------------------------------
 %% @doc Implements a fair queue containing multiple `sbroker_queue' queues.
 %%
-%% Its argument is of the form:
+%% `sbroker_fair_queue' can be used as a `sbroker_queue' in a `sbroker' or
+%% `sregulator'. It will provide a queue that enqueues requests to internal
+%% queues based on an index and dequeues from the internal queues fairly. Its
+%% argument, `spec()', is of the form:
 %% ```
 %% {Module :: module(), Args :: any(), Index :: index()}
 %% '''
@@ -82,9 +85,11 @@
 
 -type key() :: application | node | pid | value | {element, pos_integer()}.
 -type index() :: key() | {hash, key(), 1..32#4000000}.
+-type spec() :: {Module :: module(), Args :: any(), Index :: index()}.
 
 -export_type([key/0]).
 -export_type([index/0]).
+-export_type([spec/0]).
 
 -callback handle_fq_out(Time :: integer(), State :: any()) ->
     {SendTime :: integer(), From :: {pid(), Tag :: any()}, Value :: any(),

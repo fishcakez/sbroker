@@ -21,17 +21,22 @@
 %% capacity.
 %%
 %% `sregulator_rate_value' can be used as the `sregulator_valve' in a
-%% `sregulator'. Its argument is of the form:
+%% `sregulator'. It will provide a valve that limits the rate of tasks when
+%% between a minimum and maximum capacity. Its argument, `spec()', is of the
+%% form:
 %% ```
-%% {Limit :: non_neg_integer(), Interval :: pos_integer(),
-%%  Min :: non_neg_integer(), Max :: non_neg_integer() | infinity}
+%% #{limit    => non_neg_integer(), % default: 100
+%%   interval => pos_integer(), % default: 1000
+%%   min      => non_neg_integer(), % default: 0
+%%   max      => non_neg_integer() | infinity}. % default: infinity
 %% '''
-%% `Limit' is the number of new tasks that can run when the number of
-%% concurrent tasks is at or above the minimum capacity, `Min', and below the
-%% maximum capacity, `Max'. The limit is temporarily reduced by `1' for
-%% `Interval' milliseconds after a task is done when capacity is above `Min'.
-%% This ensures that no more than `Limit' tasks can run above the minimum
-%% capacity for any time interval of `Interval' milliseconds.
+%% `Limit' is the number of new tasks (defaults to `100') that can run when the
+%% number of concurrent tasks is at or above the minimum capacity, `Min'
+%% (defaults to `0'), and below the maximum capacity, `Max' (defaults to
+%% `infinity'). The limit is temporarily reduced by `1' for `Interval'
+%% milliseconds (defaults to `1000') after a task is done and the capacity is
+%% above `Min'. This ensures that no more than `Limit' tasks can run above the
+%% minimum capacity for any time interval of `Interval' milliseconds.
 %%
 %% This valve ignores any updates.
 -module(sregulator_rate_valve).
@@ -55,6 +60,14 @@
 
 %% types
 
+-type spec() ::
+    #{limit    => non_neg_integer(),
+      interval => pos_integer(),
+      min      => non_neg_integer(),
+      max      => non_neg_integer() | infinity}.
+
+-export_type([spec/0]).
+
 -record(state, {min :: non_neg_integer(),
                 max :: non_neg_integer() | infinity,
                 interval :: pos_integer(),
@@ -67,24 +80,21 @@
 %% sregulator_valve api
 
 %% @private
--spec init(Map, Time, {Limit, Interval, Min, Max}) ->
+-spec init(Map, Time, Spec) ->
     {open, State, infinity} |
     {closed, State, NextTimeout} when
       Map :: sregulator_valve:internal_map(),
       Time :: integer(),
-      Limit :: non_neg_integer(),
-      Interval :: pos_integer(),
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       State :: #state{},
       NextTimeout :: integer() | infinity.
-init(Map, Time, {Limit, Interval, Min, Max}) ->
-    {Min, Max} = sbroker_util:min_max(Min, Max),
-    Limit = limit(Limit),
+init(Map, Time, Spec) ->
+    Limit = sbroker_util:limit(Spec),
+    Interval = sbroker_util:interval(Spec),
+    {Min, Max} = sbroker_util:min_max(Spec),
     {Overflow, Opens, Next} = change(Map, Limit, 0, Min, Time, queue:new()),
-    State = #state{min=Min, max=Max, interval=sbroker_util:interval(Interval),
-                   overflow=Overflow, opens=Opens, open_next=Next,
-                   small_time=Time, map=Map},
+    State = #state{min=Min, max=Max, interval=Interval, overflow=Overflow,
+                   opens=Opens, open_next=Next, small_time=Time, map=Map},
     handle(Time, State).
 
 %% @private
@@ -217,25 +227,22 @@ code_change(_, Time, State, _) ->
     handle(Time, State).
 
 %% @private
--spec config_change({Limit, Interval, Min, Max}, Time, State) ->
+-spec config_change(Spec, Time, State) ->
     {open, NState, infinity} |
     {closed, NState, NextTimeout} when
-      Limit :: non_neg_integer(),
-      Interval :: pos_integer(),
-      Min :: non_neg_integer(),
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       NextTimeout :: integer() | infinity.
-config_change({Limit, Interval, Min, Max}, Time,
+config_change(Spec, Time,
               #state{interval=PrevInterval, opens=Opens, map=Map} = State) ->
-    {Min, Max} = sbroker_util:min_max(Min, Max),
-    Limit = limit(Limit),
-    NInterval = sbroker_util:interval(Interval),
-    Diff = NInterval - PrevInterval,
+    Limit = sbroker_util:limit(Spec),
+    Interval = sbroker_util:interval(Spec),
+    {Min, Max} = sbroker_util:min_max(Spec),
+    Diff = Interval - PrevInterval,
     {Overflow, NOpens, Next} = change(Map, Limit, Diff, Min, Time, Opens),
-    NState = State#state{min=Min, max=Max, interval=NInterval,
+    NState = State#state{min=Min, max=Max, interval=Interval,
                          overflow=Overflow, opens=NOpens, open_next=Next},
     handle(Time, NState).
 
@@ -268,11 +275,6 @@ terminate(_, #state{map=Map}) ->
     Map.
 
 %% Internal
-
-limit(Limit) when is_integer(Limit), Limit >= 0 ->
-    Limit;
-limit(Limit) ->
-    error(badarg, [Limit]).
 
 change(Map, Limit, IntervalDiff, Min, Time, Opens) ->
     OverCapacity = max(0, map_size(Map) - Min),

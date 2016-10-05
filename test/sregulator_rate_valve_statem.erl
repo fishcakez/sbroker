@@ -36,12 +36,17 @@ module() ->
     sregulator_rate_valve.
 
 args() ->
+    ?LET({Limit, Interval, Min, Max}, gen_args(),
+         #{limit => Limit, interval => Interval, min => Min, max => Max}).
+
+gen_args() ->
     ?LET({Min, Max},
          ?SUCHTHAT({Min, Max}, {choose(0, 5), oneof([choose(0, 5), infinity])},
                    Min =< Max),
          {choose(0, 5), choose(1, 5), Min, Max}).
 
-init({Limit, Interval, Min, Max}, Size, Time) ->
+init(#{limit := Limit, interval := Interval, min := Min, max := Max}, Size,
+     Time) ->
     NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),
     case max(0, Size - (Min + Limit)) of
         Overflow when Overflow > 0 ->
@@ -85,7 +90,8 @@ timeout(Time, State) ->
             infinity
     end.
 
-config_change({Limit, Interval, Min, Max}, Size, Time, State) ->
+config_change(#{limit := Limit, interval := Interval, min := Min, max := Max},
+              Size, Time, State) ->
     {_, #state{intervals=Intervals}} = handle(Time, State),
     NInterval = erlang:convert_time_unit(Interval, milli_seconds, native),
     Active = max(0, Size - Min),

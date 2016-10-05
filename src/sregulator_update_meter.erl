@@ -17,21 +17,22 @@
 %% under the License.
 %%
 %%-------------------------------------------------------------------
-%% @doc Updates a list of regulators with the relative time of a queue
-%% after a random interval. Regulators are updated with `sregulator:cast/2' and
-%% any errors sending the update are ignored.
+%% @doc Updates a list of regulators with the relative time of either queue.
 %%
-%% `sregulator_update_meter' can be used as the `sbroker_meter' in a `sbroker'
-%% or a `sregulator'. Its argument is of the form:
+%% `sregulator_update_meter' can be used as a `sbroker_meter' in a `sbroker' or
+%% a `sregulator'. It will update a list of regulators with the relative time
+%% (in `native' time units) of a specified queue at random intervals, ignoring
+%% any regulators that are not alive. Its argument, `spec()', is of the form:
 %% ```
-%% [{Regulator :: sregulator:regulator(), Queue :: ask | ask_r,
-%%   Update :: pos_integer()}, ...}].
+%% [{Regulator :: sregulator:regulator(),
+%%   Queue :: ask | ask_r,
+%%   Config :: #{update => Update :: pos_integer()}}, ...].
 %% '''
-%%
 %% `Regulator' is a regulator process to update with the approximate relative
 %% time of queue `Queue' with updates uniformly distributed from `0.5 * Update'
-%% to `1.5 * Update' milliseconds. This random interval is used to prevent
-%% synchronisation of update messages and their side effects, see reference.
+%% to `1.5 * Update' milliseconds (defaults to `100'). This random interval is
+%% used to prevent synchronisation of update messages and their side effects,
+%% see reference.
 %%
 %% @see sregulator
 %% @reference Sally Floyd and Van Jacobson, The Synchronization of Periodic
@@ -47,6 +48,12 @@
 -export([config_change/3]).
 -export([terminate/2]).
 
+-type spec() ::
+    [{Regulator :: sregulator:regulator(),
+      Queue :: ask | ask_r,
+      Config :: #{update => Update :: pos_integer()}}, ...].
+
+-export_type([spec/0]).
 
 -record(entry, {regulator :: sregulator:regulator(),
                 queue :: ask | ask_r,
@@ -58,13 +65,9 @@
                 update_next :: integer()}).
 
 %% @private
--spec init(Time, Regulators | {Regulators, Seed}) ->
-    {State, UpdateNext} when
+-spec init(Time, Spec | {Spec, Seed}) -> {State, UpdateNext} when
       Time :: integer(),
-      Regulators :: [{Regulator, Queue, Update}, ...],
-      Regulator :: sregulator:regulator(),
-      Queue :: ask | ask_r,
-      Update :: pos_integer(),
+      Spec :: spec(),
       Seed :: rand:seed(),
       State :: #state{},
       UpdateNext :: integer().
@@ -126,13 +129,10 @@ code_change(_, Time, State, _) ->
     handle(Time, State).
 
 %% @private
--spec config_change(Regulators | {Regulators, Seed}, Time, State) ->
+-spec config_change(Spec | {Spec, Seed}, Time, State) ->
     {NState, UpdateNext} when
       Time :: integer(),
-      Regulators :: [{Regulator, Queue, Update}, ...],
-      Regulator :: sregulator:regulator(),
-      Queue :: ask | ask_r,
-      Update :: pos_integer(),
+      Spec :: spec(),
       Seed :: rand:seed(),
       State :: #state{},
       NState :: #state{},
@@ -176,12 +176,12 @@ entries(EntriesArg) when length(EntriesArg) > 0 ->
 entries(Other) ->
     error(badarg, [Other]).
 
-entry({Regulator, Queue, Update} = EntryArg)
+entry({Regulator, Queue, Config} = EntryArg)
   when Queue == ask; Queue == ask_r ->
     case is_process(Regulator) of
         true ->
             #entry{regulator=Regulator, queue=Queue,
-                   update=sbroker_util:interval(Update)};
+                   update=sbroker_util:update(Config)};
         false ->
             error(badarg, [EntryArg])
     end;

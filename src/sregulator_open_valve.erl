@@ -20,13 +20,14 @@
 %% @doc Implements a simple valve with maximum capacity.
 %%
 %% `sregulator_open_value' can be used as the `sregulator_valve' in a
-%% `sregulator'. Its argument is of the form:
+%% `sregulator'. It will provide a value that is always open up to a maximum
+%% capacity. Its argument, `spec()' is of the form:
 %% ```
-%% Max :: non_neg_integer() | infinity
+%% #{max => Max :: non_neg_integer() | infinity} % default: infinity
 %% '''
-%% `Max' is the maximum number of concurrent tasks the valve will allow to run.
-%% The valve remains open up to the maximum and then closes. It ignores any
-%% updates.
+%% `Max' is the maximum number of concurrent tasks the valve will allow to run
+%% (defaults to `infinity'). The valve remains open up to the maximum and then
+%% closes. It ignores any updates.
 -module(sregulator_open_valve).
 
 -behaviour(sregulator_valve).
@@ -48,6 +49,10 @@
 
 %% types
 
+-type spec() :: #{max => Max :: non_neg_integer() | infinity}.
+
+-export_type([spec/0]).
+
 -record(state, {max :: non_neg_integer() | infinity,
                 small_time :: integer(),
                 map :: sregulator_valve:internal_map()}).
@@ -55,13 +60,13 @@
 %% sregulator_valve api
 
 %% @private
--spec init(Map, Time, Max) -> {open | closed, State, infinity} when
+-spec init(Map, Time, Spec) -> {open | closed, State, infinity} when
       Map :: sregulator_valve:internal_map(),
       Time :: integer(),
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       State :: #state{}.
-init(Map, Time, Max) ->
-    {0, Max} = sbroker_util:min_max(0, Max),
+init(Map, Time, Spec) ->
+    Max = sbroker_util:max(Spec),
     handle(#state{max=Max, small_time=Time, map=Map}).
 
 %% @private
@@ -196,13 +201,13 @@ code_change(_, _, State, _) ->
     handle(State).
 
 %% @private
--spec config_change(Max, Time, State) -> {open | closed, NState, infinity} when
-      Max :: non_neg_integer() | infinity,
+-spec config_change(Spec, Time, State) -> {open | closed, NState, infinity} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-config_change(Max, _, State) ->
-    {0, Max} = sbroker_util:min_max(0, Max),
+config_change(Spec, _, State) ->
+    Max = sbroker_util:max(Spec),
     handle(State#state{max=Max}).
 
 %% @private

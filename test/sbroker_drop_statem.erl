@@ -34,6 +34,9 @@ module() ->
     sbroker_drop_queue.
 
 args() ->
+    ?LET({Out, Drop, Max}, gen_args(), #{out => Out, drop => Drop, max => Max}).
+
+gen_args() ->
     {oneof([out, out_r]),
      oneof([drop, drop_r]),
      oneof([choose(0, 5), infinity])}.
@@ -41,7 +44,7 @@ args() ->
 time_dependence(undefined) ->
     independent.
 
-init({Out, Drop, Max}) ->
+init(#{out := Out, drop := Drop, max := Max}) ->
     {Out, Drop, infinity, Max, undefined}.
 
 handle_timeout(_, _, State) ->
@@ -53,5 +56,5 @@ handle_out(_, _, State) ->
 handle_out_r(_, _, State) ->
     {0, State}.
 
-config_change(_, {Out, Drop, Max}, undefined) ->
+config_change(_, #{out := Out, drop := Drop, max := Max}, undefined) ->
     {Out, Drop, infinity, Max, undefined}.

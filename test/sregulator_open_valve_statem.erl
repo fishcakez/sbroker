@@ -34,9 +34,9 @@ module() ->
     sregulator_open_valve.
 
 args() ->
-    oneof([choose(0, 5), infinity]).
+    ?LET(Max, oneof([choose(0, 5), infinity]), #{max => Max}).
 
-init(Max, _, _) ->
+init(#{max := Max}, _, _) ->
     {0, Max, open, undefined}.
 
 handle_update(_, _, State) ->
@@ -51,5 +51,5 @@ handle_done(_, State) ->
 handle(_, State) ->
     {open, State}.
 
-config_change(Max, _, _, undefined) ->
+config_change(#{max := Max}, _, _, undefined) ->
     {0, Max, open, undefined}.

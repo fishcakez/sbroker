@@ -20,63 +20,188 @@
 %% @private
 -module(sbroker_util).
 
+-export([out/1]).
+-export([drop/1]).
 -export([timeout/1]).
 -export([sojourn_target/1]).
+-export([sojourn_target/2]).
 -export([relative_target/1]).
 -export([interval/1]).
--export([min_max/2]).
--export([lower_upper/2]).
+-export([interval/2]).
+-export([update/1]).
+-export([min_max/1]).
+-export([max/1]).
+-export([upper/2]).
+-export([limit/1]).
+-export([alarm/2]).
 -export([uniform_interval_s/2]).
 
--spec timeout(Timeout) -> NTimeout when
+-spec out(#{out => Out}) -> Out when
+      Out :: out | out_r.
+out(#{out := out})      -> out;
+out(#{out := out_r})    -> out_r;
+out(#{out := _} = Spec) -> error(badarg, [Spec]);
+out(#{})                -> out.
+
+-spec drop(#{drop => Drop}) -> Drop when
+      Drop :: drop | drop_r.
+%% If maximum is zero then tail is always dropped
+drop(#{drop := drop, max := 0}) -> drop_r;
+drop(#{drop := drop})           -> drop;
+drop(#{drop := drop_r})         -> drop_r;
+drop(#{drop := _} = Spec)       -> error(badarg, [Spec]);
+drop(#{})                       -> drop_r.
+
+-spec timeout(#{timeout => Timeout}) -> NTimeout when
       Timeout :: timeout(),
       NTimeout :: timeout().
-timeout(infinity) ->
+timeout(#{timeout := infinity}) ->
     infinity;
-timeout(Timeout) ->
-    sojourn_target(Timeout).
+timeout(#{timeout := Timeout}) when is_integer(Timeout), Timeout >= 0 ->
+    native(Timeout);
+timeout(#{timeout := _} = Spec) ->
+    error(badarg, [Spec]);
+timeout(#{}) ->
+    native(5000).
 
--spec sojourn_target(Target) -> NTarget when
+-spec sojourn_target(#{target => Target}) -> NTarget when
       Target :: non_neg_integer(),
       NTarget :: non_neg_integer().
-sojourn_target(Target) when Target >= 0 ->
+sojourn_target(#{target := Target}) when is_integer(Target), Target >= 0 ->
     native(Target);
-sojourn_target(Other) ->
-    error(badarg, [Other]).
+sojourn_target(#{target := _} = Spec) ->
+    error(badarg, [Spec]);
+sojourn_target(#{}) ->
+    native(100).
 
--spec relative_target(Target) -> NTarget when
+-spec sojourn_target(Queue, #{Queue => #{target => Target}}) -> NTarget when
+      Target :: non_neg_integer(),
+      NTarget :: non_neg_integer().
+sojourn_target(Queue, Spec) ->
+    case Spec of
+        #{Queue := #{target := Target}} when is_integer(Target), Target >= 0 ->
+            native(Target);
+        #{Queue := #{target := _}} ->
+            error(badarg, [Queue, Spec]);
+        #{Queue := #{}} ->
+            native(100);
+        #{Queue := _} ->
+            error(badarg, [Queue, Spec]);
+        #{} ->
+            native(100)
+    end.
+
+-spec relative_target(#{target => Target}) -> NTarget when
       Target :: integer(),
       NTarget :: integer().
-relative_target(Target) ->
-      native(Target).
+relative_target(#{target := Target}) when is_integer(Target) ->
+    native(Target);
+relative_target(#{target := _} = Spec) ->
+    error(badarg, [Spec]);
+relative_target(#{}) ->
+    native(100).
 
--spec interval(Interval) -> NInterval when
+-spec interval(#{interval => Interval}) -> NInterval when
       Interval :: pos_integer(),
       NInterval :: pos_integer().
-interval(Interval) when Interval > 0 ->
+interval(#{interval := Interval}) when is_integer(Interval), Interval > 0 ->
     native(Interval);
-interval(Other) ->
-    error(badarg, [Other]).
+interval(#{interval := _} = Spec) ->
+    error(badarg, [Spec]);
+interval(#{}) ->
+    native(1000).
 
--spec min_max(Min, Max) -> {Min, Max} when
+-spec interval(Queue, #{Queue => #{interval => Interval}}) -> NInterval when
+      Interval :: pos_integer(),
+      NInterval :: pos_integer().
+interval(Queue, Spec) ->
+    case Spec of
+        #{Queue := #{interval := Interval}}
+          when is_integer(Interval), Interval > 0 ->
+            native(Interval);
+        #{Queue := #{interval := _}} ->
+            error(badarg, [Queue, Spec]);
+        #{Queue := #{}} ->
+            native(1000);
+        #{Queue := _} ->
+            error(badarg, [Queue, Spec]);
+        #{} ->
+            native(1000)
+    end.
+
+-spec update(#{update => Update}) -> NUpdate when
+      Update :: pos_integer(),
+      NUpdate :: pos_integer().
+update(#{update := Update}) when is_integer(Update), Update > 0 ->
+    native(Update);
+update(#{update := _} = Other) ->
+    error(badarg, [Other]);
+update(#{}) ->
+    native(100).
+
+-spec min_max(#{min => Min, max => Max}) -> {Min, Max} when
       Min :: non_neg_integer(),
       Max :: non_neg_integer() | infinity.
-min_max(Min, infinity) when is_integer(Min), Min >= 0 ->
-    {Min, infinity};
-min_max(Min, Max) when is_integer(Min), is_integer(Max), Min >= 0, Max >= Min ->
+min_max(#{min := Min, max := Max})
+  when is_integer(Min) andalso (Max == infinity orelse is_integer(Max)) andalso
+       Min >= 0 andalso Max >= Min ->
     {Min, Max};
-min_max(Min, Max) ->
-    error(badarg, [Min, Max]).
+min_max(#{min := _, max := _} = Spec) ->
+    error(badarg, [Spec]);
+min_max(#{min := Min}) when is_integer(Min), Min >= 0 ->
+    {Min, infinity};
+min_max(#{min := _} = Spec) ->
+    error(badarg, [Spec]);
+min_max(#{max := Max})
+  when Max == infinity orelse (is_integer(Max) andalso Max >= 0) ->
+    {0, Max};
+min_max(#{max := _} = Spec) ->
+    error(badarg, [Spec]);
+min_max(#{}) ->
+    {0, infinity}.
 
--spec lower_upper(Lower, Upper) -> {NLower, NUpper} when
-      Lower :: integer(),
-      Upper :: integer(),
-      NLower :: integer(),
-      NUpper :: integer().
-lower_upper(Lower, Upper) when Lower =< Upper ->
-    {native(Lower), native(Upper)};
-lower_upper(Lower, Upper) ->
-    error(badarg, [Lower, Upper]).
+-spec max(#{max => Max}) -> Max when
+      Max :: non_neg_integer() | infinity.
+max(#{max := infinity}) ->
+    infinity;
+max(#{max := Max}) when is_integer(Max), Max >= 0 ->
+    Max;
+max(#{max := _} = Spec) ->
+    error(badarg, Spec);
+max(#{}) ->
+    infinity.
+
+-spec upper(Queue, #{Queue => #{upper => Upper}}) -> NUpper when
+      Upper :: non_neg_integer(),
+      NUpper :: non_neg_integer().
+upper(Queue, Spec) ->
+    case Spec of
+        #{Queue := #{upper := Upper}} when is_integer(Upper), Upper >= 0 ->
+            native(Upper);
+        #{Queue := #{upper := _}} ->
+            error(badarg, [Queue, Spec]);
+        #{Queue := #{}} ->
+            native(5000);
+        #{Queue := _} ->
+            error(badarg, [Queue, Spec]);
+        #{} ->
+            native(5000)
+    end.
+
+-spec limit(#{limit => Limit}) -> Limit when
+      Limit :: non_neg_integer().
+limit(#{limit := Limit}) when is_integer(Limit), Limit >= 0 ->
+    Limit;
+limit(#{limit := _} = Spec) ->
+    error(badarg, [Spec]);
+limit(#{}) ->
+    100.
+
+-spec alarm(Type, #{alarm => Alarm}) -> NAlarm when
+      Alarm :: any(),
+      NAlarm :: {Type, pid()} | Alarm.
+alarm(_, #{alarm := Alarm}) -> Alarm;
+alarm(Type, #{})            -> {Type, self()}.
 
 -spec uniform_interval_s(Interval, State) -> {CurrentInterval, NState} when
     Interval :: pos_integer(),

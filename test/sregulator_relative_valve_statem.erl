@@ -34,13 +34,17 @@ module() ->
     sregulator_relative_valve.
 
 args() ->
+    ?LET({Target, Min, Max}, gen_args(),
+         #{target => Target, min => Min, max => Max}).
+
+gen_args() ->
     ?LET({Min, Max},
          ?SUCHTHAT({Min, Max}, {choose(0, 5), oneof([choose(0, 5), infinity])},
                    Min =< Max),
          {choose(-10, 10), Min, Max}).
 
-init({Target, Min, Max}, _, _) ->
-    NTarget = sbroker_util:relative_target(Target),
+init(#{target := Target, min := Min, max := Max}, _, _) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
     {Min, Max, closed, {NTarget, undefined}}.
 
 handle_update(Value, Time, {Target, _}) ->
@@ -57,7 +61,8 @@ handle(_, {Target, Value} = State) when Target > Value ->
 handle(_, State) ->
     {closed, State}.
 
-config_change({Target, Min, Max}, _, Time, {_, Value}) ->
-    NTarget = sbroker_util:relative_target(Target),
+config_change(#{target := Target, min := Min, max := Max}, _, Time,
+              {_, Value}) ->
+    NTarget = erlang:convert_time_unit(Target, milli_seconds, native),
     {Status, State} = handle(Time, {NTarget, Value}),
     {Min, Max, Status, State}.

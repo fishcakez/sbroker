@@ -21,24 +21,30 @@
 %% approximate queue sojourn times for use with the `sbetter' load balancer.
 %%
 %% `sbetter_meter' can be used as the `sbroker_meter' in a `sbroker' or
-%% a `sregulator'. Its argument is of the form:
+%% a `sregulator'. It will provide the capability to do best of 2 random
+%% choices load balancing, using `sbetter', between `sbroker' or `sregulator'
+%% processes using the sojourn time of their queues. Its argument, `spec()', is
+%% of the form:
 %% ```
-%% {AskUpper :: non_neg_integer(), AskRUpper :: non_neg_integer(),
-%%  Update :: pos_integer()}.
+%% #{ask    => #{upper => AskUpper :: non_neg_integer()}, % default: 5000
+%%   ask_r  => #{upper => AskRUpper :: non_neg_integer()}, % default: 5000
+%%   update => Update :: pos_integer()} % default: 100
 %% '''
-%% `AskUpper' is the maximum `ask' sojourn time and `AskRUpper' is the maximum
-%% `ask_r' sojourn time that will be updated to the `sbetter_server' for use
+%% `AskUpper' is the maximum `ask' sojourn time in milliseconds (defaults to
+%% `5000') and `AskRUpper' is the maximum `ask_r' sojourn time in milliseconds
+%% (defaults to `5000') that will be updated to the `sbetter_server' for use
 %% with `sbetter'. If a match doesn't occur on the `sbroker' or `sregulator' the
 %% approximate sojourn time will increase unbounded for one of the two queues.
 %% Limiting this value prevents the situation where one process becomes stuck as
 %% the "worst" option because it hasn't matched for the longest when the
 %% processes' queues would be equivalently "bad".
 %%
-%% For example if using the `sbroker_timeout_queue' with timeout time of `5000',
-%% then all requests are dropped after `5000' and so become approximately
-%% equivalent once sojourn time is `5000'.
+%% For example if using the `sbroker_timeout_queue' with (the default) timeout
+%% of `5000', then all requests are dropped after `5000' and so become
+%% approximately equivalent once the sojourn time is `5000' milliseconds.
 %%
-%% `Update' is the update interval in `milli_seconds'  when the process is idle.
+%% `Update' is the update interval in milliseconds when the process is idle
+%% (defaults to `100').
 %%
 %% @see sbetter
 %% @see sbetter_server
@@ -55,24 +61,29 @@
 
 %% types
 
+-type spec() ::
+    #{ask    => #{upper => AskUpper :: non_neg_integer()},
+      ask_r  => #{upper => AskRUpper :: non_neg_integer()},
+      update => Update :: pos_integer()}.
+
+-export_type([spec/0]).
+
 -record(state, {ask :: non_neg_integer(),
                 bid :: non_neg_integer(),
                 update :: pos_integer(),
                 update_next :: integer()}).
 
 %% @private
--spec init(Time, {AskUpper, AskRUpper, Update}) -> {State, Time} when
+-spec init(Time, Spec) -> {State, Time} when
       Time :: integer(),
-      AskUpper :: non_neg_integer(),
-      AskRUpper :: non_neg_integer(),
-      Update :: pos_integer(),
+      Spec :: spec(),
       State :: #state{}.
-init(Time, {Ask, Bid, Update}) ->
-    NAsk = sbroker_util:sojourn_target(Ask),
-    NBid = sbroker_util:sojourn_target(Bid),
-    NUpdate = sbroker_util:interval(Update),
-    true = sbetter_server:register(self(), NAsk, NBid),
-    {#state{ask=NAsk, bid=NBid, update=NUpdate, update_next=Time}, Time}.
+init(Time, Spec) ->
+    Ask = sbroker_util:upper(ask, Spec),
+    Bid = sbroker_util:upper(ask_r, Spec),
+    Update = sbroker_util:update(Spec),
+    true = sbetter_server:register(self(), Ask, Bid),
+    {#state{ask=Ask, bid=Bid, update=Update, update_next=Time}, Time}.
 
 %% @private
 -spec handle_update(QueueDelay, ProcessDelay, RelativeTime, Time, State) ->
@@ -112,20 +123,18 @@ code_change(_, Time, State, _) ->
     handle(Time, State).
 
 %% @private
--spec config_change({AskUpper, AskRUpper, Update}, Time, State) ->
+-spec config_change(Spec, Time, State) ->
     {NState, UpdateNext} when
-      AskUpper :: non_neg_integer(),
-      AskRUpper :: non_neg_integer(),
-      Update :: pos_integer(),
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{},
       UpdateNext :: integer().
-config_change({Ask, Bid, Update}, Time, _) ->
-    NAsk = sbroker_util:sojourn_target(Ask),
-    NBid = sbroker_util:sojourn_target(Bid),
-    NUpdate = sbroker_util:interval(Update),
-    {#state{ask=NAsk, bid=NBid, update=NUpdate, update_next=Time}, Time}.
+config_change(Spec, Time, _) ->
+    Ask = sbroker_util:upper(ask, Spec),
+    Bid = sbroker_util:upper(ask_r, Spec),
+    Update = sbroker_util:update(Spec),
+    {#state{ask=Ask, bid=Bid, update=Update, update_next=Time}, Time}.
 
 %% @private
 -spec terminate(Reason, State) -> true when

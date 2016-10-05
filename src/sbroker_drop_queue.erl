@@ -19,14 +19,20 @@
 %%-------------------------------------------------------------------
 %% @doc Implements a head or tail drop queue.
 %%
-%% `sbroker_drop_queue' can be used as the `sbroker_queue' module in a
-%% `sbroker'. Its argument is of the form:
+%% `sbroker_drop_queue' can be used as a `sbroker_queue' module in a `sbroker'
+%% or `sregulator'. It will provide a FIFO or LIFO queue that drops the head or
+%% tail request from the queue when a maximum size is exceeded. Its argument,
+%% `spec()', is of the form:
 %% ```
-%% {out | out_r,  drop | drop_r, Max :: non_neg_integer() | infinity}
+%% #{out  => Out :: out | out_r, % default: out
+%%   drop => Drop :: drop | drop_r, % default: drop_r
+%%   max  => Max :: non_neg_integer() | infinity} % default: infinity
 %% '''
-%% The first element is `out' for a FIFO queue and `out_r' for a LIFO queue. The
-%% second element determines whether to drop from head `drop' or drop from the
-%% tail `drop_r' when the queue is above the maximum size (third element).
+%% `Out' is either `out' for a FIFO queue (the default) or `out_r' for a LIFO
+%% queue. `Drop' is either `drop_r' for tail drop (the default) where the last
+%% request is droppped, or `drop' for head drop, where the first request is
+%% dropped. Dropping occurs when queue is above the maximum size `Max'
+%% (defaults to `infinity').
 -module(sbroker_drop_queue).
 
 -behaviour(sbroker_queue).
@@ -45,6 +51,13 @@
 -export([send_time/1]).
 -export([terminate/2]).
 
+-type spec() ::
+    #{out  => Out :: out | out_r,
+      drop => Drop :: drop | drop_r,
+      max  => Max :: non_neg_integer() | infinity}.
+
+-export_type([spec/0]).
+
 -record(state, {out :: out | out_r,
                 drop :: drop | drop_r,
                 max :: non_neg_integer() | infinity,
@@ -52,12 +65,10 @@
                 queue :: sbroker_queue:internal_queue()}).
 
 %% @private
--spec init(Q, Time, {Out, Drop, Max}) -> {State, infinity} when
+-spec init(Q, Time, Spec) -> {State, infinity} when
       Q :: sbroker_queue:internal_queue(),
       Time :: integer(),
-      Out :: out | out_r,
-      Drop :: drop | drop_r,
-      Max :: non_neg_integer() | infinity,
+      Spec :: spec(),
       State :: #state{}.
 init(Q, Time, Arg) ->
     from_queue(Q, queue:len(Q), Time, Arg).
@@ -180,20 +191,13 @@ code_change(_, _, State, _) ->
     {State, infinity}.
 
 %% @private
--spec config_change({Out, Drop, Max}, Time, State) ->
-    {NState, infinity} when
-      Out :: out | out_r,
-      Drop :: drop | drop_r,
-      Max :: non_neg_integer() | infinity,
+-spec config_change(Spec, Time, State) -> {NState, infinity} when
+      Spec :: spec(),
       Time :: integer(),
       State :: #state{},
       NState :: #state{}.
-config_change({Out, Drop, infinity}, _, State)
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) ->
-    {State#state{out=Out, drop=Drop, max=infinity}, infinity};
-config_change(Arg, Time, #state{len=Len, queue=Q}) ->
-    from_queue(Q, Len, Time, Arg).
+config_change(Spec, Time, #state{len=Len, queue=Q}) ->
+    from_queue(Q, Len, Time, Spec).
 
 %% @private
 -spec len(State) -> Len when
@@ -222,16 +226,15 @@ terminate(_, #state{queue=Q}) ->
 
 %% Internal
 
-from_queue(Q, Len, _, {Out, Drop, infinity})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) ->
+from_queue(Q, Len, Time, Spec) ->
+    Out = sbroker_util:out(Spec),
+    Drop = sbroker_util:drop(Spec),
+    Max = sbroker_util:max(Spec),
+    from_queue(Q, Len, Time, Out, Drop, Max).
+
+from_queue(Q, Len, _, Out, Drop, infinity) ->
     {#state{out=Out, drop=Drop, max=infinity, len=Len, queue=Q}, infinity};
-from_queue(Q, Len, Time, {Out, drop, 0}) ->
-    from_queue(Q, Len, Time, {Out, drop_r, 0});
-from_queue(Q, Len, Time, {Out, Drop, Max})
-  when (Out =:= out orelse Out =:= out_r) andalso
-       (Drop =:= drop orelse Drop =:= drop_r) andalso
-       (is_integer(Max) andalso Max >= 0) ->
+from_queue(Q, Len, Time, Out, Drop, Max) ->
     case Len - Max of
         DropCount when DropCount > 0 andalso Drop =:= drop ->
             {DropQ, NQ} = queue:split(DropCount, Q),

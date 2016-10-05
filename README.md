@@ -83,16 +83,13 @@ start_link() ->
     sbroker:start_link(?MODULE, undefined, []).
 
 init(_) ->
-    QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 0, 16}},
+    QueueSpec = {sbroker_timeout_queue, #{timeout => 200}},
     {ok, {QueueSpec, QueueSpec, []}}.
 ```
 `sbroker_example:start_link/0` will start an `sbroker` with queues configured by
 `QueueSpec`. This configuration uses the `sbroker_timeout_queue` callback module
 which drops requests when they have been in the queue for longer than a time
-limit (`200` milliseconds) and the queue length is above the minimum size (`0`).
-`out` sets the queue to `FIFO`. `drop` sets the queue to drop requests from the
-head or oldest request of the queue (head drop) when the maximum size (`16`) is
-reached.  To use this `sbroker`:
+limit (`200` milliseconds).  To use this `sbroker`:
 ```erlang
 {ok, Broker} = sbroker_example:start_link(),
 Self = self(),
@@ -391,8 +388,9 @@ start_link() ->
     sregulator:start_link(?MODULE, undefined, []).
 
 init(_) ->
-    QueueSpec = {sbroker_timeout_queue, {out, 200, drop, 0, 16}},
-    ValveSpec = {sregulator_relative_valve, {100, 4, 16}},
+    QueueSpec = {sbroker_timeout_queue, #{timeout => 200}},
+    ValveSpec = {sregulator_relative_valve,
+                 #{target => 100, min => 4, max => 16},
     {ok, {QueueSpec, ValveSpec, []}}.
 ```
 The `sregulator_relative_valve` will increase the size above the minimum `4`
@@ -408,10 +406,10 @@ The `sregulator` is updated using the `sregulator_update_meter` in either a
 `sbroker` or `sregulator`, or explicitly using `sregulator:update/3` and
 `sregulator:cast/2`:
 ```erlang
-{sregulator_update_meter, [{sregulator_example, ask_r, 100}]}
+{sregulator_update_meter, [{sregulator_example, ask_r, #{update => 200}}]}
 ```
 This will meter will update `sregulator_example` with the `RelativeTime` of the
-`ask_r` queue around every 100 milliseconds.
+`ask_r` queue around every `200` milliseconds.
 
 A common pattern is as follows:
 ```erlang
@@ -450,5 +448,5 @@ Roadmap
 -------
 
 * 1.0 - Improve testing of edge cases (errors) in live reconfiguration
-* 1.1 - Add rate limiting and circuit breaker sregulator valves
+* 1.1 - Add circuit breaker sregulator valves
 * 1.2+ - Add improved queue management algorithms when possible, if at all
