@@ -72,9 +72,7 @@ handle_done(Time, #state{overflow=Overflow} = State) when Overflow > 0 ->
 handle_done(Time, #state{overflow=0, active=Active} = State)
   when Active > 0 ->
     {_, #state{intervals=Intervals} = NState} = handle(Time, State),
-    handle(NState#state{active=Active-1, intervals=Intervals++[0]});
-handle_done(_, State) ->
-    {error, State}.
+    handle(NState#state{active=Active-1, intervals=Intervals++[0]}).
 
 handle(Time, #state{intervals=Intervals, time=PrevTime} = State) ->
     NIntervals = [Interval + (Time-PrevTime) || Interval <- Intervals],
