@@ -43,6 +43,7 @@
 -export([await_timeout/1]).
 -export([await_down/1]).
 -export([skip_down_match/1]).
+-export([user/1]).
 -export([statem/1]).
 
 %% common_test api
@@ -56,7 +57,8 @@ suite() ->
 
 groups() ->
     [{simple,
-      [ask, ask_r, dirty_cancel, await_timeout, await_down, skip_down_match]},
+      [ask, ask_r, dirty_cancel, await_timeout, await_down, skip_down_match,
+       user]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -98,9 +100,20 @@ init_per_group(_Group, Config) ->
 end_per_group(_Group, _Config) ->
     ok.
 
+init_per_testcase(user, Config) ->
+    Brokers = application:get_env(sbroker, brokers, []),
+    _ = application:stop(sbroker),
+    ok = application:set_env(sbroker, brokers, []),
+    ok = application:start(sbroker),
+    [{brokers, Brokers} | init_per_testcase(all, Config)];
 init_per_testcase(_TestCase, Config) ->
     Config.
 
+end_per_testcase(user, Config) ->
+    _ = application:stop(sbroker),
+    ok = application:set_env(sbroker, brokers, ?config(brokers, Config)),
+    ok = application:start(sbroker),
+    end_per_testcase(all, Config);
 end_per_testcase(_TestCase, _Config) ->
     ok.
 
@@ -194,6 +207,41 @@ skip_down_match(_) ->
             {drop, _} = sbroker:await(Ref, ?TIMEOUT),
             ok
     end.
+
+user(_) ->
+    Name = {local, ?MODULE},
+    Spec1 = {{sbroker_timeout_queue, #{}}, {sbroker_timeout_queue, #{}}, []},
+    ok = application:set_env(sbroker, brokers, [{Name, Spec1}]),
+    {ok, Pid1} = sbroker_user:start(Name),
+    [{sbroker_timeout_queue, ask, _} | _] = sys:get_state(?MODULE),
+    [{Name, Pid1, worker, dynamic}] = sbroker_user:which_brokers(),
+
+
+    ok = sbroker_user:terminate(Name),
+    [{Name, undefined, worker, dynamic}] = sbroker_user:which_brokers(),
+
+    ok = sbroker_user:delete(Name),
+    [] = sbroker_user:which_brokers(),
+    {error, not_found} = sbroker_user:terminate(Name),
+
+    ok = application:set_env(sbroker, brokers, []),
+    {ok, undefined} = sbroker_user:start(Name),
+    [{Name, undefined, worker, dynamic}] = sbroker_user:which_brokers(),
+
+    ok = application:set_env(sbroker, brokers, [{Name, Spec1}]),
+    {ok, Pid2} = sbroker_user:restart(Name),
+    [{Name, Pid2, worker, dynamic}] = sbroker_user:which_brokers(),
+
+
+    ok = application:set_env(sbroker, brokers, [{Name, bad}]),
+    [{Name, {bad_return_value, {ok, bad}}}] = sbroker_user:change_config(),
+
+    Spec2 = {{sbroker_drop_queue, #{}}, {sbroker_timeout_queue, #{}}, []},
+    ok = application:set_env(sbroker, brokers, [{Name, Spec2}]),
+    [] = sbroker_user:change_config(),
+    [{sbroker_drop_queue, ask, _} | _] = sys:get_state(?MODULE),
+
+    ok.
 
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),

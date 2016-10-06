@@ -44,6 +44,7 @@
 -export([continue/1]).
 -export([await_timeout/1]).
 -export([await_down/1]).
+-export([user/1]).
 -export([statem/1]).
 
 %% common_test api
@@ -58,7 +59,7 @@ suite() ->
 groups() ->
     [{simple,
       [ask, done, dirty_done, dirty_cancel, continue, await_timeout,
-       await_down]},
+       await_down, user]},
      {property, [statem]}].
 
 init_per_suite(Config) ->
@@ -100,9 +101,20 @@ init_per_group(_Group, Config) ->
 end_per_group(_Group, _Config) ->
     ok.
 
+init_per_testcase(user, Config) ->
+    Regulators = application:get_env(sbroker, regulators, []),
+    _ = application:stop(sbroker),
+    ok = application:set_env(sbroker, regulators, []),
+    ok = application:start(sbroker),
+    [{regulators, Regulators} | init_per_testcase(all, Config)];
 init_per_testcase(_TestCase, Config) ->
     Config.
 
+end_per_testcase(user, Config) ->
+    _ = application:stop(sbroker),
+    ok = application:set_env(sbroker, regulators, ?config(regulators, Config)),
+    ok = application:start(sbroker),
+    end_per_testcase(all, Config);
 end_per_testcase(_TestCase, _Config) ->
     ok.
 
@@ -193,6 +205,41 @@ await_down(_) ->
      {shutdown,
       {sregulator, await,
        [Ref, ?TIMEOUT]}}} = (catch sregulator:await(Ref, ?TIMEOUT)),
+    ok.
+
+user(_) ->
+    Name = {local, ?MODULE},
+    Spec1 = {{sbroker_timeout_queue, #{}}, {sregulator_open_valve, #{}}, []},
+    ok = application:set_env(sbroker, regulators, [{Name, Spec1}]),
+    {ok, Pid1} = sregulator_user:start(Name),
+    [{sbroker_timeout_queue, queue, _} | _] = sys:get_state(?MODULE),
+    [{Name, Pid1, worker, dynamic}] = sregulator_user:which_regulators(),
+
+
+    ok = sregulator_user:terminate(Name),
+    [{Name, undefined, worker, dynamic}] = sregulator_user:which_regulators(),
+
+    ok = sregulator_user:delete(Name),
+    [] = sregulator_user:which_regulators(),
+    {error, not_found} = sregulator_user:terminate(Name),
+
+    ok = application:set_env(sbroker, regulators, []),
+    {ok, undefined} = sregulator_user:start(Name),
+    [{Name, undefined, worker, dynamic}] = sregulator_user:which_regulators(),
+
+    ok = application:set_env(sbroker, regulators, [{Name, Spec1}]),
+    {ok, Pid2} = sregulator_user:restart(Name),
+    [{Name, Pid2, worker, dynamic}] = sregulator_user:which_regulators(),
+
+
+    ok = application:set_env(sbroker, regulators, [{Name, bad}]),
+    [{Name, {bad_return_value, {ok, bad}}}] = sregulator_user:change_config(),
+
+    Spec2 = {{sbroker_drop_queue, #{}}, {sregulator_open_valve, #{}}, []},
+    ok = application:set_env(sbroker, regulators, [{Name, Spec2}]),
+    [] = sregulator_user:change_config(),
+    [{sbroker_drop_queue, queue, _} | _] = sys:get_state(?MODULE),
+
     ok.
 
 statem(Config) ->

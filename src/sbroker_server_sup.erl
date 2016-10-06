@@ -18,7 +18,7 @@
 %%
 %%-------------------------------------------------------------------
 %% @private
--module(sbroker_sup).
+-module(sbroker_server_sup).
 
 -behaviour(supervisor).
 
@@ -40,9 +40,8 @@ start_link() ->
 %% supervisor API
 
 init([]) ->
-    ServerSup = {sbroker_server_sup, {sbroker_server_sup, start_link, []},
-                 permanent, infinity, supervisor, [sbroker_server_sup]},
-    UserSup = {sbroker_user_sup,
-               {sbroker_user_sup, start_link, []},
-               permanent, infinity, supervisor, [sbroker_user_sup]},
-    {ok, {{rest_for_one, 3, 300}, [ServerSup, UserSup]}}.
+    BetterServer = {sbetter_server, {sbetter_server, start_link, []},
+                    permanent, 5000, worker, [sbetter_server]},
+    ProtectorServer = {sprotector_server, {sprotector_server, start_link, []},
+                     permanent, 5000, worker, [sprotector_server]},
+    {ok, {{one_for_one, 3, 30}, [BetterServer, ProtectorServer]}}.
