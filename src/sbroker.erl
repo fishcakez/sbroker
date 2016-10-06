@@ -76,9 +76,9 @@
 %%     sbroker:ask_r(?MODULE).
 %%
 %% init([]) ->
-%%     AskQueueSpec = {sbroker_codel_queue, {out, 5, 100, drop_r, 0, 64}},
-%%     AskRQueueSpec = {sbroker_timeout_queue, {out_r, 5000, drop, 0, infinity}},
-%%     MeterSpec = {sbroker_overload_meter, {50, 500, {?MODULE, overload}}},
+%%     AskQueueSpec = {sbroker_codel_queue, #{}},
+%%     AskRQueueSpec = {sbroker_timeout_queue, #{}},
+%%     MeterSpec = {sbroker_overload_meter, #{alarm => {overload, ?MODULE}}},
 %%     {ok, {AskQueueSpec, AskRQueueSpec, [MeterSpec]}}.
 %% '''
 -module(sbroker).

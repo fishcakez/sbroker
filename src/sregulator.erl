@@ -77,9 +77,9 @@
 %% done(Ref
 %%
 %% init([]) ->
-%%   QueueSpec = {sbroker_codel_queue, {out, 50, 500, drop_r, 64}},
-%%   ValveSpec = {sregulator_open_valve, 30},
-%%   MeterSpec = {sbroker_overload_meter, {50, 500, {?MODULE, overload}}},
+%%   QueueSpec = {sbroker_codel_queue, #{}},
+%%   ValveSpec = {sregulator_open_valve, #{}},
+%%   MeterSpec = {sbroker_overload_meter, #{alarm => {overload, ?MODULE}}},
 %%   {ok, {QueueSpec, ValveSpec, [MeterSpec]}}.
 %% '''
 -module(sregulator).
