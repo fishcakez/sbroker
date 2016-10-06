@@ -20,10 +20,6 @@
 %% @doc Sets an alarm when the regulator's valve is slow to get a match for an
 %% interval.
 %%
-%% @doc Sets a SASL `alarm_handler' alarm when the regulator's valve is slow to
-%% get match for an interval. Once the valve becomes fast for an interval the
-%% alarm is cleared.
-%%
 %% `sregulator_underload_meter' can be used in as a `sbroker_meter' in a
 %% `sregulator'. It will set a SASL `alarm_handler' alarm when the regulator's
 %% valve is slow to get a match for an interval and clear it once the valve

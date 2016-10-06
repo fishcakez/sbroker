@@ -351,7 +351,7 @@ await(Tag, Timeout) ->
             exit({timeout, {?MODULE, await, [Tag, Timeout]}})
     end.
 
-%% @see cancel(Regulator, Tag, infinity)
+%% @equiv cancel(Regulator, Tag, infinity)
 -spec cancel(Regulator, Tag) -> Count | false when
       Regulator :: regulator(),
       Tag :: any(),
@@ -461,7 +461,7 @@ done(Regulator, Ref, Timeout) ->
 dirty_done(Regulator, Ref) ->
     sbroker_gen:send(Regulator, {done, dirty, Ref}).
 
-%% @equiv update(Regulator, Value, infinity).
+%% @equiv update(Regulator, Value, infinity)
 -spec update(Regulator, Value) -> ok when
       Regulator :: regulator(),
       Value :: integer().
