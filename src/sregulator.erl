@@ -74,13 +74,14 @@
 %%        {not_found, _}     -> {error, not_found}
 %%     end.
 %%
-%% done(Ref
+%% done(Ref) ->
+%%     sregulator:done(?MODULE, Ref).
 %%
 %% init([]) ->
-%%   QueueSpec = {sbroker_codel_queue, #{}},
-%%   ValveSpec = {sregulator_open_valve, #{}},
-%%   MeterSpec = {sbroker_overload_meter, #{alarm => {overload, ?MODULE}}},
-%%   {ok, {QueueSpec, ValveSpec, [MeterSpec]}}.
+%%     QueueSpec = {sbroker_codel_queue, #{}},
+%%     ValveSpec = {sregulator_open_valve, #{}},
+%%     MeterSpec = {sbroker_overload_meter, #{alarm => {overload, ?MODULE}}},
+%%     {ok, {QueueSpec, ValveSpec, [MeterSpec]}}.
 %% '''
 -module(sregulator).
 
