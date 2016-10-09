@@ -768,7 +768,9 @@ system_replace_state(Replace, {change, Change, Misc}) ->
 %% @private
 system_terminate(Reason, Parent, Dbg, [_, Time, Asks, Bids, Config]) ->
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    terminate({stop, Reason}, Time, Asks, Bids, NConfig).
+    terminate({stop, Reason}, Time, Asks, Bids, NConfig);
+system_terminate(Reason, Parent, Dbg, {change, _, Misc}) ->
+    system_terminate(Reason, Parent, Dbg, Misc).
 
 %% @private
 format_status(Opt,

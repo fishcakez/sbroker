@@ -368,7 +368,7 @@ change(Behaviour, Mod1, State1, Mod2, Args2, Send, Now, Name) ->
     catch
         Class:Reason ->
             Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(Behaviour, handler_crashed, Mod1, Reason, State1, Name),
+            report(Behaviour, handler_crashed, Mod1, Reason2, State1, Name),
             {stop, Reason2, []}
     end.
 
@@ -483,10 +483,10 @@ terminate(Reason, [{Behaviour, Mod, ModReason, State} | Rest], Name) ->
             maybe_report(Behaviour, Mod, ModReason, State, Name),
             terminate(Reason, Rest, Name)
     catch
-        Class:Reason ->
-            Reason2 = {Class, Reason, erlang:get_stacktrace()},
-            report(Behaviour, handler_crashed, Mod, Reason2, State, Name),
-            terminate(Reason2, Rest, Name)
+        Class:NReason ->
+            NReason2 = {Class, NReason, erlang:get_stacktrace()},
+            report(Behaviour, handler_crashed, Mod, NReason2, State, Name),
+            terminate(NReason2, Rest, Name)
     end.
 
 report_name({local, Name}) when is_atom(Name) ->

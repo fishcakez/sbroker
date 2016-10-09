@@ -682,7 +682,9 @@ system_replace_state(Replace, {change, Change, Misc}) ->
 %% @private
 system_terminate(Reason, Parent, Dbg, [NState, _, Time, Q, V, Config]) ->
     NConfig = Config#config{parent=Parent, dbg=Dbg},
-    terminate({stop, Reason}, NState, Time, Q, V, NConfig).
+    terminate({stop, Reason}, NState, Time, Q, V, NConfig);
+system_terminate(Reason, Parent, Dbg, {change, _, Misc}) ->
+    system_terminate(Reason, Parent, Dbg, Misc).
 
 %% @private
 format_status(Opt,
@@ -1357,9 +1359,9 @@ terminate(Reason, Callbacks, Config) ->
 
 terminate(Reason, #time{meters=Meters}, Callbacks, Config) ->
     Name = report_name(Config),
-    {stop, Reason} = sbroker_handlers:terminate(Reason, Callbacks, Meters,
-                                                Name),
-    exit(Reason).
+    {stop, NReason} = sbroker_handlers:terminate(Reason, Callbacks, Meters,
+                                                 Name),
+    exit(NReason).
 
 terminate(Reason, State, Time, Q, V,
           #config{queue_mod=QMod, valve_mod=VMod} = Config) ->

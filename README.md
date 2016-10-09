@@ -150,6 +150,5 @@ This project is licensed under the Apache License, 2.0.
 Roadmap
 -------
 
-* 1.0 - Improve testing of edge cases (errors) in live reconfiguration
 * 1.1 - Add circuit breaker sregulator valves
 * 1.2+ - Add improved queue management algorithms when possible, if at all
