@@ -207,18 +207,7 @@ cleanup(#state{sregulator=undefined}) ->
     application:unset_env(sbroker, ?MODULE);
 cleanup(#state{sregulator=Regulator}) ->
     application:unset_env(sbroker, ?MODULE),
-    Trap = process_flag(trap_exit, true),
-    exit(Regulator, shutdown),
-    receive
-        {'EXIT', Regulator, shutdown} ->
-            _ = process_flag(trap_exit, Trap),
-            ok
-    after
-        3000 ->
-            exit(Regulator, kill),
-            _ = process_flag(trap_exit, Trap),
-            exit(timeout)
-    end.
+    sys:terminate(Regulator, normal).
 
 start_link_args(_) ->
     [init()].

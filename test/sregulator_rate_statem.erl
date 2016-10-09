@@ -130,18 +130,7 @@ postcondition(State, _, _) ->
 cleanup(#state{regulator=undefined}) ->
     ok;
 cleanup(#state{regulator=Regulator}) ->
-    Trap = process_flag(trap_exit, true),
-    exit(Regulator, shutdown),
-    receive
-        {'EXIT', Regulator, shutdown} ->
-            _ = process_flag(trap_exit, Trap),
-            ok
-    after
-        3000 ->
-            exit(Regulator, kill),
-            _ = process_flag(trap_exit, Trap),
-            exit(timeout)
-    end.
+    sys:terminate(Regulator, normal).
 
 start_link(Arg) ->
     Trap = process_flag(trap_exit, true),

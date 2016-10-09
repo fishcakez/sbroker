@@ -195,18 +195,7 @@ cleanup(#state{sbroker=undefined}) ->
     application:unset_env(sbroker, ?MODULE);
 cleanup(#state{sbroker=Broker}) ->
     application:unset_env(sbroker, ?MODULE),
-    Trap = process_flag(trap_exit, true),
-    exit(Broker, shutdown),
-    receive
-        {'EXIT', Broker, shutdown} ->
-            _ = process_flag(trap_exit, Trap),
-            ok
-    after
-        3000 ->
-            exit(Broker, kill),
-            _ = process_flag(trap_exit, Trap),
-            exit(timeout)
-    end.
+    sys:terminate(Broker, normal).
 
 start_link_args(_) ->
     [init()].
