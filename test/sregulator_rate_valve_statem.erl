@@ -55,7 +55,7 @@ init(#{limit := Limit, interval := Interval, min := Min, max := Max}, Size,
             {Min, Max, closed, State};
         0 ->
             Active = max(0, Size - Min),
-            Intervals = lists:duplicate(Limit-Active, NInterval),
+            Intervals = lists:duplicate(Limit-Active, 0),
             State = #state{interval=NInterval, intervals=Intervals,
                            active=Active, overflow=0, time=Time},
             {Status, NState} = handle(Time, State),
@@ -105,13 +105,12 @@ config_change(#{limit := Limit, interval := Interval, min := Min, max := Max},
             {Status, NState2} = handle(NState),
             {Min, Max, Status, NState2};
         Slots when length(Intervals) < Slots ->
-            Pred = fun(Interval2) -> Interval2 > NInterval end,
-            {Long, Short} = lists:splitwith(Pred, Intervals),
-            Ready = lists:duplicate(Slots-length(Intervals), NInterval),
-            NIntervals = Long ++ Ready ++ Short,
+            New = lists:duplicate(Slots-length(Intervals), 0),
+            NIntervals = Intervals ++ New,
             NState = #state{interval=NInterval, intervals=NIntervals,
                             active=Active, overflow=0, time=Time},
-            {Min, Max, open, NState}
+            {Status, NState2} = handle(NState),
+            {Min, Max, Status, NState2}
     end.
 
 %% Internal

@@ -35,8 +35,10 @@
 %% (defaults to `0'), and below the maximum capacity, `Max' (defaults to
 %% `infinity'). The limit is temporarily reduced by `1' for `Interval'
 %% milliseconds (defaults to `1000') after a task is done and the capacity is
-%% above `Min'. This ensures that no more than `Limit' tasks can run above the
-%% minimum capacity for any time interval of `Interval' milliseconds.
+%% above `Min'. Also the limit is restricted to `0' for `Interval' milliseconds
+%% after the valve is started. This ensures that no more than `Limit' tasks can
+%% run above the minimum capacity for any time interval of `Interval'
+%% milliseconds, even if the `sregulator' is restarted.
 %%
 %% This valve ignores any updates.
 -module(sregulator_rate_valve).
@@ -92,7 +94,8 @@ init(Map, Time, Spec) ->
     Limit = sbroker_util:limit(Spec),
     Interval = sbroker_util:interval(Spec),
     {Min, Max} = sbroker_util:min_max(Spec),
-    {Overflow, Opens, Next} = change(Map, Limit, 0, Min, Time, queue:new()),
+    Open = Time + Interval,
+    {Overflow, Opens, Next} = change(Map, Limit, 0, Open, Min, queue:new()),
     State = #state{min=Min, max=Max, interval=Interval, overflow=Overflow,
                    opens=Opens, open_next=Next, small_time=Time, map=Map},
     handle(Time, State).
@@ -241,7 +244,8 @@ config_change(Spec, Time,
     Interval = sbroker_util:interval(Spec),
     {Min, Max} = sbroker_util:min_max(Spec),
     Diff = Interval - PrevInterval,
-    {Overflow, NOpens, Next} = change(Map, Limit, Diff, Min, Time, Opens),
+    Open = Time + Interval,
+    {Overflow, NOpens, Next} = change(Map, Limit, Diff, Open, Min, Opens),
     NState = State#state{min=Min, max=Max, interval=Interval,
                          overflow=Overflow, opens=NOpens, open_next=Next},
     handle(Time, NState).
@@ -276,17 +280,16 @@ terminate(_, #state{map=Map}) ->
 
 %% Internal
 
-change(Map, Limit, IntervalDiff, Min, Time, Opens) ->
+change(Map, Limit, IntervalDiff, Open, Min, Opens) ->
     OverCapacity = max(0, map_size(Map) - Min),
-    change(Limit-OverCapacity, IntervalDiff, Time, Opens).
+    change(Limit-OverCapacity, IntervalDiff, Open, Opens).
 
-change(OpenLen, IntervalDiff, Time, Opens) when OpenLen > 0 ->
+change(OpenLen, IntervalDiff, Open, Opens) when OpenLen > 0 ->
     case queue:len(Opens) of
         PrevLen when PrevLen < OpenLen ->
             List = adjust_opens(IntervalDiff, queue:to_list(Opens)),
-            {Head, Tail} = lists:splitwith(fun(Open) -> Open < Time end, List),
-            New = lists:duplicate(OpenLen-PrevLen, Time),
-            NOpens = queue:from_list(Head ++ New ++ Tail),
+            New = lists:duplicate(OpenLen-PrevLen, Open),
+            NOpens = queue:from_list(List ++ New),
             {0, NOpens, queue:get(NOpens)};
         PrevLen when PrevLen >= OpenLen ->
             List = queue:to_list(Opens),

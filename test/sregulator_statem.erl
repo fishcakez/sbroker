@@ -19,9 +19,6 @@
 %%-------------------------------------------------------------------
 -module(sregulator_statem).
 
-%% ask_r is replaced by bid to help separate the difference between ask and
-%% ask_r.
-
 -include_lib("proper/include/proper.hrl").
 
 -export([quickcheck/0]).

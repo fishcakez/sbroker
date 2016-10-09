@@ -46,6 +46,7 @@
 -export([await_down/1]).
 -export([user/1]).
 -export([statem/1]).
+-export([rate_statem/1]).
 
 %% common_test api
 
@@ -60,7 +61,7 @@ groups() ->
     [{simple,
       [ask, done, dirty_done, dirty_cancel, continue, await_timeout,
        await_down, user]},
-     {property, [statem]}].
+     {property, [statem, rate_statem]}].
 
 init_per_suite(Config) ->
     {ok, Started} = application:ensure_all_started(sbroker),
@@ -245,6 +246,18 @@ user(_) ->
 statem(Config) ->
     QcOpts = ?config(quickcheck_options, Config),
     case sregulator_statem:quickcheck(QcOpts) of
+        true ->
+            ok;
+        {error, Reason} ->
+            error(Reason);
+        CounterExample ->
+            ct:pal("Counter Example:~n~p", [CounterExample]),
+            error(counterexample)
+    end.
+
+rate_statem(Config) ->
+    QcOpts = ?config(quickcheck_options, Config),
+    case sregulator_rate_statem:quickcheck([{numtests, 100} | QcOpts]) of
         true ->
             ok;
         {error, Reason} ->
