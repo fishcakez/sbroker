@@ -149,6 +149,7 @@
 -type handler_spec() :: {module(), any()}.
 
 -export_type([broker/0]).
+-export_type([name/0]).
 -export_type([handler_spec/0]).
 
 -callback init(Args :: any()) ->

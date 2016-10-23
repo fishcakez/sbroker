@@ -39,7 +39,7 @@
 
 -spec start(Module, Name) -> {ok, Pid} | {error, Reason} when
       Module :: sbroker_user | sregulator_user,
-      Name :: sbrokers:broker() | regulator:regulator(),
+      Name :: sbroker:name() | sregulator:name(),
       Pid :: pid() | undefined,
       Reason :: term().
 start(Module, Name) ->
@@ -47,7 +47,7 @@ start(Module, Name) ->
 
 -spec restart(Module, Name) -> {ok, Pid} | {error, Reason} when
       Module :: sbroker_user | sregulator_user,
-      Name :: sbrokers:broker() | regulator:regulator(),
+      Name :: sbroker:name() | sregulator:name(),
       Pid :: pid() | undefined,
       Reason :: term().
 restart(Module, Name) ->
@@ -55,13 +55,13 @@ restart(Module, Name) ->
 
 -spec terminate(Module, Name) -> ok | {error, not_found} when
       Module :: sbroker_user | sregulator_user,
-      Name :: sbrokers:broker() | regulator:regulator().
+      Name :: sbroker:name() | sregulator:name().
 terminate(Module, Name) ->
     supervisor:terminate_child(?MODULE, {Module, Name}).
 
 -spec delete(Module, Name) -> ok | {error, Reason} when
       Module :: sbroker_user | sregulator_user,
-      Name :: sbrokers:broker() | regulator:regulator(),
+      Name :: sbroker:name() | sregulator:name(),
       Reason :: running | restarting | not_found.
 delete(Module, Name) ->
     supervisor:delete_child(?MODULE, {Module, Name}).

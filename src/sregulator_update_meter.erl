@@ -68,7 +68,7 @@
 -spec init(Time, Spec | {Spec, Seed}) -> {State, UpdateNext} when
       Time :: integer(),
       Spec :: spec(),
-      Seed :: rand:seed(),
+      Seed :: rand:export_state(),
       State :: #state{},
       UpdateNext :: integer().
 init(Time, {[Regulator], Seed}) ->
@@ -133,7 +133,7 @@ code_change(_, Time, State, _) ->
     {NState, UpdateNext} when
       Time :: integer(),
       Spec :: spec(),
-      Seed :: rand:seed(),
+      Seed :: rand:export_state(),
       State :: #state{},
       NState :: #state{},
       UpdateNext :: integer().

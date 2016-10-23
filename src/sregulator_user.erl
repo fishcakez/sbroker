@@ -71,7 +71,7 @@
 %% in `regulators' or `{error, Reason}' if the regulator fails to start with
 %% reason `Reason'.
 -spec start(Name) -> {ok, Pid} | {error, Reason} when
-      Name :: sregulator:regulator(),
+      Name :: sregulator:name(),
       Pid :: pid() | undefined,
       Reason :: term().
 start(Name) ->
@@ -89,7 +89,7 @@ start(Name) ->
 %% in `regulators' or `{error, Reason}' if the regulator fails to start with
 %% reason `Reason'.
 -spec restart(Name) -> {ok, Pid} | {error, Reason} when
-      Name :: sregulator:regulator(),
+      Name :: sregulator:name(),
       Pid :: pid() | undefined,
       Reason :: term().
 restart(Name) ->
@@ -106,7 +106,7 @@ restart(Name) ->
 %% Returns `ok' once the regulator is terminated, otherwise
 %% `{error, not_found}'.
 -spec terminate(Name) -> ok | {error, not_found} when
-      Name :: sregulator:regulator().
+      Name :: sregulator:name().
 terminate(Name) ->
       sbroker_user_sup:terminate(?MODULE, Name).
 
@@ -121,7 +121,7 @@ terminate(Name) ->
 %% Returns `ok' on successfully deleting the regulator, otherwise
 %% `{error, Reason}' where `Reason' is reason for the error.
 -spec delete(Name) -> ok | {error, Reason} when
-      Name :: sregulator:regulator(),
+      Name :: sregulator:name(),
       Reason :: running | restarting | not_found.
 delete(Name) ->
       sbroker_user_sup:delete(?MODULE, Name).
