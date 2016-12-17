@@ -116,14 +116,14 @@ expensive resource and is unlikely to be ready immediately. If workers are
 started early then the pool will be less likely to have no workers available.
 
 However the same pools that start workers "too late" also start new workers for
-every client that trys to checkout when no workers are available. However old
+every client that tries to checkout when no workers are available. However old
 workers will become available again, perhaps before new workers are ready. This
 often leads to too many workers getting started and wastes resources until they
 are reaped for being idle. If workers are started at intervals then temporary
 bursts would not start too many workers but persistent increases would still
 cause adequate growth.
 
-Therefore we want workers to be started when worker availablity is running low
+Therefore we want workers to be started when worker availability is running low
 but with intervals between starting workers. This can be achieved by sampling
 the worker queue at intervals and starting a worker based on the reading. This
 is the load regulator pattern, where the concurrency limit of tasks changes
