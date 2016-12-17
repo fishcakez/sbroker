@@ -28,8 +28,8 @@
 %%
 %% There are two functions to join a queue: `ask/1' and `ask_r/1'. Processes
 %% that call `ask/1' are matched against processes that call `ask_r/1'. If no
-%% match is immediately avaliable a process is queued in the relevant queue
-%% until a match becomes avaliable. If queue management is used processes may be
+%% match is immediately available a process is queued in the relevant queue
+%% until a match becomes available. If queue management is used processes may be
 %% dropped without a match.
 %%
 %% Processes calling `ask/1' try to match with/dequeue a process in the `ask_r'
@@ -672,7 +672,7 @@ timeout(Broker) ->
 
 %% gen api
 
-%% Inside the broker an ask_r request is refered to as a bid to make the
+%% Inside the broker an ask_r request is referred to as a bid to make the
 %% difference between ask and ask_r clearer.
 
 %% @private
