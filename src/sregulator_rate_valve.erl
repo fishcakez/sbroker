@@ -25,10 +25,10 @@
 %% between a minimum and maximum capacity. Its argument, `spec()', is of the
 %% form:
 %% ```
-%% #{limit    => non_neg_integer(), % default: 100
-%%   interval => pos_integer(), % default: 1000
-%%   min      => non_neg_integer(), % default: 0
-%%   max      => non_neg_integer() | infinity}. % default: infinity
+%% #{limit    => Limit :: non_neg_integer(), % default: 100
+%%   interval => Interval :: pos_integer(), % default: 1000
+%%   min      => Min :: non_neg_integer(), % default: 0
+%%   max      => Max :: non_neg_integer() | infinity}. % default: infinity
 %% '''
 %% `Limit' is the number of new tasks (defaults to `100') that can run when the
 %% number of concurrent tasks is at or above the minimum capacity, `Min'
