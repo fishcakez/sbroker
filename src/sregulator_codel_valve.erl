@@ -20,11 +20,7 @@
 %% @doc Implements a valve which increases its size based on CoDel (Controlling
 %% Queue Delay).
 %%
-%% decreasing
-%% intervals of updates being below a target between a minimum and maximum
-%% capacity.
-%%
-%% `sregulator_codel_value' can be used as the `sregulator_valve' in a
+%% `sregulator_codel_valve' can be used as the `sregulator_valve' in a
 %% `sregulator'. It will provide a valve that increases in size in decreasing
 %% intervals while updates remain below a target (based on CoDel) between the
 %% minimum and maximum capacity. Its argument, `spec()', is of the form:
