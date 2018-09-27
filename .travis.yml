@@ -1,8 +1,8 @@
 language: erlang
 sudo: false
 otp_release:
-    - 19.1
-    - 19.0
+    - 21.1
+    - 20.3
+    - 19.3
     - 18.3
-    - 18.0
 script: "rebar get-deps compile ct -C rebar.test.config"
