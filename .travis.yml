@@ -1,8 +1,13 @@
 language: erlang
 sudo: false
+
+install:
+   - wget -c https://github.com/erlang/rebar3/releases/download/3.7.5/rebar3 && chmod +x rebar3 && ./rebar3 update
+
 otp_release:
-    - 19.1
-    - 19.0
+    - 21.1
+    - 20.3
+    - 19.3
     - 18.3
-    - 18.0
-script: "rebar get-deps compile ct -C rebar.test.config"
+
+script: ./rebar3 do compile, ct
