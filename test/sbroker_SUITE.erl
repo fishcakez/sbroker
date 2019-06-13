@@ -202,8 +202,8 @@ skip_down_match(_) ->
         {'DOWN', MRef, _, _, normal} ->
             Ref = make_ref(),
             Self = self(),
-            {await, Ref, _} = sbroker:async_ask_r(Broker, Self, {Self, Ref}),
             sys:resume(Broker),
+            {await, Ref, _} = sbroker:async_ask_r(Broker, Self, {Self, Ref}),
             {drop, _} = sbroker:await(Ref, ?TIMEOUT),
             ok
     end.
